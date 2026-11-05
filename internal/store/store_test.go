@@ -3,8 +3,10 @@ package store
 import (
 	"encoding/json/v2"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/betawaffle/tack/internal/secret"
@@ -19,6 +21,7 @@ func open(t *testing.T, fired *string) (*Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { s.Close() })
 	return s, dir
 }
 
@@ -137,11 +140,13 @@ func TestTornLineIsSkippedAndFinished(t *testing.T) {
 	f, _ := os.OpenFile(matches[0], os.O_WRONLY|os.O_APPEND, 0)
 	f.WriteString(`{"type":"user_mess`)
 	f.Close()
+	s.Close()
 
 	s2, err := Open(dir, secret.NewTestTripwire(func(string) {}, secret.NewKey(testKey)))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s2.Close()
 	if err := s2.Append(&Event{Type: UserMessage, Conversation: "b"}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,5 +274,78 @@ func TestTripwireFiresBeforeTheDisk(t *testing.T) {
 	}
 	if !stopped {
 		t.Error("didn't fire")
+	}
+}
+
+func TestDirectoryIsLocked(t *testing.T) {
+	var fired string
+	s, dir := open(t, &fired)
+	tripwire := secret.NewTestTripwire(func(string) {}, secret.NewKey(testKey))
+
+	if second, err := Open(dir, tripwire); err == nil {
+		second.Close()
+		t.Fatal("a second Open succeeded")
+	} else if !strings.Contains(err.Error(), "another tack") {
+		t.Errorf("err = %v", err)
+	}
+
+	s.Close()
+	again, err := Open(dir, tripwire)
+	if err != nil {
+		t.Fatalf("Open after Close: %v", err)
+	}
+	again.Close()
+}
+
+// A real short write: the file size limit stops the line partway, as a full disk
+// would.
+func TestFailedAppendCantSwallowTheNextEvent(t *testing.T) {
+	var fired string
+	s, dir := open(t, &fired)
+	if err := s.Append(&Event{Type: UserMessage, Conversation: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "events", "*.jsonl"))
+	info, err := os.Stat(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signal.Ignore(syscall.SIGXFSZ)
+	defer signal.Reset(syscall.SIGXFSZ)
+	var limit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	short := limit
+	short.Cur = uint64(info.Size()) + 10
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &short); err != nil {
+		t.Fatal(err)
+	}
+	failed := s.Append(&Event{Type: UserMessage, Conversation: "lost"})
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	if failed == nil {
+		t.Fatal("the append should have failed")
+	}
+	if after, _ := os.Stat(matches[0]); after.Size() != info.Size()+10 {
+		t.Fatalf("expected a partial line: size went from %d to %d", info.Size(), after.Size())
+	}
+
+	if err := s.Append(&Event{Type: UserMessage, Conversation: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	var torn int
+	err = s.Replay(func(ev *Event) error {
+		got = append(got, ev.Conversation)
+		return nil
+	}, func(string, int) { torn++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "a,b" || torn != 1 {
+		t.Errorf("got %v, torn %d", got, torn)
 	}
 }

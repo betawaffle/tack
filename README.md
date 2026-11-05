@@ -54,6 +54,10 @@ npx playwright install chromium
 
 Screenshots land in `test/browser/shots/`.
 
+Failure handling is only lightly tested so far: torn lines, a short write, and
+the lock. It still needs more extensive safety testing, such as full disks, failed
+fsyncs and crashes at every step.
+
 ## The record
 
 Everything lives under `~/.local/share/tack/`:
@@ -62,6 +66,7 @@ Everything lives under `~/.local/share/tack/`:
 events/2026-11-05.jsonl   append-only facts, one per line, by UTC day
 blobs/ab/cdef...          exact bytes, named by SHA-256
 partial/                  blobs still being written
+lock                      held by the one tack using this directory
 ```
 
 Requests and responses are stored byte for byte, including the raw event stream.
@@ -71,3 +76,7 @@ in `partial/`.
 
 Anything else, including what the UI shows, is derived from this and can be
 rebuilt.
+
+Only one tack can use a data directory at a time, and a second one refuses to
+start. Keep the directory on a local disk: the lock and tack's assumptions about
+appends aren't safe on network storage. Reading the files while tack runs is fine.

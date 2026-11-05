@@ -5,6 +5,7 @@
 //	events/2026-11-05.jsonl   one fact per line, by UTC day
 //	blobs/ab/cdef...          exact bytes, named by SHA-256
 //	partial/                  blobs still being written
+//	lock                      held by the one process using this directory
 //
 // A file left in partial/ after a crash is the part of a response that had
 // arrived. It's kept on purpose.
@@ -25,6 +26,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/betawaffle/tack/internal/secret"
@@ -109,20 +111,50 @@ type Event struct {
 type Store struct {
 	dir      string
 	tripwire *secret.Tripwire
+	lock     *os.File
 
 	mu   sync.Mutex
 	day  string
 	file *os.File
 }
 
-// Open prepares a data directory.
+// Open prepares a data directory and locks it. Each process keeps its own view
+// of the record in memory, so two of them sharing a directory would each act on a
+// history missing the other's events. The kernel drops the lock however the process
+// ends, so a crash can't leave it stuck. The lock is only trusted on a local disk.
 func Open(dir string, tripwire *secret.Tripwire) (*Store, error) {
 	for _, sub := range []string{"events", "blobs", "partial"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
 			return nil, err
 		}
 	}
-	return &Store{dir: dir, tripwire: tripwire}, nil
+	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another tack is already using %s", dir)
+		}
+		return nil, fmt.Errorf("locking %s: %w", dir, err)
+	}
+	return &Store{dir: dir, tripwire: tripwire, lock: lock}, nil
+}
+
+// Close releases the directory.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeEvents()
+	return s.lock.Close()
+}
+
+func (s *Store) closeEvents() {
+	if s.file != nil {
+		s.file.Close()
+		s.file, s.day = nil, ""
+	}
 }
 
 // NewID returns a random identifier.
@@ -265,10 +297,16 @@ func (s *Store) Append(ev *Event) error {
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return err
+	_, err = f.Write(append(line, '\n'))
+	if err == nil {
+		err = f.Sync()
 	}
-	return f.Sync()
+	if err != nil {
+		// Part of the line may have landed. Reopening repairs it, so it can't
+		// swallow the next event.
+		s.closeEvents()
+	}
+	return err
 }
 
 func (s *Store) fileFor(day string) (*os.File, error) {

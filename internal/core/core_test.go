@@ -50,6 +50,11 @@ func newFake(t *testing.T) *fake {
 		f.handler(w)
 	}))
 	t.Cleanup(f.server.Close)
+	t.Cleanup(func() {
+		if f.store != nil {
+			f.store.Close()
+		}
+	})
 	f.tripwire = secret.NewTestTripwire(func(where string) {
 		t.Errorf("tripwire fired in %s", where)
 	}, secret.NewKey(testKey))
@@ -58,6 +63,9 @@ func newFake(t *testing.T) *fake {
 
 func (f *fake) open() *Core {
 	f.t.Helper()
+	if f.store != nil {
+		f.store.Close() // as a restart would
+	}
 	st, err := store.Open(f.dataDir, f.tripwire)
 	if err != nil {
 		f.t.Fatal(err)
