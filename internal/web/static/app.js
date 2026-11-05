@@ -5,7 +5,9 @@
 
 const $ = (id) => document.getElementById(id);
 let current = null;
-let streaming = false;
+// The conversation whose reply is streaming onto the page, if any. Leaving it
+// detaches the page from the stream, and the call carries on regardless.
+let streaming = null;
 let pollTimer = null;
 // Which messages the viewer has unfolded or switched to raw, kept across redraws.
 const unfolded = new Set();
@@ -418,11 +420,12 @@ async function show(id, polling) {
   const conv = await res.json();
   if (id !== current) return;
   // Don't throw away something being typed just because a poll came round.
+  const live = streaming === id;
   const typing = polling && document.querySelector("#list .editor");
   if (!typing) {
     $("list").replaceChildren(...conv.items.map(renderItem));
-    if (conv.can_reply && !streaming) $("list").append(replyControl(conv));
-    if (conv.busy && !streaming) {
+    if (conv.can_reply && !live) $("list").append(replyControl(conv));
+    if (conv.busy && !live) {
       // A reply started before this page loaded. Its text arrives when it's done.
       $("list").append(el("div", "waiting-note cursor", "A reply is in progress"));
     }
@@ -445,6 +448,8 @@ function closeDrawer() {
 }
 
 async function open(id) {
+  if (id !== current) unfolded.clear();
+  streaming = null;
   current = id;
   location.hash = id;
   setOpenMode(true);
@@ -455,6 +460,8 @@ async function open(id) {
 }
 
 async function startNew() {
+  unfolded.clear();
+  streaming = null;
   current = null;
   clearTimeout(pollTimer);
   history.replaceState(null, "", location.pathname);
@@ -494,7 +501,7 @@ async function consume(res, id, reply) {
     const lines = buffered.split("\n");
     buffered = lines.pop();
     for (const line of lines) {
-      if (!line || id !== current) continue;
+      if (!line || streaming !== id) continue;
       const update = JSON.parse(line);
       reply.node.querySelector(".waiting-note")?.remove();
       if (update.kind === "content") {
@@ -521,8 +528,8 @@ async function consume(res, id, reply) {
 // without one, the model responds to the conversation as it stands. It reports
 // whether the server took the request.
 async function call(id, userText) {
-  if (streaming) return false;
-  streaming = true;
+  if (streaming === id) return false;
+  streaming = id;
   setBusy(true);
   let accepted = false;
   let failure = null;
@@ -543,12 +550,15 @@ async function call(id, userText) {
   } catch (err) {
     failure = err;
   }
-  streaming = false;
-  setBusy(false);
-  // The record is the truth, so redraw from it, whatever happened.
-  if (current === id) await show(id).catch(reportError);
+  const attached = streaming === id;
+  if (attached) {
+    streaming = null;
+    setBusy(false);
+    // The record is the truth, so redraw from it, whatever happened.
+    await show(id).catch(reportError);
+  }
   await refreshList().catch(reportError);
-  if (failure) reportError(failure);
+  if (failure && attached) reportError(failure);
   return accepted;
 }
 
@@ -566,7 +576,7 @@ function setInput(text) {
 $("form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("input").value;
-  if (!text.trim() || streaming) return;
+  if (!text.trim() || (current && streaming === current)) return;
   setInput("");
   try {
     if (!current) {
@@ -595,6 +605,12 @@ $("add-system").addEventListener("click", async () => {
     reportError(err);
   }
   $("input").focus();
+});
+
+window.addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (id && id !== current) open(id).catch(reportError);
+  else if (!id && current) startNew().catch(reportError);
 });
 
 $("input").addEventListener("input", resizeInput);

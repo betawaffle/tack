@@ -206,3 +206,68 @@ func TestEventOmitsUnusedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestTornWrites(t *testing.T) {
+	event := `{"time":"2026-11-05T00:00:00Z","type":"x","usage":{"a":{"b":1}},"error":"say \"hi\" é"}`
+	if !isValidEvent(event) {
+		t.Fatal("test event is invalid")
+	}
+	// Wherever an append is cut off, the fragment reads as torn, not damaged.
+	for i := 1; i < len(event); i++ {
+		if !isTornWrite([]byte(event[:i])) {
+			t.Errorf("not recognised as torn: %s", event[:i])
+		}
+	}
+	for _, damaged := range []string{"not json", "[1,", `{"a":1}}x`, `{bad}`} {
+		if isTornWrite([]byte(damaged)) {
+			t.Errorf("recognised as torn: %s", damaged)
+		}
+	}
+}
+
+func isValidEvent(line string) bool {
+	var ev Event
+	return json.Unmarshal([]byte(line), &ev) == nil
+}
+
+func TestTripwireCatchesASecretAcrossWrites(t *testing.T) {
+	var fired string
+	s, _ := open(t, &fired)
+	p, err := s.NewPartial("call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	half := len(testKey) / 2
+	p.Write([]byte("data: " + testKey[:half]))
+	if fired != "" {
+		t.Fatalf("fired early in %s", fired)
+	}
+	p.Write([]byte(testKey[half:] + " more"))
+	if fired == "" {
+		t.Error("didn't fire")
+	}
+}
+
+func TestTripwireFiresBeforeTheDisk(t *testing.T) {
+	dir := t.TempDir()
+	stopped := false
+	s, err := Open(dir, secret.NewTestTripwire(func(string) {
+		stopped = true
+		entries, _ := os.ReadDir(filepath.Join(dir, "partial"))
+		for _, e := range entries {
+			data, _ := os.ReadFile(filepath.Join(dir, "partial", e.Name()))
+			if strings.Contains(string(data), testKey) {
+				t.Error("secret reached the disk before the tripwire fired")
+			}
+		}
+	}, secret.NewKey(testKey)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Put([]byte("key is " + testKey)); err != nil {
+		t.Fatal(err)
+	}
+	if !stopped {
+		t.Error("didn't fire")
+	}
+}

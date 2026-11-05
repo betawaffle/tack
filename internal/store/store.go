@@ -184,6 +184,7 @@ type Partial struct {
 	file  *os.File
 	hash  hash.Hash
 	size  int64
+	tail  []byte // the end of what's been written, for the tripwire
 }
 
 // NewPartial starts a blob. The name only has to be unique within partial/.
@@ -195,7 +196,14 @@ func (s *Store) NewPartial(name string) (*Partial, error) {
 	return &Partial{store: s, file: f, hash: sha256.New()}, nil
 }
 
+// Write checks for secrets before anything reaches the disk. When a response is
+// streaming through here, that's also before any of it reaches the browser.
 func (p *Partial) Write(b []byte) (int, error) {
+	tripwire := p.store.tripwire
+	window := append(p.tail, b...)
+	tripwire.Check("a blob", window)
+	p.tail = append(p.tail[:0], window[max(len(window)-tripwire.Overlap(), 0):]...)
+
 	n, err := p.file.Write(b)
 	p.hash.Write(b[:n])
 	p.size += int64(n)
@@ -218,12 +226,6 @@ func (p *Partial) Commit() (Ref, error) {
 	if err := p.file.Sync(); err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(tmp)
-	if err != nil {
-		return "", err
-	}
-	p.store.tripwire.Check("a blob", data)
-
 	ref := refFor(p.hash)
 	path, err := p.store.blobPath(ref)
 	if err != nil {
@@ -353,10 +355,32 @@ func (s *Store) Replay(fn func(*Event) error, torn func(file string, line int)) 
 	return nil
 }
 
-// isTornWrite reports whether a bad line looks like an interrupted append: a
-// fragment of a JSON object, cut off before its end.
+// isTornWrite reports whether a bad line is the start of a JSON object that got
+// cut off, as an interrupted append leaves it. Anything else that fails to parse
+// is real damage. It doesn't parse the JSON, because a cut can fall in the middle
+// of a character, and it only has to tell whether the object was ever closed.
 func isTornWrite(line []byte) bool {
-	return line[0] == '{' && line[len(line)-1] != '}'
+	if line[0] != '{' {
+		return false
+	}
+	depth := 0
+	inString, escaped := false, false
+	for _, c := range line {
+		switch {
+		case escaped:
+			escaped = false
+		case inString:
+			escaped = c == '\\'
+			inString = c != '"'
+		case c == '"':
+			inString = true
+		case c == '{' || c == '[':
+			depth++
+		case c == '}' || c == ']':
+			depth--
+		}
+	}
+	return inString || depth > 0
 }
 
 func syncDir(path string) error {

@@ -94,12 +94,14 @@ func New(cfg Config) (*Core, error) {
 	return c, nil
 }
 
+// record writes an event and applies it. The lock covers both, so live state
+// sees events in the order the record has them, and a rebuild can't differ.
 func (c *Core) record(ev *store.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.cfg.Store.Append(ev); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.apply(ev)
 	return nil
 }

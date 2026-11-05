@@ -93,3 +93,13 @@ func (t *Tripwire) Check(where string, data []byte) {
 		}
 	}
 }
+
+// Overlap is how many earlier bytes a caller checking a stream in pieces has to
+// include with each piece, so that a secret split across two can't slip past.
+func (t *Tripwire) Overlap() int {
+	longest := 0
+	for _, k := range t.keys {
+		longest = max(longest, len(k.value))
+	}
+	return max(longest-1, 0)
+}

@@ -20,9 +20,9 @@ import (
 // DefaultURL is the Chat Completions endpoint.
 const DefaultURL = "https://openrouter.ai/api/v1/chat/completions"
 
-// IdleTimeout ends a call when nothing at all arrives for this long. OpenRouter's
-// keep-alive comments count as something arriving.
-const IdleTimeout = 5 * time.Minute
+// DefaultIdleTimeout ends a call when nothing at all arrives for this long.
+// OpenRouter's keep-alive comments count as something arriving.
+const DefaultIdleTimeout = 5 * time.Minute
 
 // Routing is the provider section of a request.
 type Routing struct {
@@ -97,17 +97,19 @@ type chunk struct {
 
 // Client sends requests.
 type Client struct {
-	HTTP *http.Client
-	URL  string
-	Key  secret.Key
+	HTTP        *http.Client
+	URL         string
+	Key         secret.Key
+	IdleTimeout time.Duration
 }
 
 // NewClient returns a Client that refuses redirects, so the key only ever goes
 // to the configured URL.
 func NewClient(url string, key secret.Key) *Client {
 	return &Client{
-		URL: url,
-		Key: key,
+		URL:         url,
+		Key:         key,
+		IdleTimeout: DefaultIdleTimeout,
 		HTTP: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
@@ -135,8 +137,8 @@ func (c *Client) Do(ctx context.Context, body []byte, raw io.Writer, onDelta fun
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	idle := time.AfterFunc(IdleTimeout, func() {
-		cancel(fmt.Errorf("nothing received for %s", IdleTimeout))
+	idle := time.AfterFunc(c.IdleTimeout, func() {
+		cancel(fmt.Errorf("nothing received for %s", c.IdleTimeout))
 	})
 	defer idle.Stop()
 
@@ -156,7 +158,7 @@ func (c *Client) Do(ctx context.Context, body []byte, raw io.Writer, onDelta fun
 	defer resp.Body.Close()
 	res.Status = resp.StatusCode
 	res.ResponseHeaders = recordableHeaders(resp.Header)
-	idle.Reset(IdleTimeout)
+	idle.Reset(c.IdleTimeout)
 
 	if resp.StatusCode != http.StatusOK {
 		data, err := io.ReadAll(io.TeeReader(resp.Body, raw))
@@ -174,7 +176,7 @@ func (c *Client) Do(ctx context.Context, body []byte, raw io.Writer, onDelta fun
 	r := bufio.NewReader(io.TeeReader(resp.Body, raw))
 	for {
 		line, readErr := r.ReadBytes('\n')
-		idle.Reset(IdleTimeout)
+		idle.Reset(c.IdleTimeout)
 		if payload, ok := dataLine(line); ok {
 			var ch chunk
 			if err := json.Unmarshal(payload, &ch); err != nil {
