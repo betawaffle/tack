@@ -103,7 +103,20 @@ const (
 	SettingsProposed  = "settings_proposed"
 	SettingsApplied   = "settings_applied"
 	SettingsDiscarded = "settings_discarded"
+	BudgetAdded       = "budget_added"
+	BudgetStopped     = "budget_stopped"
+	PauseRequested    = "pause_requested"
+	PauseCleared      = "pause_cleared"
+	NoteAdded         = "note_added"
 )
+
+// Note is an item on a conversation's page. The text is a block, like other content.
+type Note struct {
+	Kind   string `json:"kind"`
+	Key    string `json:"key"`
+	Status string `json:"status,omitzero"`
+	Text   Ref    `json:"text"`
+}
 
 // Settings is everything a conversation keeps as its own. The config only provides
 // the defaults new conversations start with. A setting that's absent from an older
@@ -111,6 +124,9 @@ const (
 type Settings struct {
 	Model string `json:"model,omitzero"`
 	Host  string `json:"host,omitzero"`
+
+	BudgetUSD      float64 `json:"budget_usd,omitzero"`
+	BudgetTopUpUSD float64 `json:"budget_top_up_usd,omitzero"`
 
 	SearchSkip            []string          `json:"search_skip,omitzero"`
 	CommandEnv            map[string]string `json:"command_env,omitzero"`
@@ -123,6 +139,7 @@ type Settings struct {
 	ToolTimeoutSeconds    int `json:"tool_timeout_seconds,omitzero"`
 	InspectTimeoutSeconds int `json:"inspect_timeout_seconds,omitzero"`
 	OutputWaitSeconds     int `json:"output_wait_seconds,omitzero"`
+	StopGraceSeconds      int `json:"stop_grace_seconds,omitzero"`
 	MaxReadBytes          int `json:"max_read_bytes,omitzero"`
 	MaxListed             int `json:"max_listed,omitzero"`
 	MaxMatches            int `json:"max_matches,omitzero"`
@@ -151,6 +168,13 @@ func (s Settings) WithDefaults() Settings {
 	fill(&s.ToolTimeoutSeconds, 60)
 	fill(&s.InspectTimeoutSeconds, 2)
 	fill(&s.OutputWaitSeconds, 5)
+	fill(&s.StopGraceSeconds, 5)
+	if s.BudgetUSD == 0 {
+		s.BudgetUSD = 0.001
+	}
+	if s.BudgetTopUpUSD == 0 {
+		s.BudgetTopUpUSD = 0.001
+	}
 	fill(&s.MaxReadBytes, 16<<20)
 	fill(&s.MaxListed, 10000)
 	fill(&s.MaxMatches, 1000)
@@ -177,6 +201,7 @@ func (s Settings) Validate() error {
 		"tool_timeout_seconds":    s.ToolTimeoutSeconds,
 		"inspect_timeout_seconds": s.InspectTimeoutSeconds,
 		"output_wait_seconds":     s.OutputWaitSeconds,
+		"stop_grace_seconds":      s.StopGraceSeconds,
 		"max_read_bytes":          s.MaxReadBytes,
 		"max_listed":              s.MaxListed,
 		"max_matches":             s.MaxMatches,
@@ -186,6 +211,9 @@ func (s Settings) Validate() error {
 		if value <= 0 {
 			return fmt.Errorf("%s has to be positive", name)
 		}
+	}
+	if s.BudgetUSD <= 0 || s.BudgetTopUpUSD <= 0 {
+		return errors.New("budget_usd and budget_top_up_usd have to be positive")
 	}
 	for _, path := range append(slices.Clone(s.SandboxReadOnly), s.SandboxReadWrite...) {
 		if !filepath.IsAbs(path) {
@@ -219,7 +247,8 @@ func Known(eventType string) bool {
 	switch eventType {
 	case TackStarted, ConversationAdded, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
-		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded:
+		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
+		BudgetAdded, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
 		return true
 	}
 	return false
@@ -244,6 +273,15 @@ type Event struct {
 	Workdir  string    `json:"workdir,omitzero"`
 	Settings *Settings `json:"settings,omitzero"`
 
+	// budget_added, budget_stopped.
+	AmountUSD   float64 `json:"amount_usd,omitzero"`
+	SpentUSD    float64 `json:"spent_usd,omitzero"`
+	EstimateUSD float64 `json:"estimate_usd,omitzero"`
+	LimitUSD    float64 `json:"limit_usd,omitzero"`
+
+	// note_added
+	Note *Note `json:"note,omitzero"`
+
 	// config_loaded: the settings in force, at startup and on each reload.
 	Config Ref `json:"config,omitzero"`
 
@@ -264,10 +302,12 @@ type Event struct {
 	Routing        jsontext.Value      `json:"routing,omitzero"`
 	URL            string              `json:"url,omitzero"`
 	Request        Ref                 `json:"request,omitzero"`
+	RequestBytes   int                 `json:"request_bytes,omitzero"`
 	RequestHeaders map[string][]string `json:"request_headers,omitzero"`
 
 	// model_call_finished
 	Response        Ref                 `json:"response,omitzero"`
+	Cancelled       bool                `json:"cancelled,omitzero"`
 	Status          int                 `json:"status,omitzero"`
 	ResponseHeaders map[string][]string `json:"response_headers,omitzero"`
 	Host            string              `json:"host,omitzero"`

@@ -75,6 +75,30 @@ type ToolCallView struct {
 	Network       bool     `json:"network,omitzero"`
 }
 
+// BudgetView is a conversation's spending. Stopped says a call wasn't started because
+// of it. TopUp is what the add box starts with.
+type BudgetView struct {
+	Limit    float64 `json:"limit"`
+	Spent    float64 `json:"spent"`
+	Estimate float64 `json:"estimate"`
+	TopUp    float64 `json:"top_up"`
+	Stopped  bool    `json:"stopped,omitzero"`
+}
+
+// NoteView is an item on the page, written by the model.
+type NoteView struct {
+	Kind   string `json:"kind"`
+	Key    string `json:"key"`
+	Status string `json:"status,omitzero"`
+	Text   string `json:"text"`
+}
+
+// RunningView says what can be stopped right now.
+type RunningView struct {
+	Reply bool   `json:"reply,omitzero"`
+	Tool  string `json:"tool,omitzero"` // the call that's running
+}
+
 // PendingSettings are settings being held until someone applies them.
 type PendingSettings struct {
 	ID       string         `json:"id"`
@@ -108,6 +132,11 @@ type Conversation struct {
 	Items           []Item           `json:"items"`
 
 	Decision *DecisionView `json:"decision,omitzero"`
+
+	Budget  BudgetView  `json:"budget"`
+	Paused  bool        `json:"paused,omitzero"`
+	Running RunningView `json:"running"`
+	Notes   []NoteView  `json:"notes,omitzero"`
 }
 
 // Conversations lists conversations, newest first.
@@ -164,6 +193,16 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
 	effective := conv.effectiveSettings(c.settings)
 	out.Model, out.Host = effective.Model, effective.Host
+	full := effective.WithDefaults()
+	out.Budget = BudgetView{Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: full.BudgetTopUpUSD, Stopped: conv.budgetStopped}
+	out.Paused = conv.paused
+	out.Running.Reply = conv.cancelReply != nil
+	for id := range conv.stopTools {
+		out.Running.Tool = id
+	}
+	for _, note := range conv.notes {
+		out.Notes = append(out.Notes, NoteView{Kind: note.kind, Key: note.key, Status: note.status, Text: c.text([]store.Part{{Block: note.text}})})
+	}
 	out.Settings, out.ConfigSettings = effective, c.settings
 	out.SettingsChanged = !reflect.DeepEqual(effective.WithDefaults(), c.settings.WithDefaults())
 	if p := conv.pendingSettings; p != nil {

@@ -19,15 +19,16 @@ import (
 
 // Errors a caller can act on.
 var (
-	ErrNotFound      = errors.New("no such conversation")
-	ErrNoMessage     = errors.New("no such system message")
-	ErrNoEdit        = errors.New("no such unused edit")
-	ErrBusy          = errors.New("a reply is already in progress")
-	ErrNothingToSend = errors.New("the model has already replied to everything in this conversation")
-	ErrAwaiting      = errors.New("tool calls in this conversation are waiting for a decision")
-	ErrNoDecision    = errors.New("no such open decision")
-	ErrBadChoice     = errors.New("that choice isn't possible for this decision")
-	ErrBadSettings   = errors.New("those settings can't work")
+	ErrNotFound       = errors.New("no such conversation")
+	ErrNoMessage      = errors.New("no such system message")
+	ErrNoEdit         = errors.New("no such unused edit")
+	ErrBusy           = errors.New("a reply is already in progress")
+	ErrNothingToSend  = errors.New("the model has already replied to everything in this conversation")
+	ErrAwaiting       = errors.New("tool calls in this conversation are waiting for a decision")
+	ErrNoDecision     = errors.New("no such open decision")
+	ErrBadChoice      = errors.New("that choice isn't possible for this decision")
+	ErrBadSettings    = errors.New("those settings can't work")
+	ErrNothingRunning = errors.New("that isn't running")
 )
 
 // Config is what a Core needs.
@@ -64,7 +65,21 @@ type conversation struct {
 	// lastModel and lastHost stand in for older conversations, from their last call.
 	lastModel, lastHost string
 	pendingSettings     *pendingSettings
-	decision            *decision // what's waiting on a person, if anything
+
+	// Spending, derived from the record.
+	spent, budgetAdded float64
+	recentCosts        []float64
+	lastRequestBytes   int
+	budgetStopped      bool
+
+	paused bool // don't call the model until a message or Continue
+	notes  []*noteItem
+
+	// What's running now, so it can be stopped. These aren't derived from the record,
+	// because nothing survives a restart to be stopped.
+	cancelReply func(error)
+	stopTools   map[string]func(error)
+	decision    *decision // what's waiting on a person, if anything
 }
 
 // item is a message or a model call, in the order they were recorded. Its role
@@ -165,6 +180,7 @@ func (c *Core) apply(ev *store.Event) {
 	}
 	switch ev.Type {
 	case store.UserMessage:
+		conv.paused = false
 		conv.items = append(conv.items, &item{role: "user", parts: ev.Parts, time: ev.Time})
 	case store.SystemMessage:
 		conv.items = append(conv.items, &item{role: "system", parts: ev.Parts, messageID: ev.Message, time: ev.Time})
@@ -173,6 +189,8 @@ func (c *Core) apply(ev *store.Event) {
 			it.sent = true
 		}
 		conv.lastModel = ev.Model
+		conv.lastRequestBytes = ev.RequestBytes
+		conv.budgetStopped = false
 		var routing openrouter.Routing
 		if json.Unmarshal(ev.Routing, &routing) == nil && len(routing.Order) > 0 {
 			conv.lastHost = routing.Order[0]
@@ -182,6 +200,7 @@ func (c *Core) apply(ev *store.Event) {
 		for _, it := range conv.items {
 			if it.callID == ev.Call {
 				it.finished = ev
+				conv.addCost(ev)
 				if usable(ev) {
 					for _, call := range ev.ToolCalls {
 						it.calls = append(it.calls, &toolCall{ToolCall: call})
@@ -413,11 +432,12 @@ func (c *Core) resolveEdit(convID, editID, eventType string) error {
 	return c.record(&store.Event{Type: eventType, Conversation: convID, Edit: editID})
 }
 
-// Update is a step in a reply. The kinds are "tool", "reasoning" and "content"
-// while it streams, then one "done" or "error" at the end.
+// Update is a step in a reply. The kinds are "call", "tool", "tool_done", "reasoning"
+// and "content" while it streams, then one "done" or "error" at the end.
 type Update struct {
 	Kind string `json:"kind"`
 	Text string `json:"text,omitzero"`
+	ID   string `json:"id,omitzero"`
 }
 
 // updateBuffer is how far a slow reader can fall behind before it misses deltas.
@@ -491,6 +511,10 @@ func (c *Core) Reply(convID string) (<-chan Update, error) {
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := c.clearPause(conv); err != nil {
+		c.release(conv)
 		return nil, err
 	}
 	return c.start(conv), nil
@@ -572,6 +596,19 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	if err != nil {
 		return err
 	}
+	// The budget is soft: this only decides whether to start the call.
+	c.mu.Lock()
+	limit := conv.budgetLimit(settings)
+	spent, estimate := conv.spent, conv.estimate(len(body))
+	c.mu.Unlock()
+	if spent >= limit || spent+estimate > limit {
+		err := c.record(&store.Event{Type: store.BudgetStopped, Conversation: conv.id, SpentUSD: spent, EstimateUSD: estimate, LimitUSD: limit})
+		if err != nil {
+			return err
+		}
+		return errBudgetStop
+	}
+	send(Update{Kind: "call"})
 	request, err := c.cfg.Store.Put(body)
 	if err != nil {
 		return err
@@ -590,6 +627,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		Routing:        routing,
 		URL:            c.cfg.Client.URL,
 		Request:        request,
+		RequestBytes:   len(body),
 		RequestHeaders: openrouter.Headers(),
 	})
 	if err != nil {
@@ -600,7 +638,19 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	if err != nil {
 		return err
 	}
-	res, doErr := c.cfg.Client.Do(context.Background(), body, partial, func(d openrouter.Delta) {
+	// Closing the connection is how OpenRouter says to cancel. For hosts that support
+	// it, that stops processing and billing. Others finish and charge in full.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	c.mu.Lock()
+	conv.cancelReply = cancel
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		conv.cancelReply = nil
+		c.mu.Unlock()
+	}()
+	res, doErr := c.cfg.Client.Do(ctx, body, partial, func(d openrouter.Delta) {
 		if d.Reasoning != "" {
 			send(Update{Kind: "reasoning", Text: d.Reasoning})
 		}
@@ -626,6 +676,10 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	}
 	if finished.Error == "" && doErr != nil {
 		finished.Error = doErr.Error()
+	}
+	if errors.Is(context.Cause(ctx), errReplyCancelled) {
+		finished.Cancelled = true
+		finished.Error = errReplyCancelled.Error()
 	}
 	if finished.Error == "" {
 		finished.Error = malformedCalls(res)

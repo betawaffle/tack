@@ -53,6 +53,10 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.applyEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.decide)
+	mux.HandleFunc("POST /api/conversations/{id}/budget", s.addBudget)
+	mux.HandleFunc("POST /api/conversations/{id}/pause", s.pause)
+	mux.HandleFunc("POST /api/conversations/{id}/cancel", s.cancelReply)
+	mux.HandleFunc("POST /api/conversations/{id}/tools/{call}/stop", s.stopTool)
 	mux.HandleFunc("POST /api/conversations/{id}/settings", s.proposeSettings)
 	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/apply", s.applySettings)
 	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/discard", s.discardSettings)
@@ -242,6 +246,46 @@ func (s *server) discardEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+func (s *server) addBudget(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AmountUSD float64 `json:"amount_usd"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.core.AddBudget(r.PathValue("id"), body.AmountUSD); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) pause(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.Pause(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) cancelReply(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.CancelReply(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) stopTool(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.StopTool(r.PathValue("id"), r.PathValue("call")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 func (s *server) proposeSettings(w http.ResponseWriter, r *http.Request) {
 	var settings store.Settings
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
@@ -342,7 +386,7 @@ func fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting):
+	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings):
 		http.Error(w, err.Error(), http.StatusBadRequest)

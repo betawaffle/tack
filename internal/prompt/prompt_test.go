@@ -16,7 +16,7 @@ func names(sections []Section) string {
 }
 
 func TestBuiltinsHaveNothingPersonalAndAMissingDirIsFine(t *testing.T) {
-	if got := names(Load(filepath.Join(t.TempDir(), "nope"))); got != "base,no-tools,tools,workdir" {
+	if got := names(Load(filepath.Join(t.TempDir(), "nope"))); got != "base,no-tools,tools,notes,workdir" {
 		t.Errorf("sections = %s", got)
 	}
 }
@@ -34,7 +34,7 @@ func TestFilesReplaceRemoveAndAdd(t *testing.T) {
 		}
 	}
 	got := Load(dir)
-	if names(got) != "base,tools,workdir,project" {
+	if names(got) != "base,tools,notes,workdir,project" {
 		t.Fatalf("sections = %s", names(got))
 	}
 	if got[0].Text != "Mine." || got[1].For != "tools" {

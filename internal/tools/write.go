@@ -289,7 +289,9 @@ func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error)
 	}
 	cmd.Stdout, cmd.Stderr = &output, &output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stop := func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	// Stopping prefers to be clean: a signal first, then a kill if that's ignored.
+	terminate := func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	kill := func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	var group *cgroup.Group
 	if r.cgroups != nil {
 		id := call.Execution
@@ -302,11 +304,20 @@ func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error)
 		defer group.Close()
 		cmd.SysProcAttr.UseCgroupFD = true
 		cmd.SysProcAttr.CgroupFD = group.FD()
-		stop = group.Kill
+		terminate = func() error { return group.Terminate("bwrap") }
+		kill = group.Kill
 	}
-	cmd.Cancel = stop
-	cmd.WaitDelay = time.Duration(s.OutputWaitSeconds) * time.Second
+	grace := time.Duration(s.StopGraceSeconds) * time.Second
+	var killer *time.Timer
+	cmd.Cancel = func() error {
+		killer = time.AfterFunc(grace, func() { kill() })
+		return terminate()
+	}
+	cmd.WaitDelay = grace + time.Duration(s.OutputWaitSeconds)*time.Second
 	err = cmd.Run()
+	if killer != nil {
+		killer.Stop()
+	}
 	var problems []string
 	if ctx.Err() != nil {
 		problems = append(problems, "the command was stopped: "+context.Cause(ctx).Error())

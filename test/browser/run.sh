@@ -33,6 +33,7 @@ cat >"$tmp/config.json" <<CONFIG
   "url": "http://127.0.0.1:18600/v1",
   "prompts": "$tmp/none",
   "default_workdir": "$tmp/work",
+  "budget_usd": 1,
   "command_env": {"PATH": "/usr/bin:/bin", "TACK_TEST_VALUE": "from-config"}
 }
 CONFIG

@@ -44,11 +44,12 @@ let page;
   ok((await p.inputValue("#workdir")) === WORK, "working directory prefilled");
   ok((await p.isChecked("#offer-tools")), "tools offered by default");
   await p.fill("#workdir", "");
-  ok((await prompt()).includes("You have no tools"), "no working directory leaves no tools here");
+  ok((await prompt()).includes("can't access files"), "no working directory leaves no real tools here");
   await p.fill("#workdir", WORK);
   ok((await prompt()).includes("needs approval"), "and a working directory brings them back");
   let text = await prompt();
-  ok(text.startsWith("Be direct") && text.includes("needs approval") && !text.includes("You have no tools"), "text has base and tools sections");
+  ok(text.startsWith("Be direct") && text.includes("needs approval") && !text.includes("can't access files"), "text has base and tools sections");
+  ok(text.includes("note tool"), "and explains notes");
   ok(text.includes(WORK), "working directory filled in");
 
   await p.locator("input[data-section=base]").uncheck();
@@ -57,7 +58,8 @@ let page;
 
   await p.locator("#offer-tools").uncheck();
   text = await prompt();
-  ok(text.includes("You have no tools") && !text.includes("needs approval"), "no tools swaps the section");
+  ok(text.includes("can't access files") && !text.includes("needs approval"), "no tools swaps the section");
+  ok(!text.includes("note tool"), "and leaves out notes");
   ok(await p.isDisabled("#workdir"), "working directory disabled without tools");
   await reset();
   await send("short one");
@@ -65,7 +67,7 @@ let page;
   await idle();
   let b = await bodies();
   ok(!b[0].tools, "no tools sent when unticked");
-  ok(b[0].messages[0].content.includes("You have no tools"), "the model is told so");
+  ok(b[0].messages[0].content.includes("can't access files"), "the model is told so");
 
   // Editing by hand wins.
   await fresh();
@@ -87,7 +89,7 @@ let page;
   await idle();
   b = await bodies();
   ok(b[0].messages[0].content === "Written by hand.", "hand edit is what gets sent");
-  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command", "tools are offered");
+  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command,note,keep_going", "tools are offered");
 
   // A bad directory is refused, and nothing is lost.
   await fresh();
@@ -237,8 +239,110 @@ let page;
   await p.waitForSelector(".ledger", { timeout: 15000 });
   await idle();
   b = await bodies();
-  ok(!b[0].tools && b[0].messages[0].content.includes("You have no tools"), "no working directory, no tools");
+  ok(b[0].tools.map((t) => t.function.name).join() === "note,keep_going", "no working directory leaves only notes");
+  ok(b[0].messages[0].content.includes("can't access files"), "and the model is told");
   fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
+
+  // Notes.
+  await fresh();
+  await reset();
+  await send("tools note");
+  await p.waitForSelector(".notes", { timeout: 15000 });
+  await idle();
+  ok((await bodies()).length === 1, "notes alone don't make another model call");
+  ok((await p.locator(".decision-card").count()) === 0, "and need no approval");
+  ok((await p.locator(".notes summary").textContent()) === "From the model", "they're labelled as coming from the model");
+  ok((await p.locator(".note-plan .note-text").textContent()) === "Do the <b>thing</b>", "their text is inert");
+  ok((await p.locator(".note-plan .tag").textContent()) === "doing", "with a status");
+  ok((await p.locator(".note-tool_wish .note-text").textContent()) === "A tool for go test", "and a wish list");
+  ok((await p.locator(".notes button, .notes input").count()) === 0, "with nothing to approve");
+  await p.screenshot({ path: "shots/notes.png" });
+  await send("short after notes");
+  await p.waitForSelector(".prose:has-text('A short reply')", { timeout: 15000 });
+  await idle();
+  b = await bodies();
+  const sent = b[1].messages;
+  ok(sent[sent.length - 2].role === "tool" && sent[sent.length - 2].content === "ok" && sent[sent.length - 1].content === "short after notes", "results go out with the next message");
+
+  await reset();
+  await send("tools notego");
+  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  await idle();
+  ok((await bodies()).length === 2, "keep_going continues");
+
+  // Pause.
+  await fresh();
+  await reset();
+  await send("tools sleep");
+  await card();
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector("#controls button:has-text('Stop command')", { timeout: 5000 });
+  ok(await p.locator("#controls button:has-text('Pause')").isVisible(), "a running command can be paused after or stopped");
+  ok((await p.locator(".tool.state-running").count()) === 1 && (await p.locator("input[data-choice]").count()) === 0, "its card shows it running, with nothing left to tick");
+  await p.screenshot({ path: "shots/running.png" });
+  await p.click("#controls button:has-text('Pause')");
+  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
+  await card();
+  ok((await p.locator(".tool-output").textContent()).includes("finished"), "pause lets the command finish");
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector(".reply-control button:has-text('Continue')", { timeout: 15000 });
+  ok((await bodies()).length === 1, "and doesn't call the model");
+  await p.click(".reply-control button");
+  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  ok((await bodies()).length === 2, "until you continue");
+  ok((await p.locator("#controls button").count()) === 0, "the controls go away");
+
+  // Stop command.
+  await reset();
+  await send("tools long");
+  await card();
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector("#controls button:has-text('Stop command')", { timeout: 5000 });
+  const stoppedAt = Date.now();
+  await p.click("#controls button:has-text('Stop command')");
+  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
+  ok(Date.now() - stoppedAt < 8000, "the command stops");
+  const stopped = await p.locator(".tool.state-finished .tool-output").textContent();
+  ok(stopped.includes("you stopped it") && stopped.includes("begun"), "and its output so far is kept");
+  await card();
+  await p.click("#decide");
+  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  await idle();
+
+  // Cancel reply.
+  await fresh();
+  await reset();
+  await send("slow reply to cancel");
+  await p.waitForSelector("#controls button:has-text('Cancel reply')", { timeout: 5000 });
+  await p.click("#controls button:has-text('Cancel reply')");
+  await p.waitForSelector(".notice:has-text('You cancelled this reply')", { timeout: 15000 });
+  ok(await p.locator(".reply-control button:has-text('Retry')").isVisible(), "a cancelled reply can be retried");
+  await p.click(".reply-control button");
+  await p.waitForSelector(".prose:has-text('A short reply')", { timeout: 15000 });
+  await idle();
+
+  // Budget.
+  const settings = JSON.parse(await p.locator("#settings-text").inputValue());
+  await p.locator(".conv-settings summary").first().click();
+  await p.locator("#settings-text").fill(JSON.stringify({ ...settings, budget_usd: 0.00001, budget_top_up_usd: 0.5 }));
+  await p.locator(".conv-settings button", { hasText: "Hold change" }).click();
+  await p.waitForSelector(".conv-settings .pending");
+  await p.locator(".conv-settings .pending button", { hasText: "Apply" }).click();
+  await p.waitForFunction(() => !document.querySelector(".conv-settings .pending"));
+  await reset();
+  await send("short over budget");
+  await p.waitForSelector(".budget-card", { timeout: 15000 });
+  ok((await bodies()).length === 0, "over budget, no call starts");
+  ok((await p.inputValue("#budget-amount")) === "0.5", "the add box starts with the top-up");
+  ok((await p.locator(".user", { hasText: "short over budget" }).count()) === 1, "and the message is kept");
+  await p.screenshot({ path: "shots/budget.png" });
+  await p.click(".budget-card button");
+  await p.waitForFunction(() => !document.querySelector(".budget-card") && document.querySelectorAll(".assistant > .prose").length > 1, null, { timeout: 15000 });
+  await idle();
+  ok((await bodies()).length === 1, "adding to it lets the call go");
 
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
   await br.close();

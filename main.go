@@ -67,7 +67,7 @@ func main() {
 	c, err := core.New(core.Config{
 		Store:    st,
 		Client:   openrouter.NewClient(cfg.URL, key),
-		Tools:    tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups}),
+		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups}), core.NoteTools()...),
 		Settings: cfg.Settings,
 	})
 	if err != nil {

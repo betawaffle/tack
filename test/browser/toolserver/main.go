@@ -43,10 +43,11 @@ func main() {
 		log.Fatal(err)
 	}
 	c, err := core.New(core.Config{
-		Store:   st,
-		Client:  openrouter.NewClient(*url, key),
-		Model:   *model,
-		Routing: openrouter.Routing{Order: []string{"morph/fp8"}},
+		Store:    st,
+		Client:   openrouter.NewClient(*url, key),
+		Model:    *model,
+		Settings: store.Settings{BudgetUSD: 1},
+		Routing:  openrouter.Routing{Order: []string{"morph/fp8"}},
 		Tools: []core.Tool{
 			{Name: "echo", Definition: definition("echo"), Run: func(_ context.Context, call core.Call) ([]byte, error) {
 				var text string

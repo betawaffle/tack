@@ -52,6 +52,10 @@ const TOOL_CALLS = {
   ],
   list: [["list_files", "{}"], ["search_files", '{"pattern":"hel+o"}']],
   wrong: [["read_file", '{"file":"hello.txt"}']],
+  note: [["note", JSON.stringify({ kind: "plan", key: "first", text: "Do the <b>thing</b>", status: "doing" })], ["note", JSON.stringify({ kind: "tool_wish", key: "w", text: "A tool for go test" })]],
+  notego: [["note", JSON.stringify({ kind: "concern", key: "c", text: "This looks odd" })], ["keep_going", "{}"]],
+  sleep: [["run_command", JSON.stringify({ command: "sleep 2; echo finished" })]],
+  long: [["run_command", JSON.stringify({ command: "echo begun; sleep 30" })]],
   edit: [["edit_file", JSON.stringify({ path: "hello.txt", old_string: "hello", new_string: "goodbye" })]],
   command: [["run_command", JSON.stringify({ command: `pwd; echo $TACK_TEST_VALUE; cat ${process.env.TACK_TEST_KEY} 2>/dev/null || echo no-key; (exec 3<>/dev/tcp/1.1.1.1/53) 2>/dev/null || echo no-network; exit 3` })]],
 };

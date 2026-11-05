@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -79,6 +81,27 @@ func (g *Group) FD() int { return int(g.dir.Fd()) }
 // Kill ends every process in the cgroup, including any that started their own session.
 func (g *Group) Kill() error {
 	return os.WriteFile(filepath.Join(g.path, "cgroup.kill"), []byte("1"), 0o644)
+}
+
+// Terminate asks every process to stop, so they can finish cleanly. skip names programs
+// to leave alone, like the sandbox's own processes, which end when what's in them does.
+func (g *Group) Terminate(skip ...string) error {
+	data, err := os.ReadFile(filepath.Join(g.path, "cgroup.procs"))
+	if err != nil {
+		return err
+	}
+	for _, field := range strings.Fields(string(data)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			continue
+		}
+		comm, err := os.ReadFile("/proc/" + field + "/comm")
+		if err != nil || slices.Contains(skip, strings.TrimSpace(string(comm))) {
+			continue
+		}
+		syscall.Kill(pid, syscall.SIGTERM)
+	}
+	return nil
 }
 
 // Close kills whatever is left and removes the cgroup. The kernel takes a moment to

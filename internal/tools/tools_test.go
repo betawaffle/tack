@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/store"
 )
@@ -708,5 +709,45 @@ func TestGitStaysReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.workdir, ".git/hooks/pre-commit")); err == nil {
 		t.Error("a hook reached the host")
+	}
+}
+
+func TestStoppingACommandAsksFirstWithACgroup(t *testing.T) {
+	if os.Getenv("TACK_TEST_CGROUP") == "" {
+		t.Skip("needs a delegated cgroup")
+	}
+	groups, err := cgroup.Setup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	tools := map[string]core.Tool{}
+	for _, tool := range All(Options{Cgroups: groups}) {
+		tools[tool.Name] = tool
+	}
+	run := func(command string, timeout time.Duration) (string, error, time.Duration) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		call := f.call(map[string]string{"command": command})
+		call.Execution = store.NewID()
+		call.Settings.StopGraceSeconds = 2
+		start := time.Now()
+		out, err := tools["run_command"].Run(ctx, call)
+		return string(out), err, time.Since(start)
+	}
+	// A clean exit gets a chance.
+	got, err, took := run("trap 'echo cleaning up; exit 0' TERM; echo started; sleep 30 & wait", 300*time.Millisecond)
+	if err == nil || !strings.Contains(got, "cleaning up") || took > 1500*time.Millisecond {
+		t.Errorf("clean: %q, %v, %s", got, err, took)
+	}
+	// One that ignores the signal is killed after the grace period, children and all.
+	marker := filepath.Join(f.workdir, "survived")
+	got, err, took = run("trap '' TERM; setsid bash -c 'trap \"\" TERM; sleep 4; touch "+marker+"' & sleep 30", 300*time.Millisecond)
+	if err == nil || took < 2*time.Second || took > 5*time.Second {
+		t.Errorf("ignored: %q, %v, %s", got, err, took)
+	}
+	time.Sleep(4 * time.Second)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a child survived")
 	}
 }

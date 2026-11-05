@@ -35,6 +35,14 @@ type Tool struct {
 	// NetworkOption offers a per-call choice to allow the network.
 	NetworkOption bool
 
+	// NoApproval runs the tool without asking. It's only for tools that reach nothing
+	// outside the conversation's own record.
+	NoApproval bool
+
+	// HoldsResults means that if a reply's only calls are to tools like this, the turn
+	// ends, and the results go out with the next message.
+	HoldsResults bool
+
 	// TackWritten says a successful output is tack's own message, not anything read
 	// from the system, so there's nothing for a person to vet before the model sees it.
 	TackWritten bool
@@ -55,6 +63,9 @@ type Call struct {
 	// network. Both are empty during Inspect.
 	Execution string
 	Network   bool
+
+	// AddNote records a note. It's nil during Inspect.
+	AddNote func(kind, key, status, text string) error
 
 	// Keep stores a block beside the output. It's nil during Inspect, which mustn't
 	// do anything but look.
@@ -86,17 +97,24 @@ type pendingSettings struct {
 	settings store.Settings
 }
 
+var (
+	errBudgetStop     = errors.New("the budget stopped this call")
+	errReplyCancelled = errors.New("You cancelled this reply.")
+	errToolStopped    = errors.New("you stopped it")
+)
+
 // ToolInfo describes a tool for the page.
 type ToolInfo struct {
 	Name         string `json:"name"`
 	NeedsWorkdir bool   `json:"needs_workdir,omitzero"`
+	NoApproval   bool   `json:"no_approval,omitzero"`
 }
 
 // ToolInfo lists the configured tools.
 func (c *Core) ToolInfo() []ToolInfo {
 	out := make([]ToolInfo, len(c.cfg.Tools))
 	for i, tool := range c.cfg.Tools {
-		out[i] = ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir}
+		out[i] = ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval}
 	}
 	return out
 }
@@ -198,6 +216,19 @@ func (conv *conversation) unanswered() bool { return len(conv.openCalls()) > 0 }
 
 func (conv *conversation) applyTool(ev *store.Event) {
 	switch ev.Type {
+	case store.BudgetAdded:
+		conv.budgetAdded += ev.AmountUSD
+		conv.budgetStopped = false
+	case store.BudgetStopped:
+		conv.budgetStopped = true
+	case store.PauseRequested:
+		conv.paused = true
+	case store.PauseCleared:
+		conv.paused = false
+	case store.NoteAdded:
+		if ev.Note != nil {
+			conv.addNote(ev.Note)
+		}
 	case store.SettingsProposed:
 		// A newer proposal replaces an older one. The record keeps both.
 		conv.pendingSettings = &pendingSettings{id: ev.Edit, settings: *ev.Settings}
@@ -431,31 +462,134 @@ func (c *Core) releaseOwnMessages(conv *conversation) error {
 // advance does what's next: run what was approved, stop at any decision, and
 // otherwise call the model.
 func (c *Core) advance(conv *conversation, send func(Update)) error {
+	justCalled := false
 	for {
-		c.mu.Lock()
-		var next *toolCall
-		for _, call := range conv.openCalls() {
-			if call.allowed && !call.started {
-				next = call
-				break
-			}
-		}
-		c.mu.Unlock()
-		if next == nil {
-			break
-		}
-		if err := c.runTool(conv, next, send); err != nil {
+		if err := c.approveAutomatic(conv); err != nil {
 			return err
 		}
+		for {
+			c.mu.Lock()
+			var next *toolCall
+			for _, call := range conv.openCalls() {
+				if call.allowed && !call.started {
+					next = call
+					break
+				}
+			}
+			c.mu.Unlock()
+			if next == nil {
+				break
+			}
+			if err := c.runTool(conv, next, send); err != nil {
+				return err
+			}
+		}
+		if waiting, err := c.ensureDecision(conv); waiting || err != nil {
+			return err
+		}
+		c.mu.Lock()
+		paused := conv.paused
+		done := justCalled && c.turnEnded(conv)
+		c.mu.Unlock()
+		if paused || done {
+			return nil
+		}
+		if err := c.call(conv, send); err != nil {
+			if errors.Is(err, errBudgetStop) {
+				return nil
+			}
+			return err
+		}
+		justCalled = true
 	}
-	if waiting, err := c.ensureDecision(conv); waiting || err != nil {
+}
+
+// turnEnded reports whether the reply that just arrived finishes the turn: it made no
+// calls, or only ones whose results can wait for the next message. The caller holds mu.
+func (c *Core) turnEnded(conv *conversation) bool {
+	for _, it := range slices.Backward(conv.items) {
+		if it.role != "" {
+			continue
+		}
+		for _, call := range it.calls {
+			if tool := c.findTool(call.Name); tool == nil || !tool.HoldsResults {
+				return false
+			}
+		}
+		return true
+	}
+	return true
+}
+
+// approveAutomatic allows the calls that don't need a person.
+func (c *Core) approveAutomatic(conv *conversation) error {
+	c.mu.Lock()
+	var choices []store.Choice
+	if conv.decision == nil {
+		for _, call := range conv.openCalls() {
+			tool := c.findTool(call.Name)
+			if tool != nil && tool.NoApproval && call.Invalid == "" && !call.allowed {
+				choices = append(choices, store.Choice{ToolCall: call.ID, Allow: true})
+			}
+		}
+	}
+	c.mu.Unlock()
+	if len(choices) == 0 {
+		return nil
+	}
+	return c.record(&store.Event{Type: store.DecisionMade, Conversation: conv.id, Choices: choices, By: "tack"})
+}
+
+func (c *Core) clearPause(conv *conversation) error {
+	c.mu.Lock()
+	paused := conv.paused
+	c.mu.Unlock()
+	if !paused {
+		return nil
+	}
+	return c.record(&store.Event{Type: store.PauseCleared, Conversation: conv.id})
+}
+
+// Pause lets whatever is running or approved finish, but doesn't call the model again
+// until the next message or Continue, so results go out with what you say next.
+func (c *Core) Pause(convID string) error {
+	if err := c.exists(convID); err != nil {
 		return err
 	}
-	if err := c.call(conv, send); err != nil {
-		return err
+	return c.record(&store.Event{Type: store.PauseRequested, Conversation: convID})
+}
+
+// CancelReply closes the connection to the model. Hosts that support it stop processing
+// and billing. Others finish and charge in full, so this may save nothing.
+func (c *Core) CancelReply(convID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conv := c.convs[convID]
+	if conv == nil {
+		return ErrNotFound
 	}
-	_, err := c.ensureDecision(conv)
-	return err
+	if conv.cancelReply == nil {
+		return ErrNothingRunning
+	}
+	conv.cancelReply(errReplyCancelled)
+	return nil
+}
+
+// StopTool asks one running call to stop. A command gets a signal first, then a little
+// time to finish cleanly, before it's killed.
+func (c *Core) StopTool(convID, callID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conv := c.convs[convID]
+	if conv == nil {
+		return ErrNotFound
+	}
+	stop := conv.stopTools[callID]
+	if stop == nil {
+		return ErrNothingRunning
+	}
+	stop(errToolStopped)
+	return nil
 }
 
 // runTool runs one approved call. The intent is durable first, so a stop leaves a
@@ -468,14 +602,35 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	if err := c.record(&store.Event{Type: store.ToolStarted, Conversation: conv.id, ToolCall: call.ID, Execution: execution, Network: network}); err != nil {
 		return err
 	}
-	send(Update{Kind: "tool", Text: call.Name})
+	send(Update{Kind: "tool", Text: call.Name, ID: call.ID})
+	defer send(Update{Kind: "tool_done", ID: call.ID})
 	start := time.Now()
 	c.mu.Lock()
 	workdir := conv.workdir
 	settings := conv.effectiveSettings(c.settings)
 	c.mu.Unlock()
 	var artifacts []store.Artifact
-	output, failure := c.execute(call, Call{Workdir: workdir, Settings: settings, Execution: execution, Network: network}, func(name string, data []byte) error {
+	ctx, stop := context.WithCancelCause(context.Background())
+	defer stop(nil)
+	c.mu.Lock()
+	if conv.stopTools == nil {
+		conv.stopTools = map[string]func(error){}
+	}
+	conv.stopTools[call.ID] = stop
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(conv.stopTools, call.ID)
+		c.mu.Unlock()
+	}()
+	addNote := func(kind, key, status, text string) error {
+		block, err := c.cfg.Store.Put([]byte(text))
+		if err != nil {
+			return err
+		}
+		return c.record(&store.Event{Type: store.NoteAdded, Conversation: conv.id, Note: &store.Note{Kind: kind, Key: key, Status: status, Text: block}})
+	}
+	output, failure := c.execute(ctx, call, Call{Workdir: workdir, Settings: settings, Execution: execution, Network: network, AddNote: addNote}, func(name string, data []byte) error {
 		block, err := c.cfg.Store.Put(data)
 		if err != nil {
 			return err
@@ -502,7 +657,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	return c.record(finished)
 }
 
-func (c *Core) execute(call *toolCall, run Call, keep func(string, []byte) error) ([]byte, error) {
+func (c *Core) execute(parent context.Context, call *toolCall, run Call, keep func(string, []byte) error) ([]byte, error) {
 	tool := c.findTool(call.Name)
 	if tool == nil {
 		return nil, fmt.Errorf("there is no tool named %q", call.Name)
@@ -530,7 +685,7 @@ func (c *Core) execute(call *toolCall, run Call, keep func(string, []byte) error
 	if tool.Timeout != nil {
 		timeout = tool.Timeout(run.Settings)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(parent, timeout, fmt.Errorf("it ran past its limit of %s", timeout))
 	defer cancel()
 	run.Keep = keep
 	return tool.Run(ctx, run)

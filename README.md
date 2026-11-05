@@ -53,6 +53,7 @@ These are only defaults, copied into each new conversation, which owns them afte
 | Setting | Default | |
 |---|---|---|
 | `model`, `host` | `deepseek/deepseek-v4.1-flash-1017`, `morph/fp8` | |
+| `budget_usd`, `budget_top_up_usd` | `0.001` each | Where the budget starts, and what the add box starts with |
 | `search_skip` | `.git`, `node_modules` | Directory names `search_files` leaves out |
 | `command_env` | a basic `PATH`, `HOME` and `LANG` | The whole environment for `run_command` |
 | `command_timeout_seconds` | `120` | |
@@ -62,6 +63,7 @@ These are only defaults, copied into each new conversation, which owns them afte
 | `tool_timeout_seconds` | `60` | |
 | `inspect_timeout_seconds` | `2` | The check when a call arrives |
 | `output_wait_seconds` | `5` | How long background children can hold output open |
+| `stop_grace_seconds` | `5` | Between asking a command to stop and killing it |
 | `max_read_bytes` | 16 MiB | For `read_file`, `edit_file` and command output |
 | `max_listed`, `max_matches` | `10000`, `1000` | |
 | `max_search_file_bytes`, `max_line_shown` | 2 MiB, `500` | |
@@ -140,6 +142,31 @@ the directories named by `search_skip`.
 
 Arguments and output are stored as blocks, not in event lines. A conversation
 keeps sending the tool definitions it started with, byte for byte.
+
+## Budgets and stopping
+
+Each conversation has a soft budget. tack doesn't start a call if the budget is spent
+or the next call looks likely to go over, and it offers a box to add more, but it never
+interrupts a call for it. Estimates come from recent calls scaled by how much the request
+has grown, so a cache miss can go over. A cancelled call doesn't report a cost, so it
+counts as the most expensive recent one.
+
+While something is running:
+
+- **Pause** lets everything running or approved finish, then doesn't call the model until
+  your next message or Continue. Results go out with what you say next.
+- **Stop command** sends `SIGTERM`, then kills it after a short grace period. Its output so
+  far still goes to the output approval.
+- **Cancel reply** closes the connection, which is how OpenRouter says to cancel. Hosts that
+  support it stop processing and billing. Others finish and charge in full.
+
+## Notes
+
+`note` writes to a panel on the conversation's page, labelled as coming from the model. It
+doesn't need approval, and nothing reads it back. A reply whose only tool calls are notes
+ends the turn without another model call, and the results go out with your next message.
+`keep_going` is how a model says it has more to do. These are offered even with no working
+directory.
 
 ## Testing
 

@@ -360,6 +360,83 @@ const STATE_LABELS = {
   denied: "Denied",
 };
 
+// Controls for what's running. They come and go with it.
+function setControls(id, running) {
+  const box = $("controls");
+  box.replaceChildren();
+  if (!running) return;
+  box.append(button("Pause", "mini", async () => {
+    await postJSON(`/api/conversations/${id}/pause`);
+    box.append(el("span", "hint", "Pausing: what's running will finish, and the model won't be called again."));
+  }));
+  if (running.reply) {
+    const cancel = button("Cancel reply", "mini", () => postJSON(`/api/conversations/${id}/cancel`));
+    cancel.title = "Closes the connection. Some hosts stop charging, but others finish and charge in full.";
+    box.append(cancel);
+  }
+  if (running.tool) {
+    box.append(button("Stop command", "mini", () => postJSON(`/api/conversations/${id}/tools/${running.tool}/stop`)));
+  }
+}
+
+// The page only redraws from the record at the end, so while a call runs, its card
+// has to stop looking like it's waiting for you.
+function markRunning(callID) {
+  for (const label of $("list").querySelectorAll(".tool-allow")) label.remove();
+  const card = [...$("list").querySelectorAll(".tool")].findLast((node) => node.dataset.call === callID);
+  if (!card) return;
+  card.className = "tool state-running";
+  const tag = card.querySelector(".tool-head .tag");
+  if (tag) tag.textContent = STATE_LABELS.running;
+}
+
+function budgetCard(conv) {
+  const b = conv.budget;
+  const node = el("div", "budget-card");
+  node.append(
+    el("strong", "", "Budget reached"),
+    el("div", "hint", `Spent ${dollars(b.spent)} of ${dollars(b.limit)}. The next call looks like about ${dollars(b.estimate)}, so tack didn't start it.`),
+  );
+  const row = el("div", "row");
+  const amount = el("input");
+  amount.id = "budget-amount";
+  amount.type = "number";
+  amount.step = "any";
+  amount.min = "0";
+  amount.value = String(b.top_up);
+  amount.setAttribute("aria-label", "Dollars to add");
+  row.append(amount, button("Add and continue", "mini primary", async () => {
+    await postJSON(`/api/conversations/${conv.id}/budget`, { amount_usd: Number(amount.value) });
+    await call(conv.id);
+  }));
+  node.append(row);
+  return node;
+}
+
+// What the model has written for this page. It's labelled, and never approves anything.
+function notesPanel(notes) {
+  const node = el("details", "notes");
+  node.open = true;
+  node.append(el("summary", "", "From the model"));
+  const kinds = new Map();
+  for (const note of notes) {
+    if (!kinds.has(note.kind)) kinds.set(note.kind, []);
+    kinds.get(note.kind).push(note);
+  }
+  for (const [kind, items] of kinds) {
+    const group = el("div", `note-group note-${kind.replace(/[^a-z_]/g, "")}`);
+    group.append(el("div", "note-kind", kind.replaceAll("_", " ")));
+    for (const item of items) {
+      const row = el("div", "note");
+      if (item.status) row.append(el("span", "tag", item.status));
+      row.append(exact(item.text, "note-text"));
+      group.append(row);
+    }
+    node.append(group);
+  }
+  return node;
+}
+
 function renderToolCall(call, decision) {
   const node = el("div", `tool state-${call.state}`);
   node.dataset.call = call.id;
@@ -605,6 +682,7 @@ function settingsPanel(conv) {
 function replyControl(conv) {
   const last = conv.items[conv.items.length - 1];
   let label = "Get a reply";
+  if (conv.paused || (last && last.tool_calls)) label = "Continue";
   if (last && last.role === "notice") label = "Retry";
   if (last && last.role === "system") label = "Ask the model to respond now";
   const row = el("div", "row reply-control");
@@ -659,7 +737,8 @@ function showMeta(conv) {
   const parts = [conv.model.replace(/^.*\//, "")];
   if (conv.host) parts.push(conv.host);
   if (conv.workdir) parts.push(conv.workdir);
-  if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`, dollars(total));
+  if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
+  parts.push(`${dollars(conv.budget.spent || total)} of ${dollars(conv.budget.limit)}`);
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
 }
 
@@ -673,15 +752,18 @@ async function show(id, polling) {
   const typing = polling && document.querySelector("#list .editor, #settings-text:focus");
   if (!typing) {
     $("list").replaceChildren(...conv.items.map((item, i) => renderItem(item, i, conv.decision)));
+    if (conv.notes) $("list").prepend(notesPanel(conv.notes));
     $("list").prepend(settingsPanel(conv));
+    if (conv.budget.stopped && !conv.busy && !live) $("list").append(budgetCard(conv));
     if (conv.decision && !live) $("list").append(decisionCard(conv));
-    if (conv.can_reply && !live) $("list").append(replyControl(conv));
+    if (conv.can_reply && !live && !conv.budget.stopped) $("list").append(replyControl(conv));
     if (conv.busy && !live) {
       // A reply started before this page loaded. Its text arrives when it's done.
       $("list").append(el("div", "waiting-note cursor", "A reply is in progress"));
     }
   }
   showMeta(conv);
+  if (!live) setControls(id, conv.busy ? conv.running : null);
   if (conv.busy) pollTimer = setTimeout(() => show(id, true).catch(reportError), 2000);
   else if (polling) refreshList().catch(reportError);
   setBusy(conv.busy || Boolean(conv.decision));
@@ -738,7 +820,7 @@ let start = null;
 // left does the conversation count as having no tools.
 function offersTools() {
   const workdir = $("workdir")?.value ?? "";
-  return start.tools && start.defaults.tools.some((t) => workdir || !t.needs_workdir);
+  return start.tools && start.defaults.tools.some((t) => !t.no_approval && (workdir || !t.needs_workdir));
 }
 
 function chosenSections() {
@@ -746,6 +828,7 @@ function chosenSections() {
     if (s.for === "tools") return offersTools();
     if (s.for === "no-tools") return !offersTools();
     if (s.for === "workdir") return offersTools() && Boolean($("workdir")?.value);
+    if (s.for === "notes") return start.tools && start.defaults.tools.some((t) => t.no_approval);
     return !start.off.has(s.name);
   });
 }
@@ -881,6 +964,12 @@ async function consume(res, id, reply) {
       if (!line || streaming !== id) continue;
       const update = JSON.parse(line);
       reply.node.querySelector(".waiting-note")?.remove();
+      if (update.kind === "call") setControls(id, { reply: true });
+      if (update.kind === "tool") {
+        setControls(id, { tool: update.id });
+        markRunning(update.id);
+      }
+      if (update.kind === "tool_done") setControls(id, {});
       if (update.kind === "content") {
         text += update.text;
         if (!reply.thinking.hidden) reply.thinking.open = false;
@@ -908,8 +997,9 @@ async function call(id, userText, decision) {
   const reply = replyNode();
   const waiting = el("div", "waiting-note cursor");
   try {
-    for (const node of $("list").querySelectorAll(":scope > .reply-control, :scope > .waiting-note, :scope > .decision-card")) node.remove();
+    for (const node of $("list").querySelectorAll(":scope > .reply-control, :scope > .waiting-note, :scope > .decision-card, :scope > .budget-card")) node.remove();
     if (userText !== undefined) $("list").append(el("div", "user", userText));
+    setControls(id, {});
     reply.node.append(waiting);
     $("list").append(reply.node);
     scrollDown();
@@ -930,6 +1020,7 @@ async function call(id, userText, decision) {
   const attached = streaming === id;
   if (attached) {
     streaming = null;
+    setControls(id, null);
     setBusy(false);
     // The record is the truth, so redraw from it, whatever happened.
     await show(id).catch(reportError);

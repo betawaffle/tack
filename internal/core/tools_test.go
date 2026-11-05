@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/betawaffle/tack/internal/openrouter"
 	"github.com/betawaffle/tack/internal/store"
@@ -1117,5 +1118,346 @@ func TestRecordedConfigCanBeReplayed(t *testing.T) {
 	}
 	if !found {
 		t.Error("config not recorded")
+	}
+}
+
+func costStream(cost string) string {
+	return `data: {"id":"g","provider":"Morph","choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"g","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"cost":` + cost + `}}` + "\n\n"
+}
+
+func TestABudgetStopsCallsBeforeTheyStart(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{BudgetUSD: 0.0025}
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.001")) }
+	c := f.open()
+	id, _ := c.NewConversation("")
+	for _, text := range []string{"one", "two"} {
+		updates, err := c.Send(id, text)
+		mustFinish(t, updates, err)
+	}
+	if n := len(f.bodies); n != 2 {
+		t.Fatalf("%d calls", n)
+	}
+	// 0.002 spent, and another 0.001 is expected, which would go over.
+	updates, err := c.Send(id, "three")
+	if got := finish(t, updates); err != nil || got.Kind != "done" {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	if n := len(f.bodies); n != 2 {
+		t.Errorf("started a call over budget: %d", n)
+	}
+	conv, _ := c.Conversation(id)
+	if !conv.Budget.Stopped || conv.Budget.Spent != 0.002 || !conv.CanReply {
+		t.Errorf("budget = %+v", conv.Budget)
+	}
+	if last := conv.Items[len(conv.Items)-1]; last.Role != "user" || last.Text != "three" {
+		t.Errorf("the message should be kept: %+v", last)
+	}
+
+	// It survives a restart, and adding to the budget lets the message go.
+	c = f.open()
+	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != 0.002 {
+		t.Errorf("after a restart: %+v", conv.Budget)
+	}
+	if err := c.AddBudget(id, 0); !errors.Is(err, ErrBadSettings) {
+		t.Errorf("zero = %v", err)
+	}
+	if err := c.AddBudget(id, 0.01); err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Reply(id)
+	mustFinish(t, updates, err)
+	if n := len(f.bodies); n != 3 {
+		t.Errorf("%d calls", n)
+	}
+	if conv, _ := c.Conversation(id); conv.Budget.Stopped || conv.Budget.Limit != 0.0125 {
+		t.Errorf("budget = %+v", conv.Budget)
+	}
+}
+
+func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{BudgetUSD: 0.0000001}
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.5")) }
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "one")
+	mustFinish(t, updates, err)
+	if n := len(f.bodies); n != 1 {
+		t.Errorf("%d calls", n)
+	}
+}
+
+func TestBudgetEstimatesGrowWithTheRequest(t *testing.T) {
+	conv := &conversation{recentCosts: []float64{0.001, 0.002}, lastRequestBytes: 100}
+	if got := conv.estimate(100); got != 0.002 {
+		t.Errorf("same size = %v", got)
+	}
+	if got := conv.estimate(200); got != 0.004 {
+		t.Errorf("twice the size = %v", got)
+	}
+}
+
+func TestAFailedRequestCostsNothingButACutOffOneCounts(t *testing.T) {
+	conv := &conversation{recentCosts: []float64{0.003}}
+	conv.addCost(&store.Event{Status: 502})
+	if conv.spent != 0 {
+		t.Errorf("refused: %v", conv.spent)
+	}
+	conv.addCost(&store.Event{Status: 200})
+	if conv.spent != 0.003 {
+		t.Errorf("cut off: %v", conv.spent)
+	}
+}
+
+func TestPauseFinishesWhatsApprovedButDoesntCallTheModel(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].TackWritten = true
+	c := f.open()
+	id := f.askForTools(c, callA, callB)
+	if err := c.Pause(id); err != nil {
+		t.Fatal(err)
+	}
+	f.decide(c, id, store.DecideCalls, "", "call-a", "call-b")
+	if !reflect.DeepEqual(f.runs, []string{"a", "b"}) {
+		t.Errorf("runs = %v", f.runs)
+	}
+	if n := len(f.bodies); n != 1 {
+		t.Fatalf("called the model while paused: %d", n)
+	}
+	conv, _ := c.Conversation(id)
+	if !conv.Paused || !conv.CanReply {
+		t.Errorf("view = %+v", conv)
+	}
+	// The pause survives a restart, and the results go out with the next message.
+	c = f.open()
+	if conv, _ := c.Conversation(id); !conv.Paused {
+		t.Error("the pause was lost")
+	}
+	updates, err := c.Send(id, "I wanted to say something.")
+	mustFinish(t, updates, err)
+	f.wantMessages(1, sys("Be brief."), user("Use your tools."), assistantCalls(callA, callB),
+		toolMsg("call-a", "echoed a"), toolMsg("call-b", "echoed b"), user("I wanted to say something."))
+	if conv, _ := c.Conversation(id); conv.Paused {
+		t.Error("still paused")
+	}
+}
+
+func TestContinueClearsAPause(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	if _, err := c.AddSystemMessage(id, "Speak up."); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Pause(id); err != nil {
+		t.Fatal(err)
+	}
+	updates, err := c.Reply(id)
+	mustFinish(t, updates, err)
+	if conv, _ := c.Conversation(id); conv.Paused || len(f.bodies) != 1 {
+		t.Errorf("paused %v, %d calls", conv.Paused, len(f.bodies))
+	}
+}
+
+func TestCancelEndsTheCallAndKeepsWhatArrived(t *testing.T) {
+	f := newFake(t)
+	wrote := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	f.handler = func(w http.ResponseWriter) {
+		io.WriteString(w, `data: {"id":"g","provider":"Morph","choices":[{"delta":{"content":"Partly"}}]}`+"\n\n")
+		w.(http.Flusher).Flush()
+		close(wrote)
+		<-release
+	}
+	c := f.open()
+	id, _ := c.NewConversation("")
+	if err := c.CancelReply(id); !errors.Is(err, ErrNothingRunning) {
+		t.Errorf("nothing running = %v", err)
+	}
+	updates, err := c.Send(id, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-wrote
+	for range 200 {
+		if conv, _ := c.Conversation(id); conv.Running.Reply {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := c.CancelReply(id); err != nil {
+		t.Fatal(err)
+	}
+	if got := finish(t, updates); got.Kind != "error" || got.Text != errReplyCancelled.Error() {
+		t.Errorf("update = %+v", got)
+	}
+	var finished *store.Event
+	for _, ev := range f.events() {
+		if ev.Type == store.CallFinished {
+			finished = ev
+		}
+	}
+	if finished == nil || !finished.Cancelled {
+		t.Fatalf("finished = %+v", finished)
+	}
+	if got, err := f.store.Get(finished.Response); err != nil || !strings.Contains(string(got), "Partly") {
+		t.Errorf("response = %q, %v", got, err)
+	}
+	conv, _ := c.Conversation(id)
+	if !conv.CanReply || conv.Running.Reply {
+		t.Errorf("view = %+v", conv)
+	}
+}
+
+func TestStopToolEndsOneCallAndKeepsItsOutput(t *testing.T) {
+	f := newToolFake(t)
+	started := make(chan struct{})
+	f.tools[0].Run = func(ctx context.Context, _ Call) ([]byte, error) {
+		close(started)
+		<-ctx.Done()
+		return []byte("partial"), context.Cause(ctx)
+	}
+	c := f.open()
+	id := f.askForTools(c, callA)
+	d := f.decision(c, id, store.DecideCalls)
+	if err := c.StopTool(id, "call-a"); !errors.Is(err, ErrNothingRunning) {
+		t.Errorf("nothing running = %v", err)
+	}
+	updates, err := c.Decide(id, d.ID, []string{"call-a"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if conv, _ := c.Conversation(id); conv.Running.Tool != "call-a" {
+		t.Errorf("running = %+v", conv.Running)
+	}
+	if err := c.StopTool(id, "call-a"); err != nil {
+		t.Fatal(err)
+	}
+	finish(t, updates)
+	got := f.calls(c, id)[0]
+	if got.Output != "partial" || !strings.Contains(got.Error, "you stopped it") {
+		t.Errorf("call = %+v", got)
+	}
+	f.decision(c, id, store.DecideOutput)
+}
+
+func (f *toolFake) noteTools() {
+	f.tools = append(f.tools, NoteTools()...)
+}
+
+var (
+	noteCall = wireCall{"call-n", "note", `{"kind":"plan","key":"first","text":"Do it","status":"pending"}`}
+	goCall   = wireCall{"call-g", "keep_going", `{}`}
+)
+
+func TestNotesDontNeedApprovalAndEndTheTurn(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id := f.askForTools(c, noteCall)
+	conv, _ := c.Conversation(id)
+	if conv.Decision != nil {
+		t.Fatalf("decision = %+v", conv.Decision)
+	}
+	if n := len(f.bodies); n != 1 {
+		t.Fatalf("a follow-up call was made: %d", n)
+	}
+	if len(conv.Notes) != 1 || conv.Notes[0].Text != "Do it" || conv.Notes[0].Status != "pending" {
+		t.Errorf("notes = %+v", conv.Notes)
+	}
+
+	// The result goes out with the next message.
+	updates, err := c.Send(id, "Thanks.")
+	mustFinish(t, updates, err)
+	m := f.messagesIn(1)
+	if len(m) < 2 || m[len(m)-2].Role != "tool" || m[len(m)-2].Content != "ok" || m[len(m)-1].Content != "Thanks." {
+		t.Errorf("messages = %+v", m)
+	}
+
+	// Notes survive a restart, and the same key updates the item.
+	f.replyWith(toolStream(wireCall{"call-n2", "note", `{"kind":"plan","key":"first","text":"Did it","status":"done"}`}))
+	updates, err = c.Send(id, "Next.")
+	mustFinish(t, updates, err)
+	f.replyWith(replyStream)
+	c = f.open()
+	conv, _ = c.Conversation(id)
+	if len(conv.Notes) != 1 || conv.Notes[0].Text != "Did it" || conv.Notes[0].Status != "done" {
+		t.Errorf("notes = %+v", conv.Notes)
+	}
+}
+
+func TestKeepGoingContinuesAfterNotes(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id, _ := c.NewConversation("Be brief.")
+	replies := 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies == 1 {
+			io.WriteString(w, toolStream(noteCall, goCall))
+			return
+		}
+		io.WriteString(w, replyStream)
+	}
+	updates, err := c.Send(id, "Use your tools.")
+	mustFinish(t, updates, err)
+	if n := len(f.bodies); n != 2 {
+		t.Fatalf("%d calls", n)
+	}
+	if conv, _ := c.Conversation(id); conv.Items[len(conv.Items)-1].Text != "Hello there" {
+		t.Errorf("view = %+v", conv.Items)
+	}
+}
+
+func TestKeepGoingWithRealToolsIsIgnored(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id := f.askForTools(c, callA, goCall)
+	d := f.decision(c, id, store.DecideCalls)
+	if !reflect.DeepEqual(d.Calls, []string{"call-a"}) {
+		t.Errorf("only the real call should need approval: %v", d.Calls)
+	}
+}
+
+func TestRealToolsStillContinueOnTheirOwn(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	f.tools[0].TackWritten = true
+	c := f.open()
+	id := f.askForTools(c, callA, noteCall)
+	f.decide(c, id, store.DecideCalls, "", "call-a")
+	if n := len(f.bodies); n != 2 {
+		t.Errorf("%d calls", n)
+	}
+}
+
+func TestBadNotesStillGoThroughAPerson(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id := f.askForTools(c, wireCall{"call-n", "note", `{"kind":"plan"}`})
+	f.decision(c, id, store.DecideCalls)
+	if got := f.calls(c, id)[0]; got.Invalid == "" || got.Decidable {
+		t.Errorf("call = %+v", got)
+	}
+}
+
+func TestNotesWithNoWorkdirAreStillOffered(t *testing.T) {
+	f := newFake(t)
+	f.tools = append(f.tools, Tool{Name: "needy", NeedsWorkdir: true, Definition: jsontext.Value(strings.ReplaceAll(definition, `"echo"`, `"needy"`))})
+	f.tools = append(f.tools, NoteTools()...)
+	c := f.open()
+	id, _ := c.NewConversationWith(Options{Tools: true})
+	updates, err := c.Send(id, "hi")
+	mustFinish(t, updates, err)
+	body := string(f.bodies[0])
+	if !strings.Contains(body, `"note"`) || strings.Contains(body, `"needy"`) {
+		t.Errorf("request = %s", body)
 	}
 }
