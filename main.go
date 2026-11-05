@@ -3,7 +3,9 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -23,6 +25,7 @@ func main() {
 	keyPath := flag.String("key", defaultPath("XDG_CONFIG_HOME", ".config", "tack/openrouter-key"), "OpenRouter key file")
 	model := flag.String("model", "deepseek/deepseek-v4.1-flash-1017", "model")
 	host := flag.String("host", "morph/fp8", "OpenRouter provider to pin")
+	promptPath := flag.String("system-prompt", defaultPath("XDG_CONFIG_HOME", ".config", "tack/system-prompt"), "file overriding the default system prompt for new conversations")
 	flag.Parse()
 
 	key, err := secret.Load(*keyPath)
@@ -48,7 +51,20 @@ func main() {
 	}
 
 	log.Printf("listening on %s, recording to %s, using %s on %s", *addr, *dataDir, *model, *host)
-	log.Fatal(http.ListenAndServe(*addr, web.Handler(c)))
+	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, func() string { return defaultPrompt(*promptPath) })))
+}
+
+// defaultPrompt reads the override each time, so editing the file doesn't need a
+// restart.
+func defaultPrompt(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("using the built-in system prompt: %v", err)
+		}
+		return core.DefaultSystemPrompt
+	}
+	return string(data)
 }
 
 func defaultPath(env, fallback, name string) string {

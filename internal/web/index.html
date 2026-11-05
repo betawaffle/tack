@@ -42,11 +42,35 @@
   .item { white-space: pre-wrap; overflow-wrap: anywhere; }
   .user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 10px; background: var(--user); }
   .notice { color: var(--warn); font-size: 14px; }
+  .system {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); font-size: 14px;
+  }
+  .system-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-bottom: 4px; white-space: normal; }
+  .system-head strong { color: var(--text); font-weight: 600; }
+  .system-head .spacer { flex: 1; }
+  .tag { padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); }
+  .tag.waiting { color: var(--accent); border-color: var(--accent); }
+  .pending { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+  .pending .tag { color: var(--warn); border-color: var(--warn); }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0; white-space: normal; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .link {
+    padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .link:hover { background: var(--line); }
+  .editor textarea { width: 100%; }
+  #system-panel { max-width: 760px; width: 100%; margin: 0 auto; padding: 16px 16px 0; }
+  #system-panel[hidden] { display: none; }
+  #system-panel label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  #system-prompt { width: 100%; }
   .stats { color: var(--muted); font-size: 12px; margin-top: 4px; white-space: normal; }
   details { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
   summary { cursor: pointer; }
   form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
   form .inner { flex-direction: row; flex: 1; width: 100%; gap: 8px; }
+  .actions { display: flex; flex-direction: column; gap: 6px; }
   textarea {
     flex: 1; min-width: 0; resize: vertical; padding: 8px 10px; border-radius: 8px;
     border: 1px solid var(--line); background: var(--bg); color: inherit; font: inherit;
@@ -70,17 +94,24 @@
   <nav id="conversations"></nav>
 </aside>
 <main>
+  <div id="system-panel">
+    <label for="system-prompt">System prompt for this conversation (clear it to send none)</label>
+    <textarea id="system-prompt" rows="4"></textarea>
+  </div>
   <div id="items"><div class="inner" id="list"></div></div>
   <form id="form">
     <div class="inner">
       <textarea id="input" rows="3" placeholder="Message" aria-label="Message"></textarea>
-      <button class="action" id="send" type="submit">Send</button>
+      <div class="actions">
+        <button class="action" id="send" type="submit">Send</button>
+        <button class="action" id="add-system" type="button" title="Waits for your next message, unless you ask the model to respond now">Add as system</button>
+      </div>
     </div>
   </form>
 </main>
 <script>
-// Everything from the server goes through textContent. Model output is never
-// treated as markup.
+// Everything from the server goes through textContent or a textarea's value.
+// Model output is never treated as markup.
 const $ = (id) => document.getElementById(id);
 let current = null;
 let streaming = false;
@@ -93,10 +124,25 @@ function el(tag, className, text) {
   return node;
 }
 
+function linkButton(label, onClick) {
+  const b = el("button", "link", label);
+  b.type = "button";
+  b.addEventListener("click", () => Promise.resolve(onClick()).catch(reportError));
+  return b;
+}
+
 async function api(path, options) {
   const res = await fetch(path, options);
   if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
   return res;
+}
+
+function postJSON(path, body) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
 }
 
 function statsLine(s) {
@@ -122,7 +168,67 @@ function replyNode() {
   return { node, details, reasoning, text };
 }
 
+function editor(initial, onSave, onCancel) {
+  const box = el("div", "editor");
+  const area = el("textarea");
+  area.rows = Math.min(12, initial.split("\n").length + 2);
+  area.value = initial;
+  const row = el("div", "row");
+  row.append(linkButton("Hold edit", () => onSave(area.value)), linkButton("Cancel", onCancel));
+  box.append(area, el("div", "hint", "Held edits stay unused until you apply them. Leave this empty to propose removing the message."), row);
+  return box;
+}
+
+function renderSystem(item) {
+  const id = current;
+  const node = el("div", "item system");
+  const head = el("div", "system-head");
+  head.append(el("strong", "", "System"));
+  if (item.queued) head.append(el("span", "tag waiting", "Goes with the next call"));
+  if (item.edited) head.append(el("span", "tag", "Edited"));
+  if (item.removed) head.append(el("span", "tag", "Removed"));
+  head.append(el("span", "spacer"));
+  node.append(head);
+  const body = el("div", "", item.text);
+  node.append(body);
+
+  head.append(linkButton("Edit", () => {
+    const form = editor(item.pending ? item.pending.text : item.text, async (text) => {
+      await postJSON(`/api/conversations/${id}/system/${item.message}/edits`, { text });
+      await show(id);
+    }, () => form.remove());
+    node.append(form);
+    form.querySelector("textarea").focus();
+  }));
+
+  if (item.pending) {
+    const pending = el("div", "pending");
+    const label = el("div", "system-head");
+    label.append(el("span", "tag", "Unused edit"));
+    pending.append(label);
+    pending.append(el("div", "", item.pending.text || "Remove this message."));
+    if (!item.queued && !item.removed) {
+      pending.append(el("div", "hint", "The model has already seen this message. Applying changes it from here on, so the next call misses the cache from this point."));
+    }
+    const row = el("div", "row");
+    row.append(
+      linkButton("Apply", async () => {
+        await postJSON(`/api/conversations/${id}/edits/${item.pending.id}/apply`);
+        await show(id);
+      }),
+      linkButton("Discard", async () => {
+        await postJSON(`/api/conversations/${id}/edits/${item.pending.id}/discard`);
+        await show(id);
+      }),
+    );
+    pending.append(row);
+    node.append(pending);
+  }
+  return node;
+}
+
 function renderItem(item) {
+  if (item.role === "system") return renderSystem(item);
   if (item.role !== "assistant") {
     return el("div", `item ${item.role}`, item.text);
   }
@@ -134,6 +240,16 @@ function renderItem(item) {
   }
   if (item.stats) r.node.append(el("div", "stats", statsLine(item.stats)));
   return r.node;
+}
+
+function replyControl(conv) {
+  const last = conv.items[conv.items.length - 1];
+  let label = "Get a reply";
+  if (last && last.role === "notice") label = "Retry";
+  if (last && last.role === "system") label = "Ask the model to respond now";
+  const row = el("div", "row");
+  row.append(linkButton(label, () => runCall(conv.id)));
+  return row;
 }
 
 function nearBottom() {
@@ -153,7 +269,7 @@ async function refreshList() {
     const b = el("button", "", (s.busy ? "… " : "") + (s.preview || "New conversation"));
     b.type = "button";
     b.setAttribute("aria-current", String(s.id === current));
-    b.addEventListener("click", () => open(s.id));
+    b.addEventListener("click", () => open(s.id).catch(reportError));
     return b;
   }));
 }
@@ -162,27 +278,47 @@ function setBusy(busy) {
   $("send").disabled = busy;
 }
 
-async function show(id) {
+async function show(id, polling) {
   clearTimeout(pollTimer);
   const res = await api(`/api/conversations/${id}`);
   const conv = await res.json();
   if (id !== current) return;
-  $("list").replaceChildren(...conv.items.map(renderItem));
-  if (conv.busy) {
-    // A reply started before this page loaded. Its text arrives when it's done.
-    $("list").append(el("div", "notice", "A reply is in progress…"));
-    pollTimer = setTimeout(() => show(id).catch(reportError), 2000);
+  // Don't throw away something being typed just because a poll came round.
+  const typing = polling && document.querySelector("#list .editor");
+  if (!typing) {
+    $("list").replaceChildren(...conv.items.map(renderItem));
+    if (conv.can_reply && !streaming) $("list").append(replyControl(conv));
+    if (conv.busy && !streaming) {
+      // A reply started before this page loaded. Its text arrives when it's done.
+      $("list").append(el("div", "notice", "A reply is in progress…"));
+    }
   }
+  if (conv.busy) pollTimer = setTimeout(() => show(id, true).catch(reportError), 2000);
   setBusy(conv.busy);
-  scrollDown();
+  if (!polling) scrollDown();
 }
 
 async function open(id) {
   current = id;
   location.hash = id;
+  $("system-panel").hidden = true;
+  $("add-system").disabled = false;
   await refreshList();
   await show(id);
   $("input").focus();
+}
+
+async function startNew() {
+  current = null;
+  clearTimeout(pollTimer);
+  history.replaceState(null, "", location.pathname);
+  $("list").replaceChildren();
+  $("system-panel").hidden = false;
+  $("add-system").disabled = true;
+  setBusy(false);
+  const res = await api("/api/system-default");
+  $("system-prompt").value = (await res.json()).text;
+  await refreshList();
 }
 
 function reportError(err) {
@@ -190,25 +326,9 @@ function reportError(err) {
   scrollDown();
 }
 
-async function send(text) {
-  if (!current) {
-    const res = await api("/api/conversations", { method: "POST" });
-    current = (await res.json()).id;
-    location.hash = current;
-  }
-  const id = current;
-  $("list").append(el("div", "item user", text));
-  const reply = replyNode();
-  $("list").append(reply.node);
-  scrollDown();
-
-  const res = await api(`/api/conversations/${id}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  refreshList().catch(() => {});
-
+// consume shows a call's updates as they arrive. They're only a preview: the
+// page redraws from the record once the call has finished.
+async function consume(res, id, reply) {
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffered = "";
   for (;;) {
@@ -231,26 +351,70 @@ async function send(text) {
   }
 }
 
+// call runs one model call and redraws afterwards. A user message is optional:
+// without one, the model responds to the conversation as it stands.
+async function call(id, userText) {
+  if (streaming) return;
+  streaming = true;
+  setBusy(true);
+  try {
+    for (const node of $("list").querySelectorAll(":scope > .row")) node.remove();
+    if (userText !== undefined) $("list").append(el("div", "item user", userText));
+    const reply = replyNode();
+    $("list").append(reply.node);
+    scrollDown();
+    const res = userText !== undefined
+      ? await postJSON(`/api/conversations/${id}/messages`, { text: userText })
+      : await postJSON(`/api/conversations/${id}/reply`);
+    refreshList().catch(() => {});
+    await consume(res, id, reply);
+  } catch (err) {
+    reportError(err);
+    streaming = false;
+    setBusy(false);
+    return;
+  }
+  streaming = false;
+  setBusy(false);
+  if (current === id) await show(id).catch(reportError);
+  await refreshList().catch(reportError);
+}
+
+function runCall(id) {
+  return call(id);
+}
+
 $("form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("input").value;
   if (!text.trim() || streaming) return;
-  streaming = true;
-  setBusy(true);
   $("input").value = "";
   try {
-    await send(text);
+    if (!current) {
+      const res = await postJSON("/api/conversations", { system: $("system-prompt").value });
+      current = (await res.json()).id;
+      location.hash = current;
+      $("system-panel").hidden = true;
+      $("add-system").disabled = false;
+      await show(current);
+    }
+    await call(current, text);
   } catch (err) {
     reportError(err);
-  } finally {
-    streaming = false;
-    setBusy(false);
   }
-  // The record is the truth. Redraw from it now that the call is finished.
-  if (current) {
-    await show(current).catch(reportError);
-    await refreshList().catch(reportError);
+});
+
+$("add-system").addEventListener("click", async () => {
+  const text = $("input").value;
+  if (!text.trim() || !current) return;
+  try {
+    await postJSON(`/api/conversations/${current}/system`, { text });
+    $("input").value = "";
+    await show(current);
+  } catch (err) {
+    reportError(err);
   }
+  $("input").focus();
 });
 
 $("input").addEventListener("keydown", (event) => {
@@ -261,25 +425,21 @@ $("input").addEventListener("keydown", (event) => {
 });
 
 $("new").addEventListener("click", () => {
-  current = null;
-  clearTimeout(pollTimer);
-  history.replaceState(null, "", location.pathname);
-  $("list").replaceChildren();
-  setBusy(false);
-  refreshList().catch(reportError);
+  startNew().catch(reportError);
   $("input").focus();
 });
 
 (async () => {
   const id = location.hash.slice(1);
   if (id) {
-    await open(id).catch(() => {
-      current = null;
-      return refreshList();
-    });
-  } else {
-    await refreshList();
+    try {
+      await open(id);
+      return;
+    } catch {
+      // Fall through to a new conversation.
+    }
   }
+  await startNew();
   $("input").focus();
 })().catch(reportError);
 </script>

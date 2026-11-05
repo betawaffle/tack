@@ -100,7 +100,7 @@ func finish(t *testing.T, updates <-chan Update) Update {
 func TestRecordsExactBytes(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
-	id, err := c.NewConversation()
+	id, err := c.NewConversation("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestRecordsExactBytes(t *testing.T) {
 func TestKeyIsSentButNeverRecorded(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
-	id, _ := c.NewConversation()
+	id, _ := c.NewConversation("")
 	updates, err := c.Send(id, "Hi")
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestKeyIsSentButNeverRecorded(t *testing.T) {
 func TestContextGrowsAndPrefixIsStable(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
-	id, _ := c.NewConversation()
+	id, _ := c.NewConversation("")
 	for _, text := range []string{"one", "two"} {
 		updates, err := c.Send(id, text)
 		if err != nil {
@@ -226,7 +226,7 @@ func TestContextGrowsAndPrefixIsStable(t *testing.T) {
 func TestStateRebuildsFromRecord(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
-	id, _ := c.NewConversation()
+	id, _ := c.NewConversation("")
 	updates, err := c.Send(id, "Hi")
 	if err != nil {
 		t.Fatal(err)
@@ -257,7 +257,7 @@ func TestStateRebuildsFromRecord(t *testing.T) {
 func TestCrashDuringCall(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
-	id, _ := c.NewConversation()
+	id, _ := c.NewConversation("")
 
 	// Write what a crash mid-call would leave: a started event and no finish,
 	// then a torn line.
@@ -331,7 +331,7 @@ func TestProviderErrorsAreRecorded(t *testing.T) {
 			f := newFake(t)
 			f.handler = tc.handler
 			c := f.open()
-			id, _ := c.NewConversation()
+			id, _ := c.NewConversation("")
 			updates, err := c.Send(id, "Hi")
 			if err != nil {
 				t.Fatal(err)
@@ -365,7 +365,7 @@ func TestNoTextIsNotAReply(t *testing.T) {
 		io.WriteString(w, `data: {"choices":[{"delta":{"reasoning":"long thought"},"finish_reason":"length"}]}`+"\n\n")
 	}
 	c := f.open()
-	id, _ := c.NewConversation()
+	id, _ := c.NewConversation("")
 	updates, err := c.Send(id, "Hi")
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +383,7 @@ func TestOneCallAtATime(t *testing.T) {
 		io.WriteString(w, replyStream)
 	}
 	c := f.open()
-	id, _ := c.NewConversation()
+	id, _ := c.NewConversation("")
 	updates, err := c.Send(id, "Hi")
 	if err != nil {
 		t.Fatal(err)
@@ -396,4 +396,308 @@ func TestOneCallAtATime(t *testing.T) {
 	if _, err := c.Send("nope", "Hi"); err != ErrNotFound {
 		t.Errorf("unknown conversation: %v", err)
 	}
+}
+
+// messagesIn returns the messages of the nth request the provider received.
+func (f *fake) messagesIn(n int) []openrouter.Message {
+	f.t.Helper()
+	var body struct {
+		Messages []openrouter.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(f.bodies[n], &body); err != nil {
+		f.t.Fatal(err)
+	}
+	return body.Messages
+}
+
+func (f *fake) wantMessages(n int, want ...openrouter.Message) {
+	f.t.Helper()
+	got := f.messagesIn(n)
+	if len(got) != len(want) {
+		f.t.Fatalf("request %d messages = %+v, want %+v", n, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			f.t.Errorf("request %d message %d = %+v, want %+v", n, i, got[i], want[i])
+		}
+	}
+}
+
+func mustFinish(t *testing.T, updates <-chan Update, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := finish(t, updates); last.Kind != "done" {
+		t.Fatalf("last update = %+v", last)
+	}
+}
+
+func sys(text string) openrouter.Message  { return openrouter.Message{Role: "system", Content: text} }
+func user(text string) openrouter.Message { return openrouter.Message{Role: "user", Content: text} }
+func bot(text string) openrouter.Message {
+	return openrouter.Message{Role: "assistant", Content: text}
+}
+
+func TestSystemPromptComesFirst(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, err := c.NewConversation("Be brief.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, err := c.Send(id, "Hi")
+	mustFinish(t, updates, err)
+	f.wantMessages(0, sys("Be brief."), user("Hi"))
+}
+
+func TestEmptySystemPromptSendsNone(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("  \n")
+	updates, err := c.Send(id, "Hi")
+	mustFinish(t, updates, err)
+	f.wantMessages(0, user("Hi"))
+}
+
+func TestSystemMessageWaitsForNextCall(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "one")
+	mustFinish(t, updates, err)
+
+	if _, err := c.AddSystemMessage(id, "New rule."); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.bodies) != 1 {
+		t.Fatalf("adding a system message made a call")
+	}
+	conv, _ := c.Conversation(id)
+	last := conv.Items[len(conv.Items)-1]
+	if last.Role != "system" || !last.Queued {
+		t.Errorf("last item = %+v", last)
+	}
+
+	updates, err = c.Send(id, "two")
+	mustFinish(t, updates, err)
+	f.wantMessages(1, user("one"), bot("Hello there"), sys("New rule."), user("two"))
+	conv, _ = c.Conversation(id)
+	for _, it := range conv.Items {
+		if it.Role == "system" && it.Queued {
+			t.Errorf("still queued after being sent: %+v", it)
+		}
+	}
+}
+
+func TestReplyToSystemMessageSpeaksOutOfTurn(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "one")
+	mustFinish(t, updates, err)
+
+	if _, err := c.Reply(id); err != ErrNothingToSend {
+		t.Errorf("reply with nothing new: %v", err)
+	}
+	if _, err := c.AddSystemMessage(id, "Speak up."); err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Reply(id)
+	mustFinish(t, updates, err)
+	f.wantMessages(1, user("one"), bot("Hello there"), sys("Speak up."))
+}
+
+func TestEditsAreHeldUntilApplied(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("Old prompt.")
+	updates, err := c.Send(id, "one")
+	mustFinish(t, updates, err)
+
+	conv, _ := c.Conversation(id)
+	message := conv.Items[0].Message
+
+	editID, err := c.ProposeEdit(id, message, "New prompt.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(id)
+	if it := conv.Items[0]; it.Text != "Old prompt." || it.Pending == nil || it.Pending.Text != "New prompt." {
+		t.Fatalf("held edit shown as %+v", it)
+	}
+
+	// A held edit isn't used.
+	updates, err = c.Send(id, "two")
+	mustFinish(t, updates, err)
+	f.wantMessages(1, sys("Old prompt."), user("one"), bot("Hello there"), user("two"))
+
+	if err := c.ApplyEdit(id, editID); err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(id)
+	if it := conv.Items[0]; it.Text != "New prompt." || it.Pending != nil || !it.Edited || !it.Queued {
+		t.Errorf("applied edit shown as %+v", it)
+	}
+	if err := c.ApplyEdit(id, editID); err != ErrNoEdit {
+		t.Errorf("applying twice: %v", err)
+	}
+
+	updates, err = c.Send(id, "three")
+	mustFinish(t, updates, err)
+	f.wantMessages(2, sys("New prompt."), user("one"), bot("Hello there"), user("two"), bot("Hello there"), user("three"))
+
+	// All of it survives a rebuild.
+	rebuilt, err := f.open().Conversation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it := rebuilt.Items[0]; it.Text != "New prompt." || !it.Edited || it.Queued {
+		t.Errorf("after rebuild: %+v", it)
+	}
+}
+
+func TestDiscardAndSupersedeEdits(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("Prompt.")
+	conv, _ := c.Conversation(id)
+	message := conv.Items[0].Message
+
+	first, _ := c.ProposeEdit(id, message, "First.")
+	second, _ := c.ProposeEdit(id, message, "Second.")
+	if err := c.ApplyEdit(id, first); err != ErrNoEdit {
+		t.Errorf("applying a replaced edit: %v", err)
+	}
+	if err := c.DiscardEdit(id, second); err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(id)
+	if it := conv.Items[0]; it.Text != "Prompt." || it.Pending != nil || it.Edited {
+		t.Errorf("after discard: %+v", it)
+	}
+	if _, err := c.ProposeEdit(id, "nope", "x"); err != ErrNoMessage {
+		t.Errorf("unknown message: %v", err)
+	}
+}
+
+func TestEditCanRemoveAMessage(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("Prompt.")
+	conv, _ := c.Conversation(id)
+	editID, err := c.ProposeEdit(id, conv.Items[0].Message, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(id)
+	if it := conv.Items[0]; it.Pending == nil || it.Pending.Text != "" {
+		t.Errorf("proposed removal shown as %+v", it)
+	}
+	if err := c.ApplyEdit(id, editID); err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(id)
+	if !conv.Items[0].Removed {
+		t.Errorf("removed message shown as %+v", conv.Items[0])
+	}
+	updates, err := c.Send(id, "Hi")
+	mustFinish(t, updates, err)
+	f.wantMessages(0, user("Hi"))
+}
+
+func TestRetrySendsTheSameBytes(t *testing.T) {
+	f := newFake(t)
+	f.handler = func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusBadGateway)
+		io.WriteString(w, "nope")
+	}
+	c := f.open()
+	id, _ := c.NewConversation("Prompt.")
+	updates, err := c.Send(id, "Hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := finish(t, updates); last.Kind != "error" {
+		t.Fatalf("last update = %+v", last)
+	}
+	conv, _ := c.Conversation(id)
+	if !conv.CanReply {
+		t.Error("can't retry a failed call")
+	}
+
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, replyStream) }
+	updates, err = c.Reply(id)
+	mustFinish(t, updates, err)
+	if !bytes.Equal(f.bodies[0], f.bodies[1]) {
+		t.Errorf("retry differs:\n%s\n%s", f.bodies[0], f.bodies[1])
+	}
+	conv, _ = c.Conversation(id)
+	if conv.CanReply {
+		t.Error("can retry after a good reply")
+	}
+	// The failure stays visible and the message appears once.
+	var users, notices int
+	for _, it := range conv.Items {
+		switch it.Role {
+		case "user":
+			users++
+		case "notice":
+			notices++
+		}
+	}
+	if users != 1 || notices != 1 {
+		t.Errorf("items = %+v", conv.Items)
+	}
+}
+
+func TestRetryAfterCrash(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	f.store.Append(&store.Event{Type: store.UserMessage, Conversation: id, Parts: []store.Part{{Block: mustPut(t, f.store, "Hi")}}})
+	f.store.Append(&store.Event{Type: store.CallStarted, Conversation: id, Call: "dead"})
+
+	c = f.open()
+	conv, _ := c.Conversation(id)
+	if !conv.CanReply {
+		t.Fatal("can't retry an interrupted call")
+	}
+	updates, err := c.Reply(id)
+	mustFinish(t, updates, err)
+	f.wantMessages(0, user("Hi"))
+}
+
+func TestSystemMessageDuringCallDoesNotHideTheRunningCall(t *testing.T) {
+	f := newFake(t)
+	release := make(chan struct{})
+	f.handler = func(w http.ResponseWriter) {
+		<-release
+		io.WriteString(w, replyStream)
+	}
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "Hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		f.mu.Lock()
+		n := len(f.bodies)
+		f.mu.Unlock()
+		if n == 1 {
+			break
+		}
+	}
+	if _, err := c.AddSystemMessage(id, "Later."); err != nil {
+		t.Fatal(err)
+	}
+	conv, _ := c.Conversation(id)
+	for _, it := range conv.Items {
+		if it.Role == "notice" {
+			t.Errorf("running call shown as %+v", it)
+		}
+	}
+	close(release)
+	mustFinish(t, updates, nil)
 }

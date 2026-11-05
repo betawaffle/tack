@@ -50,6 +50,10 @@ const (
 	TackStarted       = "tack_started"
 	ConversationAdded = "conversation_created"
 	UserMessage       = "user_message"
+	SystemMessage     = "system_message"
+	EditProposed      = "system_edit_proposed"
+	EditApplied       = "system_edit_applied"
+	EditDiscarded     = "system_edit_discarded"
 	CallStarted       = "model_call_started"
 	CallFinished      = "model_call_finished"
 )
@@ -66,8 +70,15 @@ type Event struct {
 	// conversation_created, user_message, model_call_*
 	Conversation string `json:"conversation,omitzero"`
 
-	// user_message
+	// user_message, system_message, system_edit_proposed. An edit with no parts
+	// removes the message.
 	Parts []Part `json:"parts,omitzero"`
+
+	// system_message, system_edit_proposed: the message concerned.
+	Message string `json:"message,omitzero"`
+
+	// system_edit_*
+	Edit string `json:"edit,omitzero"`
 
 	// model_call_started
 	Call           string              `json:"call,omitzero"`

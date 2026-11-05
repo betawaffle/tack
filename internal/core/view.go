@@ -29,6 +29,13 @@ type Stats struct {
 	DurationMillis   int64   `json:"duration_ms"`
 }
 
+// PendingEdit is a system message edit that's being held. An empty Text
+// proposes removing the message.
+type PendingEdit struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
 // Item is something to show in a conversation. Text holds the message, or for
 // the "notice" role, what went wrong.
 type Item struct {
@@ -36,13 +43,21 @@ type Item struct {
 	Text      string `json:"text"`
 	Reasoning string `json:"reasoning,omitzero"`
 	Stats     *Stats `json:"stats,omitzero"`
+
+	// System messages only.
+	Message string       `json:"message,omitzero"`
+	Queued  bool         `json:"queued,omitzero"` // no call has included this text yet
+	Edited  bool         `json:"edited,omitzero"`
+	Removed bool         `json:"removed,omitzero"`
+	Pending *PendingEdit `json:"pending,omitzero"`
 }
 
 // Conversation is a conversation as the UI shows it.
 type Conversation struct {
-	ID    string `json:"id"`
-	Busy  bool   `json:"busy"`
-	Items []Item `json:"items"`
+	ID       string `json:"id"`
+	Busy     bool   `json:"busy"`
+	CanReply bool   `json:"can_reply"`
+	Items    []Item `json:"items"`
 }
 
 // Conversations lists conversations, newest first.
@@ -54,8 +69,8 @@ func (c *Core) Conversations() []Summary {
 		conv := c.convs[id]
 		s := Summary{ID: id, Created: conv.created, Busy: conv.busy}
 		for _, it := range conv.items {
-			if it.userParts != nil {
-				s.Preview = c.preview(it.userParts)
+			if it.role == "user" {
+				s.Preview = c.preview(it.parts)
 				break
 			}
 		}
@@ -96,14 +111,22 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Busy: conv.busy, Items: []Item{}}
+	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Items: []Item{}}
+	lastCall := -1
+	for i, it := range conv.items {
+		if it.role == "" {
+			lastCall = i
+		}
+	}
 	for i, it := range conv.items {
 		switch {
-		case it.userParts != nil:
-			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.userParts)})
+		case it.role == "user":
+			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.parts)})
+		case it.role == "system":
+			out.Items = append(out.Items, c.systemItem(it))
 		case it.finished == nil:
 			// Only the newest call of a busy conversation can still be running.
-			if !conv.busy || i != len(conv.items)-1 {
+			if !conv.busy || i != lastCall {
 				out.Items = append(out.Items, Item{Role: "notice", Text: "This call was interrupted before it finished."})
 			}
 		case it.finished.Error != "":
@@ -115,6 +138,21 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		}
 	}
 	return out, nil
+}
+
+func (c *Core) systemItem(it *item) Item {
+	out := Item{
+		Role:    "system",
+		Text:    c.text(it.parts),
+		Message: it.messageID,
+		Queued:  !it.sent && len(it.parts) > 0,
+		Edited:  it.edited,
+		Removed: len(it.parts) == 0,
+	}
+	if it.pending != nil {
+		out.Pending = &PendingEdit{ID: it.pending.id, Text: c.text(it.pending.parts)}
+	}
+	return out
 }
 
 func (c *Core) reply(ev *store.Event) Item {

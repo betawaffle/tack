@@ -24,6 +24,17 @@ To update it, rebuild and run `systemctl --user restart tack`. Logs are in
 It serves port 8484 on all interfaces with **no authentication**, so only run it
 on a network you trust. See `tack -help` for options.
 
+## System messages
+
+New conversations start with a default system prompt, which you can change or clear
+before the first message. To change the default, put your own text in
+`~/.config/tack/system-prompt`.
+
+Later system messages wait for the next call, unless you ask the model to respond
+straight away. Edits to a system message are held and shown as unused until you
+apply them. Applying one to a message the model has already seen makes the next
+call miss the cache from that point.
+
 ## The record
 
 Everything lives under `~/.local/share/tack/`:
