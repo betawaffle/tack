@@ -35,6 +35,11 @@ straight away. Edits to a system message are held and shown as unused until you
 apply them. Applying one to a message the model has already seen makes the next
 call miss the cache from that point.
 
+## Testing
+
+`go test ./...` covers the server. The Markdown parser has its own tests, which
+need Node: `node --test internal/web/`.
+
 ## The record
 
 Everything lives under `~/.local/share/tack/`:

@@ -55,6 +55,8 @@ type Item struct {
 // Conversation is a conversation as the UI shows it.
 type Conversation struct {
 	ID       string `json:"id"`
+	Model    string `json:"model"`
+	Host     string `json:"host,omitzero"` // the pinned host, if any
 	Busy     bool   `json:"busy"`
 	CanReply bool   `json:"can_reply"`
 	Items    []Item `json:"items"`
@@ -111,7 +113,10 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Items: []Item{}}
+	out := Conversation{ID: id, Model: c.cfg.Model, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Items: []Item{}}
+	if order := c.cfg.Routing.Order; len(order) > 0 {
+		out.Host = order[0]
+	}
 	lastCall := -1
 	for i, it := range conv.items {
 		if it.role == "" {

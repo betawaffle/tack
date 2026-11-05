@@ -2,7 +2,7 @@
 package web
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json/v2"
 	"errors"
 	"log"
@@ -12,8 +12,8 @@ import (
 	"github.com/betawaffle/tack/internal/core"
 )
 
-//go:embed index.html
-var page []byte
+//go:embed static/index.html static/style.css static/app.js static/markdown.js
+var static embed.FS
 
 const maxMessageBytes = 8 << 20
 
@@ -22,6 +22,7 @@ func Handler(c *core.Core, defaultPrompt func() string) http.Handler {
 	s := &server{core: c, defaultPrompt: defaultPrompt}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
+	mux.Handle("GET /static/", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/conversations", s.list)
 	mux.HandleFunc("POST /api/conversations", s.create)
 	mux.HandleFunc("GET /api/conversations/{id}", s.get)
@@ -33,7 +34,24 @@ func Handler(c *core.Core, defaultPrompt func() string) http.Handler {
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
 	mux.HandleFunc("GET /api/system-default", s.systemDefault)
 	// Other websites open in the same browser shouldn't be able to post here.
-	return http.NewCrossOriginProtection().Handler(mux)
+	return security(http.NewCrossOriginProtection().Handler(mux))
+}
+
+// security sets the headers every response gets. Model output is only ever shown
+// as text or built into DOM nodes. This policy is the second layer: even if that
+// failed, the page couldn't run injected code, or load or send anything elsewhere.
+// That includes images, so a reply can't leak anything through an image's URL.
+func security(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			// The files are embedded in the binary, so a restart can change them.
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type server struct {
@@ -52,13 +70,9 @@ func readText(w http.ResponseWriter, r *http.Request, field string) (string, boo
 	return body[field], true
 }
 
-func (s *server) index(w http.ResponseWriter, _ *http.Request) {
-	// Model output is only ever shown as text. This is the second layer: even
-	// if that failed, the page couldn't load or send anything elsewhere.
-	w.Header().Set("Content-Security-Policy",
-		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(page)
+func (s *server) index(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFileFS(w, r, static, "static/index.html")
 }
 
 func (s *server) list(w http.ResponseWriter, _ *http.Request) {

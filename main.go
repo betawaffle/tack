@@ -23,6 +23,7 @@ func main() {
 	addr := flag.String("addr", "0.0.0.0:8484", "address to listen on")
 	dataDir := flag.String("data", defaultPath("XDG_DATA_HOME", ".local/share", "tack"), "data directory")
 	keyPath := flag.String("key", defaultPath("XDG_CONFIG_HOME", ".config", "tack/openrouter-key"), "OpenRouter key file")
+	url := flag.String("url", openrouter.DefaultURL, "OpenRouter endpoint. The key is sent here")
 	model := flag.String("model", "deepseek/deepseek-v4.1-flash-1017", "model")
 	host := flag.String("host", "morph/fp8", "OpenRouter provider to pin")
 	promptPath := flag.String("system-prompt", defaultPath("XDG_CONFIG_HOME", ".config", "tack/system-prompt"), "file overriding the default system prompt for new conversations")
@@ -38,7 +39,7 @@ func main() {
 	}
 	c, err := core.New(core.Config{
 		Store:   st,
-		Client:  openrouter.NewClient(openrouter.DefaultURL, key),
+		Client:  openrouter.NewClient(*url, key),
 		Model:   *model,
 		Routing: openrouter.Routing{Order: []string{*host}, AllowFallbacks: false},
 	})

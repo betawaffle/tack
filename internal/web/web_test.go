@@ -94,3 +94,39 @@ func TestSystemPromptFlow(t *testing.T) {
 	post(t, base+"/system", `{"text":""}`, http.StatusBadRequest)
 	post(t, conv+"/nope/reply", ``, http.StatusNotFound)
 }
+
+func TestPageAndPolicy(t *testing.T) {
+	s := site(t)
+	for _, path := range []string{"/", "/static/app.js", "/static/style.css", "/static/markdown.js"} {
+		resp, err := http.Get(s.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || len(body) == 0 {
+			t.Errorf("%s = %d, %d bytes", path, resp.StatusCode, len(body))
+		}
+		policy := resp.Header.Get("Content-Security-Policy")
+		if !strings.Contains(policy, "default-src 'none'") || strings.Contains(policy, "unsafe-inline") {
+			t.Errorf("%s policy = %q", path, policy)
+		}
+	}
+	if resp, err := http.Get(s.URL + "/markdown.test.js"); err != nil || resp.StatusCode != 404 {
+		t.Errorf("test file served: %v %v", resp, err)
+	}
+}
+
+func TestCrossSitePostIsRefused(t *testing.T) {
+	s := site(t)
+	req, _ := http.NewRequest(http.MethodPost, s.URL+"/api/conversations", strings.NewReader("{}"))
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
