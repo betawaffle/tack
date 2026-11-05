@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -248,7 +249,7 @@ func TestSearchFiles(t *testing.T) {
 	f.write("bin.dat", "needle\x00\n", 0o644)
 	f.write(".git/config", "needle\n", 0o644)
 	f.write("node_modules/x.js", "needle\n", 0o644)
-	f.write("big.txt", "needle\n"+strings.Repeat("x", maxSearchFile), 0o644)
+	f.write("big.txt", "needle\n"+strings.Repeat("x", 2<<20), 0o644)
 	if err := os.Symlink(f.key, filepath.Join(f.workdir, "link")); err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +506,7 @@ func TestCommandIsKilledWithItsChildren(t *testing.T) {
 	marker := filepath.Join(f.workdir, "still-running")
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	call := f.call(map[string]string{"command": "(sleep 1; touch " + marker + ") & echo started; wait"})
+	call := f.call(map[string]string{"command": "setsid bash -c 'sleep 1; touch " + marker + "' & echo started; wait"})
 	start := time.Now()
 	out, err := f.tools["run_command"].Run(ctx, call)
 	if err == nil || !strings.Contains(err.Error(), "stopped") || string(out) != "started\n" {
@@ -517,6 +518,139 @@ func TestCommandIsKilledWithItsChildren(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("a child survived")
+	}
+}
+
+func TestTheSandboxHidesAndProtects(t *testing.T) {
+	f := newFixture(t)
+	outside := filepath.Join(filepath.Dir(f.workdir), "outside.txt")
+	f.write(outside, "outside\n", 0o644)
+	got, err := f.run("run_command", map[string]string{"command": strings.Join([]string{
+		"cat " + outside + " 2>&1 && echo READ-OUTSIDE",
+		"cat " + f.key + " 2>&1 && echo READ-KEY",
+		"touch /usr/nope 2>&1 && echo WROTE-USR",
+		"touch " + outside + "2 2>&1",
+		"touch here && echo WROTE-HERE",
+		"unshare -m true 2>&1 && echo MADE-NAMESPACE",
+		"(exec 3<>/dev/tcp/1.1.1.1/53) 2>&1 && echo CONNECTED",
+		"ls /sys/fs/cgroup 2>&1 && echo SAW-CGROUPS",
+		"true",
+	}, "; ")})
+	if err != nil {
+		t.Fatalf("%v: %s", err, got)
+	}
+	for _, bad := range []string{"READ-OUTSIDE\n", "READ-KEY\n", "WROTE-USR\n", "MADE-NAMESPACE\n", "CONNECTED\n", "SAW-CGROUPS\n"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%s:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "WROTE-HERE") {
+		t.Errorf("couldn't write in the working directory:\n%s", got)
+	}
+	// The parents of the working directory are an empty tmpfs in the sandbox, so
+	// that touch may succeed there. What matters is that it doesn't reach the host.
+	if _, err := os.Stat(outside + "2"); err == nil {
+		t.Error("wrote outside")
+	}
+}
+
+func TestAKeyInsideTheWorkdirIsStillHidden(t *testing.T) {
+	f := newFixture(t)
+	inside := filepath.Join(f.workdir, "key-file")
+	f.write(inside, "the inside key", 0o600)
+	tools := map[string]core.Tool{}
+	for _, tool := range All(Options{Protected: []string{inside}}) {
+		tools[tool.Name] = tool
+	}
+	out, err := tools["run_command"].Run(context.Background(), f.call(map[string]string{"command": "cat key-file; ls -la key-file"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "the inside key") {
+		t.Errorf("output = %s", out)
+	}
+}
+
+func TestReadOnlyPathsAreConfigured(t *testing.T) {
+	f := newFixture(t)
+	extra := filepath.Join(filepath.Dir(f.workdir), "tools-dir")
+	f.write(filepath.Join(extra, "note"), "shared\n", 0o644)
+	readable := filepath.Join(filepath.Dir(f.workdir), "writable")
+	f.write(filepath.Join(readable, "note"), "x", 0o644)
+	call := f.call(map[string]string{"command": "cat " + extra + "/note; touch " + extra + "/no 2>&1 | wc -l; touch " + readable + "/yes && echo wrote"})
+	call.Settings.SandboxReadOnly = append(slices.Clone(store.DefaultSandboxReadOnly), extra)
+	call.Settings.SandboxReadWrite = []string{readable}
+	out, err := f.tools["run_command"].Run(context.Background(), call)
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if !strings.Contains(string(out), "shared") || !strings.Contains(string(out), "wrote") {
+		t.Errorf("output = %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(extra, "no")); err == nil {
+		t.Error("wrote to a read-only path")
+	}
+}
+
+func TestNetworkIsOnlyThereWhenAllowed(t *testing.T) {
+	f := newFixture(t)
+	count := func(network bool) string {
+		call := f.call(map[string]string{"command": "wc -l < /proc/net/dev"})
+		call.Network = network
+		out, err := f.tools["run_command"].Run(context.Background(), call)
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return string(out)
+	}
+	host, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(host), "\n") <= 3 {
+		t.Skip("this machine only has loopback")
+	}
+	if off, on := count(false), count(true); off == on {
+		t.Errorf("the same interfaces either way: %q", off)
+	}
+}
+
+func TestTheSandboxArgumentsAreKept(t *testing.T) {
+	f := newFixture(t)
+	call := f.call(map[string]string{"command": "true"})
+	kept := map[string]string{}
+	call.Keep = func(name string, data []byte) error {
+		kept[name] = string(data)
+		return nil
+	}
+	if _, err := f.tools["run_command"].Run(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(kept["sandbox"], "--unshare-all") {
+		t.Errorf("kept = %v", kept)
+	}
+}
+
+func TestLimitsComeFromSettings(t *testing.T) {
+	f := newFixture(t)
+	f.write("big.txt", "0123456789", 0o644)
+	call := f.call(map[string]string{"path": "big.txt"})
+	call.Settings.MaxReadBytes = 4
+	out, err := f.tools["read_file"].Run(context.Background(), call)
+	if string(out) != "0123" || err == nil {
+		t.Errorf("got %q, %v", out, err)
+	}
+}
+
+func TestEditIsMarkedAsTacksOwnMessage(t *testing.T) {
+	f := newFixture(t)
+	if !f.tools["edit_file"].TackWritten || f.tools["run_command"].TackWritten || f.tools["read_file"].TackWritten {
+		t.Error("only edit_file writes its own message")
+	}
+	for name, tool := range f.tools {
+		if !tool.NeedsWorkdir {
+			t.Errorf("%s doesn't need a working directory", name)
+		}
 	}
 }
 
@@ -539,5 +673,40 @@ func TestBadCommandsAreCaughtBeforeApproval(t *testing.T) {
 		if _, err := f.tools["run_command"].Inspect(f.call(args)); err == nil {
 			t.Errorf("%v: no error", args)
 		}
+	}
+}
+
+func TestGitStaysReadOnly(t *testing.T) {
+	f := newFixture(t)
+	dir := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = f.workdir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	dir("init", "-q")
+	f.write("a.txt", "a\n", 0o644)
+	got, err := f.run("run_command", map[string]string{"command": strings.Join([]string{
+		"touch .git/hooks/pre-commit 2>/dev/null && echo WROTE-HOOK",
+		"echo '[core]' >> .git/config 2>/dev/null && echo WROTE-CONFIG",
+		"git add a.txt 2>/dev/null && echo ADDED",
+		"git status --short",
+		"touch b.txt && echo WROTE-SOURCE",
+	}, "; ")})
+	if err != nil {
+		t.Fatalf("%v: %s", err, got)
+	}
+	for _, bad := range []string{"WROTE-HOOK\n", "WROTE-CONFIG\n", "ADDED\n"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%s:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "?? a.txt") || !strings.Contains(got, "WROTE-SOURCE") {
+		t.Errorf("git status and source changes should still work:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(f.workdir, ".git/hooks/pre-commit")); err == nil {
+		t.Error("a hook reached the host")
 	}
 }

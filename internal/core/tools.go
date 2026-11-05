@@ -29,6 +29,16 @@ type Tool struct {
 	// Timeout overrides the default limit on how long a call can take.
 	Timeout func(store.Settings) time.Duration
 
+	// NeedsWorkdir leaves the tool out of a conversation with no working directory.
+	NeedsWorkdir bool
+
+	// NetworkOption offers a per-call choice to allow the network.
+	NetworkOption bool
+
+	// TackWritten says a successful output is tack's own message, not anything read
+	// from the system, so there's nothing for a person to vet before the model sees it.
+	TackWritten bool
+
 	// Inspect runs when a call arrives, before any approval, on input the model
 	// chose. An error means the call can't run. Flags draw a person's attention on
 	// the approval card. It can touch metadata but mustn't open anything.
@@ -40,6 +50,11 @@ type Call struct {
 	Args     map[string]jsontext.Value
 	Workdir  string
 	Settings store.Settings
+
+	// Execution identifies this run of the call, and Network says it may use the
+	// network. Both are empty during Inspect.
+	Execution string
+	Network   bool
 
 	// Keep stores a block beside the output. It's nil during Inspect, which mustn't
 	// do anything but look.
@@ -53,19 +68,38 @@ func (t *Tool) define(settings store.Settings) jsontext.Value {
 	return t.Definition
 }
 
-// effectiveSettings returns a conversation's snapshot, or the current settings for
-// one recorded before snapshots existed.
+// effectiveSettings returns what a conversation uses. One recorded before it kept its
+// own takes the current settings, with the model and host of its last call.
 func (conv *conversation) effectiveSettings(current store.Settings) store.Settings {
 	if conv.settings != nil {
 		return *conv.settings
 	}
+	if conv.lastModel != "" {
+		current.Model, current.Host = conv.lastModel, conv.lastHost
+	}
 	return current
 }
 
-const (
-	inspectTimeout = 2 * time.Second
-	toolTimeout    = time.Minute
-)
+// pendingSettings are settings held until someone applies them.
+type pendingSettings struct {
+	id       string
+	settings store.Settings
+}
+
+// ToolInfo describes a tool for the page.
+type ToolInfo struct {
+	Name         string `json:"name"`
+	NeedsWorkdir bool   `json:"needs_workdir,omitzero"`
+}
+
+// ToolInfo lists the configured tools.
+func (c *Core) ToolInfo() []ToolInfo {
+	out := make([]ToolInfo, len(c.cfg.Tools))
+	for i, tool := range c.cfg.Tools {
+		out[i] = ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir}
+	}
+	return out
+}
 
 // FlagUnchecked is the flag on a call whose inspection didn't finish in time, as
 // could happen with a path on a hung mount.
@@ -74,6 +108,7 @@ const FlagUnchecked = "Couldn't be checked in time"
 // inspect runs a tool's Inspect with a time limit. A hung check leaves a goroutine
 // behind, which is better than the whole reply hanging on what a model chose.
 func inspect(tool *Tool, call Call) ([]string, error) {
+	limit := time.Duration(call.Settings.WithDefaults().InspectTimeoutSeconds) * time.Second
 	if tool.Inspect == nil {
 		return nil, nil
 	}
@@ -89,7 +124,7 @@ func inspect(tool *Tool, call Call) ([]string, error) {
 	select {
 	case r := <-done:
 		return r.flags, r.err
-	case <-time.After(inspectTimeout):
+	case <-time.After(limit):
 		return []string{FlagUnchecked}, nil
 	}
 }
@@ -115,6 +150,7 @@ func denialText(kind string) string {
 type toolCall struct {
 	store.ToolCall
 	allowed  bool // approved to run, and not since told to stop
+	network  bool // and may use the network
 	started  bool
 	finished bool
 	output   store.Ref
@@ -162,8 +198,22 @@ func (conv *conversation) unanswered() bool { return len(conv.openCalls()) > 0 }
 
 func (conv *conversation) applyTool(ev *store.Event) {
 	switch ev.Type {
-	case store.SettingsUpdated:
-		conv.tools, conv.settings = ev.Tools, ev.Settings
+	case store.SettingsProposed:
+		// A newer proposal replaces an older one. The record keeps both.
+		conv.pendingSettings = &pendingSettings{id: ev.Edit, settings: *ev.Settings}
+	case store.SettingsApplied:
+		if p := conv.pendingSettings; p != nil && p.id == ev.Edit {
+			settings := p.settings
+			conv.settings = &settings
+			if ev.Tools != "" {
+				conv.tools = ev.Tools
+			}
+			conv.pendingSettings = nil
+		}
+	case store.SettingsDiscarded:
+		if p := conv.pendingSettings; p != nil && p.id == ev.Edit {
+			conv.pendingSettings = nil
+		}
 	case store.DecisionRequested:
 		conv.decision = &decision{id: ev.Decision, kind: ev.Kind, calls: ev.DecisionCalls}
 	case store.DecisionMade:
@@ -173,6 +223,7 @@ func (conv *conversation) applyTool(ev *store.Event) {
 				continue
 			}
 			call.allowed = choice.Allow
+			call.network = choice.Network
 			if choice.Parts != nil {
 				call.result = choice.Parts
 				call.released = choice.Allow
@@ -196,13 +247,16 @@ func (conv *conversation) applyTool(ev *store.Event) {
 // storeDefinitions writes the offered tools as a block. A conversation keeps
 // sending these exact bytes, so changing a tool can't alter its cached prefix or
 // what its earlier calls appear to have seen.
-func (c *Core) storeDefinitions(settings store.Settings) (store.Ref, error) {
-	if len(c.cfg.Tools) == 0 {
-		return "", nil
+func (c *Core) storeDefinitions(settings store.Settings, workdir string) (store.Ref, error) {
+	var definitions []jsontext.Value
+	for i := range c.cfg.Tools {
+		tool := &c.cfg.Tools[i]
+		if !tool.NeedsWorkdir || workdir != "" {
+			definitions = append(definitions, tool.define(settings))
+		}
 	}
-	definitions := make([]jsontext.Value, len(c.cfg.Tools))
-	for i, tool := range c.cfg.Tools {
-		definitions[i] = tool.define(settings)
+	if len(definitions) == 0 {
+		return "", nil
 	}
 	data, err := json.Marshal(definitions, json.Deterministic(true))
 	if err != nil {
@@ -310,6 +364,9 @@ func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Set
 // reports whether one is open, in which case nothing else can happen until a
 // person answers. The caller must not be running any tools.
 func (c *Core) ensureDecision(conv *conversation) (bool, error) {
+	if err := c.releaseOwnMessages(conv); err != nil {
+		return false, err
+	}
 	c.mu.Lock()
 	if conv.decision != nil {
 		c.mu.Unlock()
@@ -341,6 +398,34 @@ func (c *Core) ensureDecision(conv *conversation) (bool, error) {
 	}
 	err := c.record(&store.Event{Type: store.DecisionRequested, Conversation: conv.id, Decision: store.NewID(), Kind: kind, DecisionCalls: calls})
 	return err == nil, err
+}
+
+// releaseOwnMessages lets the model see a tool's success message when tack wrote it,
+// since there's nothing in it for a person to vet. Errors still stop at the gate.
+func (c *Core) releaseOwnMessages(conv *conversation) error {
+	c.mu.Lock()
+	var calls []toolCall
+	if conv.decision == nil {
+		for _, call := range conv.openCalls() {
+			tool := c.findTool(call.Name)
+			if tool != nil && tool.TackWritten && call.allowed && call.finished && call.failure == "" {
+				calls = append(calls, *call)
+			}
+		}
+	}
+	c.mu.Unlock()
+	if len(calls) == 0 {
+		return nil
+	}
+	var choices []store.Choice
+	for i := range calls {
+		parts, err := c.releasedOutput(&calls[i])
+		if err != nil {
+			return err
+		}
+		choices = append(choices, store.Choice{ToolCall: calls[i].ID, Allow: true, Parts: parts})
+	}
+	return c.record(&store.Event{Type: store.DecisionMade, Conversation: conv.id, Choices: choices, By: "tack"})
 }
 
 // advance does what's next: run what was approved, stop at any decision, and
@@ -376,7 +461,11 @@ func (c *Core) advance(conv *conversation, send func(Update)) error {
 // runTool runs one approved call. The intent is durable first, so a stop leaves a
 // started call with no finish, which is never run again without asking.
 func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) error {
-	if err := c.record(&store.Event{Type: store.ToolStarted, Conversation: conv.id, ToolCall: call.ID}); err != nil {
+	c.mu.Lock()
+	network := call.network
+	c.mu.Unlock()
+	execution := store.NewID()
+	if err := c.record(&store.Event{Type: store.ToolStarted, Conversation: conv.id, ToolCall: call.ID, Execution: execution, Network: network}); err != nil {
 		return err
 	}
 	send(Update{Kind: "tool", Text: call.Name})
@@ -386,7 +475,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	settings := conv.effectiveSettings(c.settings)
 	c.mu.Unlock()
 	var artifacts []store.Artifact
-	output, failure := c.execute(call, workdir, settings, func(name string, data []byte) error {
+	output, failure := c.execute(call, Call{Workdir: workdir, Settings: settings, Execution: execution, Network: network}, func(name string, data []byte) error {
 		block, err := c.cfg.Store.Put(data)
 		if err != nil {
 			return err
@@ -402,6 +491,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		Type:           store.ToolFinished,
 		Conversation:   conv.id,
 		ToolCall:       call.ID,
+		Execution:      execution,
 		Output:         ref,
 		Artifacts:      artifacts,
 		DurationMillis: time.Since(start).Milliseconds(),
@@ -412,7 +502,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	return c.record(finished)
 }
 
-func (c *Core) execute(call *toolCall, workdir string, settings store.Settings, keep func(string, []byte) error) ([]byte, error) {
+func (c *Core) execute(call *toolCall, run Call, keep func(string, []byte) error) ([]byte, error) {
 	tool := c.findTool(call.Name)
 	if tool == nil {
 		return nil, fmt.Errorf("there is no tool named %q", call.Name)
@@ -428,30 +518,29 @@ func (c *Core) execute(call *toolCall, workdir string, settings store.Settings, 
 	// Time passes between approving a call and running it, and an earlier call in
 	// the batch may have changed things. If it no longer looks as it did on the card,
 	// the approval doesn't cover it.
-	look := Call{Args: args, Workdir: workdir, Settings: settings}
-	flags, err := inspect(tool, look)
+	run.Args = args
+	flags, err := inspect(tool, Call{Args: args, Workdir: run.Workdir, Settings: run.Settings})
 	if err != nil {
 		return nil, fmt.Errorf("this changed since it was approved: %w", err)
 	}
 	if !slices.Equal(flags, call.Flags) {
 		return nil, fmt.Errorf("this changed since it was approved: the card showed %q, and now it's %q", call.Flags, flags)
 	}
-	timeout := toolTimeout
+	timeout := time.Duration(run.Settings.WithDefaults().ToolTimeoutSeconds) * time.Second
 	if tool.Timeout != nil {
-		timeout = tool.Timeout(settings)
+		timeout = tool.Timeout(run.Settings)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	look.Keep = keep
-	return tool.Run(ctx, look)
+	run.Keep = keep
+	return tool.Run(ctx, run)
 }
 
-// Reconfigure changes what later calls and new conversations use. Conversations keep
-// their snapshot of the settings until UpdateSettings.
-func (c *Core) Reconfigure(model string, routing openrouter.Routing, settings store.Settings) {
+// Reconfigure changes what new conversations start with. Existing ones keep their own.
+func (c *Core) Reconfigure(settings store.Settings) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.model, c.routing, c.settings = model, routing, settings
+	c.settings = settings
 }
 
 func (c *Core) currentSettings() store.Settings {
@@ -469,34 +558,75 @@ func (c *Core) RecordConfig(data []byte) error {
 	return c.record(&store.Event{Type: store.ConfigLoaded, Config: block})
 }
 
-// UpdateSettings brings a conversation's snapshot up to date with the config. The
-// tool definitions come first in every request, so the next call misses the cache.
-func (c *Core) UpdateSettings(convID string) error {
+// ProposeSettings holds new settings for a conversation. Nothing changes until they're
+// applied.
+func (c *Core) ProposeSettings(convID string, settings store.Settings) (string, error) {
+	if err := c.exists(convID); err != nil {
+		return "", err
+	}
+	settings = settings.WithDefaults()
+	if err := settings.Validate(); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrBadSettings, err)
+	}
+	id := store.NewID()
+	return id, c.record(&store.Event{Type: store.SettingsProposed, Conversation: convID, Edit: id, Settings: &settings})
+}
+
+// ApplySettings makes held settings the conversation's own. Tool definitions come
+// first in every request, so if they change, the next call misses the whole cache.
+func (c *Core) ApplySettings(convID, id string) error {
+	var pending store.Settings
+	var hasTools bool
+	var workdir string
 	conv, err := c.reserve(convID, func(conv *conversation) error {
+		if conv.pendingSettings == nil || conv.pendingSettings.id != id {
+			return ErrNoEdit
+		}
 		if conv.decision != nil || conv.unanswered() {
 			return ErrAwaiting
 		}
-		if conv.tools == "" {
-			return ErrNothingToUpdate
-		}
+		pending = conv.pendingSettings.settings
+		hasTools, workdir = conv.tools != "", conv.workdir
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 	defer c.release(conv)
-	settings := c.currentSettings()
-	tools, err := c.storeDefinitions(settings)
-	if err != nil {
-		return err
+	var tools store.Ref
+	if hasTools {
+		if tools, err = c.storeDefinitions(pending, workdir); err != nil {
+			return err
+		}
 	}
-	return c.record(&store.Event{Type: store.SettingsUpdated, Conversation: convID, Tools: tools, Settings: &settings})
+	return c.record(&store.Event{Type: store.SettingsApplied, Conversation: convID, Edit: id, Tools: tools})
+}
+
+// DiscardSettings drops held settings.
+func (c *Core) DiscardSettings(convID, id string) error {
+	c.mu.Lock()
+	conv := c.convs[convID]
+	found := conv != nil && conv.pendingSettings != nil && conv.pendingSettings.id == id
+	c.mu.Unlock()
+	if conv == nil {
+		return ErrNotFound
+	}
+	if !found {
+		return ErrNoEdit
+	}
+	return c.record(&store.Event{Type: store.SettingsDiscarded, Conversation: convID, Edit: id})
 }
 
 // Decide answers the open decision. Calls not named in allow are denied, so an
 // empty answer denies everything. The model sees text for anything denied, or a default if it's empty.
 // What the decision releases then moves along as a reply does.
 func (c *Core) Decide(convID, decisionID string, allow []string, text string) (<-chan Update, error) {
+	return c.DecideWithNetwork(convID, decisionID, allow, nil, text)
+}
+
+// DecideWithNetwork also lets the calls named in network use the network. They have
+// to be allowed, and to be calls that offer that.
+func (c *Core) DecideWithNetwork(convID, decisionID string, allow, network []string, text string) (<-chan Update, error) {
 	var open decision
 	conv, err := c.reserve(convID, func(conv *conversation) error {
 		if conv.decision == nil || conv.decision.id != decisionID {
@@ -509,12 +639,21 @@ func (c *Core) Decide(convID, decisionID string, allow []string, text string) (<
 				return ErrBadChoice
 			}
 		}
+		for _, id := range network {
+			call := conv.tool(id)
+			if !slices.Contains(allow, id) || call == nil {
+				return ErrBadChoice
+			}
+			if tool := c.findTool(call.Name); tool == nil || !tool.NetworkOption {
+				return ErrBadChoice
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	choices, err := c.choices(conv, &open, allow, text)
+	choices, err := c.choices(conv, &open, allow, network, text)
 	if err == nil {
 		err = c.record(&store.Event{Type: store.DecisionMade, Conversation: convID, Decision: decisionID, Choices: choices, By: "user"})
 	}
@@ -525,7 +664,7 @@ func (c *Core) Decide(convID, decisionID string, allow []string, text string) (<
 	return c.start(conv), nil
 }
 
-func (c *Core) choices(conv *conversation, open *decision, allow []string, text string) ([]store.Choice, error) {
+func (c *Core) choices(conv *conversation, open *decision, allow, network []string, text string) ([]store.Choice, error) {
 	if strings.TrimSpace(text) == "" {
 		text = denialText(open.kind)
 	}
@@ -538,7 +677,7 @@ func (c *Core) choices(conv *conversation, open *decision, allow []string, text 
 		c.mu.Lock()
 		call := *conv.tool(id)
 		c.mu.Unlock()
-		choice := store.Choice{ToolCall: id, Allow: slices.Contains(allow, id)}
+		choice := store.Choice{ToolCall: id, Allow: slices.Contains(allow, id), Network: slices.Contains(network, id)}
 		switch {
 		case call.Invalid != "":
 			if choice.Parts, err = c.parts("This tool call can't run: " + call.Invalid); err != nil {
@@ -598,6 +737,10 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 	}
 	if call.resolved() {
 		view.Result = c.text(call.result)
+	}
+	view.Network = call.network
+	if tool := c.findTool(call.Name); tool != nil && tool.NetworkOption && view.Decidable && conv.decision.kind != store.DecideOutput {
+		view.NetworkOption = true
 	}
 	interrupted := conv.decision != nil && conv.decision.kind == store.DecideInterrupted && slices.Contains(conv.decision.calls, call.ID)
 	switch {

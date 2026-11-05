@@ -19,15 +19,15 @@ import (
 
 // Errors a caller can act on.
 var (
-	ErrNotFound        = errors.New("no such conversation")
-	ErrNoMessage       = errors.New("no such system message")
-	ErrNoEdit          = errors.New("no such unused edit")
-	ErrBusy            = errors.New("a reply is already in progress")
-	ErrNothingToSend   = errors.New("the model has already replied to everything in this conversation")
-	ErrAwaiting        = errors.New("tool calls in this conversation are waiting for a decision")
-	ErrNoDecision      = errors.New("no such open decision")
-	ErrBadChoice       = errors.New("that choice isn't possible for this decision")
-	ErrNothingToUpdate = errors.New("this conversation has no tools, so it has no settings to update")
+	ErrNotFound      = errors.New("no such conversation")
+	ErrNoMessage     = errors.New("no such system message")
+	ErrNoEdit        = errors.New("no such unused edit")
+	ErrBusy          = errors.New("a reply is already in progress")
+	ErrNothingToSend = errors.New("the model has already replied to everything in this conversation")
+	ErrAwaiting      = errors.New("tool calls in this conversation are waiting for a decision")
+	ErrNoDecision    = errors.New("no such open decision")
+	ErrBadChoice     = errors.New("that choice isn't possible for this decision")
+	ErrBadSettings   = errors.New("those settings can't work")
 )
 
 // Config is what a Core needs.
@@ -37,7 +37,8 @@ type Config struct {
 	Model   string
 	Routing openrouter.Routing
 	Tools   []Tool // offered to new conversations
-	// Settings are what new conversations take a snapshot of.
+	// Settings are what new conversations start with. Model and Routing fill in for
+	// a Settings without them.
 	Settings store.Settings
 }
 
@@ -46,8 +47,6 @@ type Core struct {
 	cfg Config
 
 	mu       sync.Mutex
-	model    string
-	routing  openrouter.Routing
 	settings store.Settings
 	convs    map[string]*conversation
 	order    []string
@@ -59,10 +58,13 @@ type conversation struct {
 	items   []*item
 	busy    bool
 
-	tools    store.Ref // the exact definitions it sends, if it has any
-	workdir  string    // where its tools' relative paths start
-	settings *store.Settings
-	decision *decision // what's waiting on a person, if anything
+	tools    store.Ref       // the exact definitions it sends, if it has any
+	workdir  string          // where its tools' relative paths start
+	settings *store.Settings // what it uses. Older conversations have none
+	// lastModel and lastHost stand in for older conversations, from their last call.
+	lastModel, lastHost string
+	pendingSettings     *pendingSettings
+	decision            *decision // what's waiting on a person, if anything
 }
 
 // item is a message or a model call, in the order they were recorded. Its role
@@ -93,8 +95,15 @@ type edit struct {
 
 // New rebuilds state from the record.
 func New(cfg Config) (*Core, error) {
+	settings := cfg.Settings
+	if settings.Model == "" {
+		settings.Model = cfg.Model
+	}
+	if settings.Host == "" && len(cfg.Routing.Order) > 0 {
+		settings.Host = cfg.Routing.Order[0]
+	}
 	for _, tool := range cfg.Tools {
-		names, err := definedNames(append(append([]byte{'['}, tool.define(cfg.Settings)...), ']'))
+		names, err := definedNames(append(append([]byte{'['}, tool.define(settings)...), ']'))
 		if err != nil {
 			return nil, fmt.Errorf("tool %s: %w", tool.Name, err)
 		}
@@ -102,7 +111,7 @@ func New(cfg Config) (*Core, error) {
 			return nil, fmt.Errorf("tool %s is defined with the name %q", tool.Name, names[0])
 		}
 	}
-	c := &Core{cfg: cfg, convs: map[string]*conversation{}, model: cfg.Model, routing: cfg.Routing, settings: cfg.Settings}
+	c := &Core{cfg: cfg, convs: map[string]*conversation{}, settings: settings}
 	err := cfg.Store.Replay(func(ev *store.Event) error {
 		if !store.Known(ev.Type) {
 			return fmt.Errorf("unknown event type %q: a newer build wrote this record, so run that build or a later one", ev.Type)
@@ -162,6 +171,11 @@ func (c *Core) apply(ev *store.Event) {
 	case store.CallStarted:
 		for _, it := range conv.items {
 			it.sent = true
+		}
+		conv.lastModel = ev.Model
+		var routing openrouter.Routing
+		if json.Unmarshal(ev.Routing, &routing) == nil && len(routing.Order) > 0 {
+			conv.lastHost = routing.Order[0]
 		}
 		conv.items = append(conv.items, &item{callID: ev.Call, time: ev.Time})
 	case store.CallFinished:
@@ -284,16 +298,15 @@ func (c *Core) NewConversationWith(opts Options) (string, error) {
 	var tools store.Ref
 	if opts.Tools {
 		var err error
-		if tools, err = c.storeDefinitions(c.currentSettings()); err != nil {
+		if tools, err = c.storeDefinitions(c.currentSettings(), opts.Workdir); err != nil {
 			return "", err
 		}
 	}
 	id := store.NewID()
-	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools}
+	settings := c.currentSettings()
+	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools, Settings: &settings}
 	if tools != "" {
-		settings := c.currentSettings()
 		event.Workdir = opts.Workdir
-		event.Settings = &settings
 	}
 	if err := c.record(event); err != nil {
 		return "", err
@@ -514,6 +527,13 @@ func (c *Core) start(conv *conversation) <-chan Update {
 	return updates
 }
 
+func routingFor(host string) openrouter.Routing {
+	if host == "" {
+		return openrouter.Routing{}
+	}
+	return openrouter.Routing{Order: []string{host}}
+}
+
 // call makes one model call from the conversation's current context. The order
 // matters: the request and the intent are durable before anything is sent, so
 // a crash leaves a started call with no finish, plus whatever had arrived.
@@ -524,8 +544,9 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	tools := conv.tools
 	workdir := conv.workdir
 	settings := conv.effectiveSettings(c.settings)
-	model, routingChoice := c.model, c.routing
 	c.mu.Unlock()
+	model := settings.Model
+	routingChoice := routingFor(settings.Host)
 	if unanswered {
 		// Hosts may accept this silently, but the model would be told nothing.
 		return errors.New("refusing to send a tool call with no result")

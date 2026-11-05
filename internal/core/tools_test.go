@@ -857,7 +857,7 @@ func settingsTool(f *toolFake, seen *[]string) {
 	}
 }
 
-func TestConversationsKeepTheirSettingsUntilUpdated(t *testing.T) {
+func TestConversationsKeepTheirOwnSettings(t *testing.T) {
 	f := newToolFake(t)
 	var seen []string
 	settingsTool(f, &seen)
@@ -868,49 +868,84 @@ func TestConversationsKeepTheirSettingsUntilUpdated(t *testing.T) {
 		t.Error("nothing has changed yet")
 	}
 
-	// The config changes. This conversation keeps its definitions and its behaviour.
-	c.Reconfigure("test/model", openrouter.Routing{Order: []string{"morph/fp8"}}, store.Settings{SearchSkip: []string{"new"}})
+	// The config changes, including the model. This conversation doesn't.
+	next := store.Settings{Model: "new/model", Host: "new/host", SearchSkip: []string{"new"}}
+	c.Reconfigure(next)
 	f.decide(c, id, store.DecideCalls, "", "call-a")
 	if !reflect.DeepEqual(seen, []string{"old"}) {
 		t.Errorf("tool saw %v", seen)
 	}
 	f.decide(c, id, store.DecideOutput, "", "call-a")
-	if !strings.Contains(string(f.bodies[1]), "Skips old.") {
-		t.Errorf("request = %s", f.bodies[1])
+	body := string(f.bodies[1])
+	if !strings.Contains(body, "Skips old.") || !strings.Contains(body, `"model":"test/model"`) || !strings.Contains(body, `"morph/fp8"`) {
+		t.Errorf("request = %s", body)
 	}
 	conv, _ := c.Conversation(id)
-	if !conv.SettingsChanged {
-		t.Error("the page should be told")
+	if !conv.SettingsChanged || conv.Model != "test/model" || conv.ConfigSettings.Model != "new/model" {
+		t.Errorf("view = %+v", conv)
 	}
 
-	// A new conversation takes the new settings straight away.
+	// A new conversation starts from the new settings.
 	other, _ := c.NewConversation("")
-	if conv, _ := c.Conversation(other); conv.SettingsChanged {
-		t.Error("a new conversation has the current settings")
+	if conv, _ := c.Conversation(other); conv.SettingsChanged || conv.Model != "new/model" {
+		t.Errorf("new conversation = %+v", conv)
 	}
 
-	// Updating is explicit, and survives a restart.
-	if err := c.UpdateSettings(id); err != nil {
+	// A change is held until it's applied, and that survives a restart.
+	proposal, err := c.ProposeSettings(id, next)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if conv, _ := c.Conversation(id); conv.SettingsChanged {
-		t.Error("still shows as changed")
+	updates, err := c.Send(id, "still old")
+	mustFinish(t, updates, err)
+	if last := string(f.bodies[len(f.bodies)-1]); !strings.Contains(last, "Skips old.") || !strings.Contains(last, `"test/model"`) {
+		t.Errorf("a held change was used: %s", last)
 	}
-	updates, err := c.Send(id, "next")
+	f.fake.settings = next
+	f.fake.t = t
+	c = f.open()
+	conv, _ = c.Conversation(id)
+	if conv.PendingSettings == nil || conv.PendingSettings.ID != proposal {
+		t.Fatalf("pending = %+v", conv.PendingSettings)
+	}
+	if err := c.ApplySettings(id, proposal); err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Send(id, "now new")
 	mustFinish(t, updates, err)
 	last := string(f.bodies[len(f.bodies)-1])
-	if !strings.Contains(last, "Skips new.") || strings.Contains(last, "Skips old.") {
+	if !strings.Contains(last, "Skips new.") || !strings.Contains(last, `"new/model"`) || !strings.Contains(last, `"new/host"`) {
 		t.Errorf("request = %s", last)
 	}
-	f.fake.settings = store.Settings{SearchSkip: []string{"new"}}
 	c = f.open()
-	if conv, _ := c.Conversation(id); conv.SettingsChanged {
-		t.Error("changed again after a restart")
+	if conv, _ := c.Conversation(id); conv.PendingSettings != nil || conv.Model != "new/model" || conv.SettingsChanged {
+		t.Errorf("after a restart: %+v", conv)
 	}
-	updates, err = c.Send(id, "again")
-	mustFinish(t, updates, err)
-	if last := string(f.bodies[len(f.bodies)-1]); !strings.Contains(last, "Skips new.") {
-		t.Errorf("after a restart: %s", last)
+}
+
+func TestHeldSettingsCanBeDiscardedOrReplaced(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	first, err := c.ProposeSettings(id, store.Settings{Model: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := c.ProposeSettings(id, store.Settings{Model: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplySettings(id, first); !errors.Is(err, ErrNoEdit) {
+		t.Errorf("replaced proposal = %v", err)
+	}
+	if err := c.DiscardSettings(id, second); err != nil {
+		t.Fatal(err)
+	}
+	if conv, _ := c.Conversation(id); conv.PendingSettings != nil || conv.Model != "test/model" {
+		t.Errorf("view = %+v", conv)
+	}
+	if _, err := c.ProposeSettings(id, store.Settings{}); !errors.Is(err, ErrBadSettings) {
+		t.Errorf("no model = %v", err)
 	}
 }
 
@@ -918,11 +953,150 @@ func TestSettingsCantChangeInTheMiddleOfAToolTurn(t *testing.T) {
 	f := newToolFake(t)
 	c := f.open()
 	id := f.askForTools(c, callA)
-	if err := c.UpdateSettings(id); !errors.Is(err, ErrAwaiting) {
+	proposal, err := c.ProposeSettings(id, store.Settings{Model: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplySettings(id, proposal); !errors.Is(err, ErrAwaiting) {
 		t.Errorf("err = %v", err)
 	}
-	noTools, _ := c.NewConversationWith(Options{})
-	if err := c.UpdateSettings(noTools); !errors.Is(err, ErrNothingToUpdate) {
+}
+
+func TestOlderConversationsUseTheirLastModel(t *testing.T) {
+	f := newFake(t)
+	c := f.openOldRecord()
+	c.Reconfigure(store.Settings{Model: "new/model", Host: "new/host"})
+	updates, err := c.Send(oldRecordConversation, "next")
+	mustFinish(t, updates, err)
+	if body := string(f.bodies[0]); !strings.Contains(body, `"model":"test/model"`) || !strings.Contains(body, `"morph/fp8"`) {
+		t.Errorf("request = %s", body)
+	}
+}
+
+func TestToolsNeedingAWorkdirAreFilteredOut(t *testing.T) {
+	f := newToolFake(t)
+	f.tools = append(f.tools, Tool{Name: "needy", NeedsWorkdir: true, Definition: jsontext.Value(strings.ReplaceAll(definition, `"echo"`, `"needy"`))})
+	c := f.open()
+	id, _ := c.NewConversationWith(Options{Tools: true})
+	updates, err := c.Send(id, "hi")
+	mustFinish(t, updates, err)
+	body := string(f.bodies[0])
+	if !strings.Contains(body, `"echo"`) || strings.Contains(body, `"needy"`) {
+		t.Errorf("request = %s", body)
+	}
+	id, _ = c.NewConversationWith(Options{Tools: true, Workdir: "/w"})
+	updates, err = c.Send(id, "hi")
+	mustFinish(t, updates, err)
+	if body := string(f.bodies[1]); !strings.Contains(body, `"needy"`) {
+		t.Errorf("request = %s", body)
+	}
+	// If none are left, there are none at all.
+	f.tools = f.tools[1:]
+	c = f.open()
+	id, _ = c.NewConversationWith(Options{Tools: true})
+	if conv, _ := c.Conversation(id); conv.Tools {
+		t.Errorf("view = %+v", conv)
+	}
+}
+
+func TestTacksOwnMessagesSkipTheOutputGate(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].TackWritten = true
+	c := f.open()
+	id := f.askForTools(c, callA)
+	f.decide(c, id, store.DecideCalls, "", "call-a")
+	if conv, _ := c.Conversation(id); conv.Decision != nil {
+		t.Fatalf("decision = %+v", conv.Decision)
+	}
+	f.wantMessages(1, sys("Be brief."), user("Use your tools."), assistantCalls(callA), toolMsg("call-a", "echoed a"))
+	var by string
+	for _, ev := range f.events() {
+		if ev.Type == store.DecisionMade {
+			by = ev.By
+		}
+	}
+	if by != "tack" {
+		t.Errorf("by = %q", by)
+	}
+}
+
+func TestErrorsFromTacksOwnToolsStillStopAtTheGate(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].TackWritten = true
+	f.output = func(string) ([]byte, error) { return nil, errors.New("old_string wasn't found") }
+	c := f.open()
+	id := f.askForTools(c, callA)
+	f.decide(c, id, store.DecideCalls, "", "call-a")
+	f.decision(c, id, store.DecideOutput)
+}
+
+func TestEachRunGetsItsOwnExecutionID(t *testing.T) {
+	f := newToolFake(t)
+	c := f.open()
+	id := f.askForTools(c, callA)
+	f.decide(c, id, store.DecideCalls, "", "call-a")
+	f.store.Close()
+	f.store = nil
+	f.cutRecord(store.ToolFinished)
+	c = f.open()
+	f.decide(c, id, store.DecideInterrupted, "", "call-a")
+	var started, finished []string
+	for _, ev := range f.events() {
+		switch ev.Type {
+		case store.ToolStarted:
+			started = append(started, ev.Execution)
+		case store.ToolFinished:
+			finished = append(finished, ev.Execution)
+		}
+	}
+	if len(started) != 2 || started[0] == "" || started[0] == started[1] || len(finished) != 1 || finished[0] != started[1] {
+		t.Errorf("started %v, finished %v", started, finished)
+	}
+}
+
+func TestNetworkIsChosenPerCall(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].NetworkOption = true
+	var seen []bool
+	f.tools[0].Run = func(_ context.Context, call Call) ([]byte, error) {
+		seen = append(seen, call.Network)
+		return nil, nil
+	}
+	c := f.open()
+	id := f.askForTools(c, callA, callB)
+	d := f.decision(c, id, store.DecideCalls)
+	if got := f.calls(c, id); !got[0].NetworkOption {
+		t.Errorf("call = %+v", got[0])
+	}
+	if _, err := c.DecideWithNetwork(id, d.ID, []string{"call-a"}, []string{"call-b"}, ""); !errors.Is(err, ErrBadChoice) {
+		t.Errorf("network without allowing = %v", err)
+	}
+	updates, err := c.DecideWithNetwork(id, d.ID, []string{"call-a", "call-b"}, []string{"call-b"}, "")
+	mustFinish(t, updates, err)
+	if !reflect.DeepEqual(seen, []bool{false, true}) {
+		t.Errorf("seen = %v", seen)
+	}
+	got := f.calls(c, id)
+	if got[0].Network || !got[1].Network || got[0].NetworkOption {
+		t.Errorf("calls = %+v", got)
+	}
+	found := 0
+	for _, ev := range f.events() {
+		if ev.Type == store.ToolStarted && ev.Network {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Errorf("recorded %d calls with network", found)
+	}
+}
+
+func TestToolsWithoutTheOptionCantGetNetwork(t *testing.T) {
+	f := newToolFake(t)
+	c := f.open()
+	id := f.askForTools(c, callA)
+	d := f.decision(c, id, store.DecideCalls)
+	if _, err := c.DecideWithNetwork(id, d.ID, []string{"call-a"}, []string{"call-a"}, ""); !errors.Is(err, ErrBadChoice) {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -943,22 +1117,5 @@ func TestRecordedConfigCanBeReplayed(t *testing.T) {
 	}
 	if !found {
 		t.Error("config not recorded")
-	}
-}
-
-func TestReconfigureChangesModelAndHostForLaterCalls(t *testing.T) {
-	f := newFake(t)
-	c := f.open()
-	id, _ := c.NewConversation("")
-	c.Reconfigure("other/model", openrouter.Routing{Order: []string{"other/host"}}, store.Settings{})
-	updates, err := c.Send(id, "hi")
-	mustFinish(t, updates, err)
-	body := string(f.bodies[0])
-	if !strings.Contains(body, `"model":"other/model"`) || !strings.Contains(body, `"other/host"`) {
-		t.Errorf("request = %s", body)
-	}
-	conv, _ := c.Conversation(id)
-	if conv.Model != "other/model" || conv.Host != "other/host" {
-		t.Errorf("view = %+v", conv)
 	}
 }

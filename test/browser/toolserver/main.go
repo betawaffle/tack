@@ -68,6 +68,6 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, func() web.Defaults {
-		return web.Defaults{Sections: []prompt.Section{{Name: "test", Text: "Use your tools carefully."}}, Workdir: *data, Tools: true}
+		return web.Defaults{Sections: []prompt.Section{{Name: "test", Text: "Use your tools carefully."}}, Workdir: *data, Tools: c.ToolInfo()}
 	}, func() (web.Reload, error) { return web.Reload{}, nil }, nil)))
 }

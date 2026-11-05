@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,11 @@ func TestBadFilesAreRefused(t *testing.T) {
 		`{"command_timeout_seconds":0}`,
 		`{"search_skip":["a/b"]}`,
 		`{"search_skip":[""]}`,
+		`{"max_read_bytes":0}`,
+		`{"sandbox_read_write":["relative"]}`,
+		`{"sandbox_protected":["../outside"]}`,
+		`{"sandbox_protected":["/absolute"]}`,
+		`{"sandbox_extra_read_only":["relative"]}`,
 	} {
 		if _, err := Load(write(t, text), true); err == nil {
 			t.Errorf("%s: no error", text)
@@ -83,9 +89,23 @@ func TestNoHomeIsAnErrorNotARelativePath(t *testing.T) {
 }
 
 func TestStartupChanges(t *testing.T) {
-	old := Config{Addr: "a", Data: "d", Key: "k", URL: "u", Model: "m"}
-	changed := Config{Addr: "a2", Data: "d", Key: "k2", URL: "u2", Model: "m2"}
+	old := Config{Addr: "a", Data: "d", Key: "k", URL: "u"}
+	changed := Config{Addr: "a2", Data: "d", Key: "k2", URL: "u2"}
 	if got := StartupChanges(old, changed); !reflect.DeepEqual(got, []string{"addr", "key", "url"}) {
 		t.Errorf("changes = %v", got)
+	}
+}
+
+func TestSandboxExtrasAddToTheDefaults(t *testing.T) {
+	t.Setenv("HOME", "/home/someone")
+	cfg, err := Load(write(t, `{"sandbox_extra_read_only":["/opt/go"],"max_listed":5}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(cfg.SandboxReadOnly, "/usr") || !slices.Contains(cfg.SandboxReadOnly, "/opt/go") {
+		t.Errorf("read only = %v", cfg.SandboxReadOnly)
+	}
+	if cfg.MaxListed != 5 || cfg.MaxReadBytes != 16<<20 {
+		t.Errorf("limits = %d, %d", cfg.MaxListed, cfg.MaxReadBytes)
 	}
 }

@@ -24,18 +24,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/store"
-)
-
-// Limits on what one call can produce or read. The full output goes in a blob and
-// to a person, so these protect memory rather than the model's context.
-const (
-	maxRead       = 16 << 20
-	maxListed     = 10000
-	maxMatches    = 1000
-	maxSearchFile = 2 << 20
-	maxLineShown  = 500
 )
 
 // Flags shown on an approval card. They say "look here". The absence of a flag
@@ -54,26 +45,31 @@ type Options struct {
 	// Protected files are refused outright, wherever a path to them comes from.
 	// They're compared by identity, which also catches links.
 	Protected []string
+	// Cgroups, if set, gives each command its own cgroup.
+	Cgroups *cgroup.Manager
 }
 
 // Read returns the read-only tools.
 func Read(opts Options) []core.Tool {
-	r := &reader{protected: opts.Protected}
+	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups}
 	return []core.Tool{
 		{
-			Name:       "read_file",
-			Definition: definition("read_file", "Read a text file.", `{"path":{"type":"string","description":"Path to the file."}}`, `["path"]`),
-			Inspect:    r.inspectFile,
-			Run:        r.readFile,
+			Name:         "read_file",
+			NeedsWorkdir: true,
+			Definition:   definition("read_file", "Read a text file.", `{"path":{"type":"string","description":"Path to the file."}}`, `["path"]`),
+			Inspect:      r.inspectFile,
+			Run:          r.readFile,
 		},
 		{
-			Name:       "list_files",
-			Definition: definition("list_files", "List a directory. Directories end in a slash.", `{"path":{"type":"string","description":"Path to the directory. Defaults to the working directory."}}`, `[]`),
-			Inspect:    r.inspectDir,
-			Run:        r.listFiles,
+			Name:         "list_files",
+			NeedsWorkdir: true,
+			Definition:   definition("list_files", "List a directory. Directories end in a slash.", `{"path":{"type":"string","description":"Path to the directory. Defaults to the working directory."}}`, `[]`),
+			Inspect:      r.inspectDir,
+			Run:          r.listFiles,
 		},
 		{
-			Name: "search_files",
+			Name:         "search_files",
+			NeedsWorkdir: true,
 			Define: func(settings store.Settings) jsontext.Value {
 				skipping := "Skips files that are binary, very large or not world-readable."
 				if len(settings.SearchSkip) > 0 {
@@ -89,21 +85,25 @@ func Read(opts Options) []core.Tool {
 
 // All returns every tool.
 func All(opts Options) []core.Tool {
-	r := &reader{protected: opts.Protected}
+	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups}
 	return append(Read(opts),
 		core.Tool{
-			Name:       "edit_file",
-			Definition: definition("edit_file", "Change a file by replacing old_string with new_string. old_string has to appear exactly once, so include enough context to make it unique. An empty old_string creates a new file, and fails if the file exists.", `{"path":{"type":"string","description":"Path to the file."},"old_string":{"type":"string","description":"The exact text to replace."},"new_string":{"type":"string","description":"The text to put in its place."}}`, `["path","old_string","new_string"]`),
-			Inspect:    r.inspectEdit,
-			Run:        r.editFile,
+			Name:         "edit_file",
+			NeedsWorkdir: true,
+			TackWritten:  true,
+			Definition:   definition("edit_file", "Change a file by replacing old_string with new_string. old_string has to appear exactly once, so include enough context to make it unique. An empty old_string creates a new file, and fails if the file exists.", `{"path":{"type":"string","description":"Path to the file."},"old_string":{"type":"string","description":"The exact text to replace."},"new_string":{"type":"string","description":"The text to put in its place."}}`, `["path","old_string","new_string"]`),
+			Inspect:      r.inspectEdit,
+			Run:          r.editFile,
 		},
 		core.Tool{
-			Name:       "run_command",
-			Definition: definition("run_command", "Run a command with bash in the working directory. It has a limited environment and no input.", `{"command":{"type":"string","description":"The command to run."}}`, `["command"]`),
-			Inspect:    inspectCommand,
-			Run:        runCommand,
+			Name:          "run_command",
+			NeedsWorkdir:  true,
+			NetworkOption: true,
+			Definition:    definition("run_command", "Run a command with bash in the working directory, in a sandbox. Only the working directory is writable, there is no input, the environment is limited, and there is no network unless the user allows it for the call.", `{"command":{"type":"string","description":"The command to run."}}`, `["command"]`),
+			Inspect:       inspectCommand,
+			Run:           r.runCommand,
 			Timeout: func(settings store.Settings) time.Duration {
-				return time.Duration(settings.CommandTimeoutSeconds) * time.Second
+				return time.Duration(settings.WithDefaults().CommandTimeoutSeconds) * time.Second
 			},
 		},
 	)
@@ -116,6 +116,7 @@ func definition(name, description, properties, required string) jsontext.Value {
 
 type reader struct {
 	protected []string
+	cgroups   *cgroup.Manager
 }
 
 // arguments reads a call's strings, refusing anything it doesn't expect.
@@ -299,7 +300,8 @@ func (r *reader) readFile(_ context.Context, call core.Call) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxRead+1))
+	maxRead := call.Settings.WithDefaults().MaxReadBytes
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxRead)+1))
 	if err != nil {
 		return data, err
 	}
@@ -323,6 +325,7 @@ func (r *reader) listFiles(_ context.Context, call core.Call) ([]byte, error) {
 		return nil, err
 	}
 	var b bytes.Buffer
+	maxListed := call.Settings.WithDefaults().MaxListed
 	for i, e := range entries {
 		if i == maxListed {
 			fmt.Fprintf(&b, "... and %d more\n", len(entries)-maxListed)
@@ -361,6 +364,8 @@ func (r *reader) searchFiles(ctx context.Context, call core.Call) ([]byte, error
 		return nil, err
 	}
 	var b bytes.Buffer
+	limits := call.Settings.WithDefaults()
+	maxSearchFile, maxMatches, maxLineShown := limits.MaxSearchFileBytes, limits.MaxMatches, limits.MaxLineShown
 	matches, private, large, binary, unreadable := 0, 0, 0, 0, 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -391,7 +396,7 @@ func (r *reader) searchFiles(ctx context.Context, call core.Call) ([]byte, error
 		case info.Mode().Perm()&0o004 == 0:
 			private++
 			return nil
-		case info.Size() > maxSearchFile:
+		case info.Size() > int64(maxSearchFile):
 			large++
 			return nil
 		}

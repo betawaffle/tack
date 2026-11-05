@@ -10,7 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
+
+	"github.com/betawaffle/tack/internal/store"
 )
 
 // Config is every setting, with defaults filled in. The first group is read only at
@@ -24,23 +25,18 @@ type Config struct {
 	// AllowedHosts are extra hostnames the page can be reached by.
 	AllowedHosts []string `json:"allowed_hosts"`
 
-	Model   string `json:"model"`
-	Host    string `json:"host"`
 	Prompts string `json:"prompts"`
 
 	// DefaultWorkdir fills in the working directory for a new conversation. tack's
 	// own working directory is never used for anything, so it has no fallback.
 	DefaultWorkdir string `json:"default_workdir"`
 
-	// SearchSkip names directories search_files doesn't go into.
-	SearchSkip []string `json:"search_skip"`
+	// SandboxExtraReadOnly adds to sandbox_read_only, without repeating its defaults.
+	SandboxExtraReadOnly []string `json:"sandbox_extra_read_only"`
 
-	// CommandEnv is the whole environment run_command gets. Nothing is inherited,
-	// so it can't pick up anything tack happens to have.
-	CommandEnv map[string]string `json:"command_env"`
-
-	// CommandTimeoutSeconds limits how long one run_command can take.
-	CommandTimeoutSeconds int `json:"command_timeout_seconds"`
+	// Settings are the defaults a new conversation starts with. After that, it owns
+	// its copy.
+	store.Settings `json:",inline"`
 }
 
 func defaults() (Config, error) {
@@ -56,16 +52,17 @@ func defaults() (Config, error) {
 		dataHome = filepath.Join(home, ".local/share")
 	}
 	return Config{
-		Addr:                  "0.0.0.0:8484",
-		Data:                  filepath.Join(dataHome, "tack"),
-		Key:                   filepath.Join(configHome, "tack/openrouter-key"),
-		URL:                   "https://openrouter.ai/api/v1/chat/completions",
-		Model:                 "deepseek/deepseek-v4.1-flash-1017",
-		Host:                  "morph/fp8",
-		Prompts:               filepath.Join(configHome, "tack/prompt"),
-		SearchSkip:            []string{".git", "node_modules"},
-		CommandEnv:            map[string]string{"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8"},
-		CommandTimeoutSeconds: 120,
+		Addr:    "0.0.0.0:8484",
+		Data:    filepath.Join(dataHome, "tack"),
+		Key:     filepath.Join(configHome, "tack/openrouter-key"),
+		URL:     "https://openrouter.ai/api/v1/chat/completions",
+		Prompts: filepath.Join(configHome, "tack/prompt"),
+		Settings: store.Settings{
+			Model:      "deepseek/deepseek-v4.1-flash-1017",
+			Host:       "morph/fp8",
+			SearchSkip: []string{".git", "node_modules"},
+			CommandEnv: map[string]string{"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8"},
+		}.WithDefaults(),
 	}, nil
 }
 
@@ -102,6 +99,7 @@ func Load(path string, required bool) (Config, error) {
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
+	cfg.SandboxReadOnly = append(slices.Clone(cfg.SandboxReadOnly), cfg.SandboxExtraReadOnly...)
 	return cfg, nil
 }
 
@@ -116,16 +114,12 @@ func (c Config) validate() error {
 	if c.DefaultWorkdir != "" && !filepath.IsAbs(c.DefaultWorkdir) {
 		return errors.New("default_workdir has to be an absolute path")
 	}
-	if c.Model == "" {
-		return errors.New("model can't be empty")
+	for _, path := range c.SandboxExtraReadOnly {
+		if !filepath.IsAbs(path) {
+			return errors.New("sandbox_extra_read_only has to have absolute paths")
+		}
 	}
-	if c.CommandTimeoutSeconds <= 0 {
-		return errors.New("command_timeout_seconds has to be positive")
-	}
-	if slices.ContainsFunc(c.SearchSkip, func(name string) bool { return name == "" || strings.ContainsRune(name, filepath.Separator) }) {
-		return errors.New("search_skip has directory names, not paths")
-	}
-	return nil
+	return c.Settings.Validate()
 }
 
 // StartupChanges names startup-only settings that differ, which a reload can't apply.

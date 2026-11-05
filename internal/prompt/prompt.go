@@ -21,7 +21,8 @@ const Separator = "\n\n"
 const WorkdirVariable = "{{workdir}}"
 
 // Section is a named piece of a system prompt. A section with For set belongs only
-// to conversations that do ("tools") or don't ("no-tools") have tools.
+// to conversations that do ("tools") or don't ("no-tools") have tools, or that have
+// tools and a working directory ("workdir").
 type Section struct {
 	Name string `json:"name"`
 	Text string `json:"text"`
@@ -34,8 +35,8 @@ func builtin() []Section {
 		{Name: "no-tools", For: "no-tools", Text: "You have no tools and can't access files, commands or the internet, so never imply you did something you can't do."},
 		{Name: "tools", For: "tools", Text: "Every tool call needs approval from the user, which can take a while, so ask for what you actually need. " +
 			"A denial isn't an error: read the reason and change your approach rather than repeating the call. " +
-			"You only see a tool's output if the user releases it. " +
-			"Relative paths and commands start from the working directory, " + WorkdirVariable + "."},
+			"You only see a tool's output if the user releases it."},
+		{Name: "workdir", For: "workdir", Text: "Relative paths and commands start from the working directory, " + WorkdirVariable + "."},
 	}
 }
 

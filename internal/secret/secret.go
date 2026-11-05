@@ -24,14 +24,20 @@ type Key struct {
 
 // Load reads a key from a file that only its owner can access.
 func Load(path string) (Key, error) {
-	info, err := os.Stat(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return Key{}, err
+	}
+	defer f.Close()
+	// On the open file, so what's checked is what's read.
+	info, err := f.Stat()
 	if err != nil {
 		return Key{}, err
 	}
 	if info.Mode().Perm()&0o077 != 0 {
 		return Key{}, fmt.Errorf("%s is accessible by other users (mode %o)", path, info.Mode().Perm())
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return Key{}, err
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/prompt"
+	"github.com/betawaffle/tack/internal/store"
 )
 
 //go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js
@@ -27,7 +28,7 @@ const maxMessageBytes = 8 << 20
 type Defaults struct {
 	Sections []prompt.Section `json:"sections"`
 	Workdir  string           `json:"workdir"`
-	Tools    bool             `json:"tools"`
+	Tools    []core.ToolInfo  `json:"tools"`
 }
 
 // Reload is the result of reloading the config. NeedsRestart names settings that
@@ -52,7 +53,9 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.applyEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.decide)
-	mux.HandleFunc("POST /api/conversations/{id}/settings", s.updateSettings)
+	mux.HandleFunc("POST /api/conversations/{id}/settings", s.proposeSettings)
+	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/apply", s.applySettings)
+	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/discard", s.discardSettings)
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
@@ -134,8 +137,8 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defaults := s.defaults()
-	body.Tools = body.Tools && defaults.Tools
-	if body.Tools {
+	// An empty working directory is fine: it leaves out the tools that need one.
+	if body.Tools && body.Workdir != "" {
 		info, err := os.Stat(body.Workdir)
 		if err != nil || !info.IsDir() || !filepath.IsAbs(body.Workdir) {
 			http.Error(w, "the working directory has to be an absolute path to a directory", http.StatusBadRequest)
@@ -164,10 +167,6 @@ func (s *server) get(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
 	defaults := s.defaults()
-	if !defaults.Tools {
-		// Nothing can offer them, so the choice shouldn't appear.
-		defaults.Sections = slices.DeleteFunc(slices.Clone(defaults.Sections), func(section prompt.Section) bool { return section.For == "tools" })
-	}
 	writeJSON(w, defaults)
 }
 
@@ -243,8 +242,31 @@ func (s *server) discardEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-func (s *server) updateSettings(w http.ResponseWriter, r *http.Request) {
-	if err := s.core.UpdateSettings(r.PathValue("id")); err != nil {
+func (s *server) proposeSettings(w http.ResponseWriter, r *http.Request) {
+	var settings store.Settings
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &settings, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad settings: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := s.core.ProposeSettings(r.PathValue("id"), settings)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"proposal": id})
+}
+
+func (s *server) applySettings(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.ApplySettings(r.PathValue("id"), r.PathValue("proposal")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) discardSettings(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.DiscardSettings(r.PathValue("id"), r.PathValue("proposal")); err != nil {
 		fail(w, err)
 		return
 	}
@@ -265,6 +287,7 @@ func (s *server) reloadConfig(w http.ResponseWriter, _ *http.Request) {
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Allow      []string `json:"allow"`
+		Network    []string `json:"network"`
 		DenialText string   `json:"denial_text"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
@@ -272,7 +295,7 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	updates, err := s.core.Decide(r.PathValue("id"), r.PathValue("decision"), body.Allow, body.DenialText)
+	updates, err := s.core.DecideWithNetwork(r.PathValue("id"), r.PathValue("decision"), body.Allow, body.Network, body.DenialText)
 	if err != nil {
 		fail(w, err)
 		return
@@ -319,9 +342,9 @@ func fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingToUpdate):
+	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, core.ErrBadChoice):
+	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		log.Printf("request failed: %v", err)

@@ -72,7 +72,9 @@ type ToolCall struct {
 type Choice struct {
 	ToolCall string `json:"tool_call"`
 	Allow    bool   `json:"allow"`
-	Parts    []Part `json:"parts,omitzero"`
+	// Network lets an allowed call use the network.
+	Network bool   `json:"network,omitzero"`
+	Parts   []Part `json:"parts,omitzero"`
 }
 
 // Decision kinds.
@@ -98,16 +100,109 @@ const (
 	ToolStarted       = "tool_started"
 	ToolFinished      = "tool_finished"
 	ConfigLoaded      = "config_loaded"
-	SettingsUpdated   = "conversation_settings_updated"
+	SettingsProposed  = "settings_proposed"
+	SettingsApplied   = "settings_applied"
+	SettingsDiscarded = "settings_discarded"
 )
 
-// Settings is a conversation's snapshot of the settings its tools depend on. Some
-// shape the tool definitions, and changing those misses the whole cache, so a
-// conversation keeps its own until someone chooses to update it.
+// Settings is everything a conversation keeps as its own. The config only provides
+// the defaults new conversations start with. A setting that's absent from an older
+// record means the default, through WithDefaults.
 type Settings struct {
+	Model string `json:"model,omitzero"`
+	Host  string `json:"host,omitzero"`
+
 	SearchSkip            []string          `json:"search_skip,omitzero"`
 	CommandEnv            map[string]string `json:"command_env,omitzero"`
 	CommandTimeoutSeconds int               `json:"command_timeout_seconds,omitzero"`
+	SandboxReadOnly       []string          `json:"sandbox_read_only,omitzero"`
+	SandboxReadWrite      []string          `json:"sandbox_read_write,omitzero"`
+	// SandboxProtected are paths inside the working directory that stay read-only.
+	SandboxProtected []string `json:"sandbox_protected,omitzero"`
+
+	ToolTimeoutSeconds    int `json:"tool_timeout_seconds,omitzero"`
+	InspectTimeoutSeconds int `json:"inspect_timeout_seconds,omitzero"`
+	OutputWaitSeconds     int `json:"output_wait_seconds,omitzero"`
+	MaxReadBytes          int `json:"max_read_bytes,omitzero"`
+	MaxListed             int `json:"max_listed,omitzero"`
+	MaxMatches            int `json:"max_matches,omitzero"`
+	MaxSearchFileBytes    int `json:"max_search_file_bytes,omitzero"`
+	MaxLineShown          int `json:"max_line_shown,omitzero"`
+}
+
+// DefaultSandboxReadOnly is what a sandboxed command can read, unless the config says
+// otherwise: the system, and the parts of /etc that programs commonly need.
+var DefaultSandboxReadOnly = []string{
+	"/usr", "/bin", "/sbin", "/lib", "/lib64",
+	"/etc/alternatives", "/etc/ca-certificates", "/etc/crypto-policies", "/etc/gitconfig",
+	"/etc/group", "/etc/hosts", "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+	"/etc/localtime", "/etc/nsswitch.conf", "/etc/passwd", "/etc/pki", "/etc/resolv.conf", "/etc/ssl",
+}
+
+// WithDefaults fills in the limits. Model, host and the lists stay as they are, since
+// empty means something there.
+func (s Settings) WithDefaults() Settings {
+	fill := func(value *int, fallback int) {
+		if *value == 0 {
+			*value = fallback
+		}
+	}
+	fill(&s.CommandTimeoutSeconds, 120)
+	fill(&s.ToolTimeoutSeconds, 60)
+	fill(&s.InspectTimeoutSeconds, 2)
+	fill(&s.OutputWaitSeconds, 5)
+	fill(&s.MaxReadBytes, 16<<20)
+	fill(&s.MaxListed, 10000)
+	fill(&s.MaxMatches, 1000)
+	fill(&s.MaxSearchFileBytes, 2<<20)
+	fill(&s.MaxLineShown, 500)
+	if s.SandboxReadOnly == nil {
+		s.SandboxReadOnly = DefaultSandboxReadOnly
+	}
+	if s.SandboxProtected == nil {
+		// Hooks and config in .git run unsandboxed the next time someone uses git.
+		s.SandboxProtected = []string{".git"}
+	}
+	return s
+}
+
+// Validate refuses settings that can't work. Paths have to be absolute, because
+// nothing in tack may depend on its own working directory.
+func (s Settings) Validate() error {
+	if s.Model == "" {
+		return errors.New("model can't be empty")
+	}
+	for name, value := range map[string]int{
+		"command_timeout_seconds": s.CommandTimeoutSeconds,
+		"tool_timeout_seconds":    s.ToolTimeoutSeconds,
+		"inspect_timeout_seconds": s.InspectTimeoutSeconds,
+		"output_wait_seconds":     s.OutputWaitSeconds,
+		"max_read_bytes":          s.MaxReadBytes,
+		"max_listed":              s.MaxListed,
+		"max_matches":             s.MaxMatches,
+		"max_search_file_bytes":   s.MaxSearchFileBytes,
+		"max_line_shown":          s.MaxLineShown,
+	} {
+		if value <= 0 {
+			return fmt.Errorf("%s has to be positive", name)
+		}
+	}
+	for _, path := range append(slices.Clone(s.SandboxReadOnly), s.SandboxReadWrite...) {
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("sandbox path %q has to be absolute", path)
+		}
+	}
+	for _, path := range s.SandboxProtected {
+		if path == "" || !filepath.IsLocal(path) {
+			return fmt.Errorf("sandbox_protected path %q has to be inside the working directory", path)
+		}
+	}
+	for _, name := range s.SearchSkip {
+		if name == "" || strings.ContainsRune(name, filepath.Separator) {
+			return errors.New("search_skip has directory names, not paths")
+		}
+	}
+	return nil
 }
 
 // Artifact is a named block a tool wants kept beside its output, like the contents
@@ -124,7 +219,7 @@ func Known(eventType string) bool {
 	switch eventType {
 	case TackStarted, ConversationAdded, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
-		ConfigLoaded, SettingsUpdated:
+		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded:
 		return true
 	}
 	return false
@@ -144,7 +239,7 @@ type Event struct {
 
 	// conversation_created: the exact tool definitions its calls send, and where
 	// their relative paths start.
-	// conversation_settings_updated: the new definitions and snapshot.
+	// settings_proposed has the settings, and settings_applied the new definitions.
 	Tools    Ref       `json:"tools,omitzero"`
 	Workdir  string    `json:"workdir,omitzero"`
 	Settings *Settings `json:"settings,omitzero"`
@@ -195,6 +290,8 @@ type Event struct {
 	By            string   `json:"by,omitzero"`
 
 	// tool_*
+	Execution string     `json:"execution,omitzero"` // one run of a call. A re-run gets a new one
+	Network   bool       `json:"network,omitzero"`
 	ToolCall  string     `json:"tool_call,omitzero"`
 	Output    Ref        `json:"output,omitzero"`
 	Artifacts []Artifact `json:"artifacts,omitzero"`

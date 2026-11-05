@@ -135,41 +135,32 @@ func TestCrossSitePostIsRefused(t *testing.T) {
 	}
 }
 
-func TestNewConversationNeedsARealWorkdirForTools(t *testing.T) {
+func TestAWorkdirHasToBeRealOrEmpty(t *testing.T) {
 	s := toolSite(t, t.TempDir())
 	conv := s.URL + "/api/conversations"
-	for _, workdir := range []string{"", "relative", "/does/not/exist", "/etc/hostname"} {
+	for _, workdir := range []string{"relative", "/does/not/exist", "/etc/hostname"} {
 		body, _ := json.Marshal(map[string]any{"tools": true, "workdir": workdir})
 		post(t, conv, string(body), http.StatusBadRequest)
 	}
+	post(t, conv, `{"tools":true,"workdir":""}`, 200)
 	post(t, conv, `{"tools":false,"workdir":"relative"}`, 200)
 }
 
-func TestToolsAreOnlyOfferedWhenAvailable(t *testing.T) {
+func TestSettingsAreHeldAndValidated(t *testing.T) {
 	s := site(t)
-	workdir := t.TempDir()
-	body, _ := json.Marshal(map[string]any{"tools": true, "workdir": workdir})
-	id := field(t, post(t, s.URL+"/api/conversations", string(body), 200), "id")
-	resp, err := http.Get(s.URL + "/api/conversations/" + id)
-	if err != nil {
-		t.Fatal(err)
+	id := field(t, post(t, s.URL+"/api/conversations", `{}`, 200), "id")
+	base := s.URL + "/api/conversations/" + id + "/settings"
+	post(t, base, `{"modle":"x"}`, http.StatusBadRequest)
+	post(t, base, `{"host":"no-model"}`, http.StatusBadRequest)
+	proposal := field(t, post(t, base, `{"model":"other/model"}`, 200), "proposal")
+	if got := get(t, s.URL+"/api/conversations/"+id); !strings.Contains(got, `"pending_settings"`) {
+		t.Errorf("after proposing: %s", got)
 	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(data), `"tools"`) {
-		t.Errorf("conversation = %s", data)
-	}
-}
-
-func TestDefaultsHideTheToolsSectionWhenThereAreNone(t *testing.T) {
-	s := toolSite(t, "")
-	data := get(t, s.URL+"/api/defaults")
-	if !strings.Contains(data, `"name":"tools"`) {
-		t.Errorf("with tools: %s", data)
-	}
-	s = site(t)
-	if data := get(t, s.URL+"/api/defaults"); strings.Contains(data, "with-tools") {
-		t.Errorf("without tools: %s", data)
+	post(t, base+"/nope/apply", "", http.StatusNotFound)
+	post(t, base+"/"+proposal+"/apply", "", 200)
+	post(t, base+"/"+proposal+"/apply", "", http.StatusNotFound)
+	if got := get(t, s.URL+"/api/conversations/"+id); !strings.Contains(got, `"model":"other/model"`) || strings.Contains(got, `"pending_settings"`) {
+		t.Errorf("after applying: %s", got)
 	}
 }
 
@@ -197,7 +188,7 @@ func toolSite(t *testing.T, workdir string) *httptest.Server {
 		t.Fatal(err)
 	}
 	s := httptest.NewServer(Handler(c, func() Defaults {
-		return Defaults{Sections: []prompt.Section{{Name: "tools", For: "tools", Text: "x"}}, Workdir: workdir, Tools: true}
+		return Defaults{Sections: []prompt.Section{{Name: "tools", For: "tools", Text: "x"}}, Workdir: workdir, Tools: []core.ToolInfo{{Name: "x", NeedsWorkdir: true}}}
 	}, noReload, []string{"framework"}))
 	t.Cleanup(s.Close)
 	return s

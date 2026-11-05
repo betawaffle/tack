@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/store"
 )
 
 func required(call core.Call, names ...string) error {
@@ -71,7 +73,7 @@ func (r *reader) editFile(_ context.Context, call core.Call) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	before, err := readLimited(f, info.Size())
+	before, err := readLimited(f, info.Size(), call.Settings.WithDefaults().MaxReadBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -103,8 +105,8 @@ func (r *reader) editFile(_ context.Context, call core.Call) ([]byte, error) {
 	return fmt.Appendf(nil, "Edited %s: %d bytes before, %d after.\n", path, len(before), len(after)), nil
 }
 
-func readLimited(f *os.File, size int64) ([]byte, error) {
-	if size > maxRead {
+func readLimited(f *os.File, size int64, maxRead int) ([]byte, error) {
+	if size > int64(maxRead) {
 		return nil, fmt.Errorf("the file is larger than %d bytes", maxRead)
 	}
 	data := make([]byte, 0, size)
@@ -175,6 +177,9 @@ func inspectCommand(call core.Call) ([]string, error) {
 	if err := checkWorkdir(call.Workdir); err != nil {
 		return nil, err
 	}
+	if _, err := os.Stat(bwrap); err != nil {
+		return nil, fmt.Errorf("commands need bubblewrap, and %s isn't there", bwrap)
+	}
 	return []string{FlagCommand}, nil
 }
 
@@ -197,27 +202,70 @@ func checkWorkdir(workdir string) error {
 // capped keeps the start of what's written and counts the rest.
 type capped struct {
 	bytes.Buffer
+	limit   int
 	dropped int64
 }
 
 func (c *capped) Write(p []byte) (int, error) {
-	room := maxRead - c.Len()
+	room := max(c.limit-c.Len(), 0)
 	if room >= len(p) {
 		return c.Buffer.Write(p)
 	}
-	c.Buffer.Write(p[:max(room, 0)])
-	c.dropped += int64(len(p) - max(room, 0))
+	c.Buffer.Write(p[:room])
+	c.dropped += int64(len(p) - room)
 	return len(p), nil
 }
 
-// waitForPipes limits how long a command's background children can hold its output
-// open after it's been killed or has finished.
-const waitForPipes = 5 * time.Second
+// bwrap is the sandbox. It's an absolute path, so that it can't depend on any PATH.
+const bwrap = "/usr/bin/bwrap"
 
-// runCommand runs a shell string in the conversation's working directory, with only
-// the configured environment and no input. It's not sandboxed. The whole process
-// group is killed on timeout, though a child that starts its own session escapes that.
-func runCommand(ctx context.Context, call core.Call) ([]byte, error) {
+// within reports whether path is dir or something under it.
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// sandboxArgs builds the bwrap command line. The command starts with nothing visible
+// and gets only what's listed: read-only system paths, a writable working directory,
+// and an empty /tmp and home. It has its own process tree, so nothing outlives it, and
+// it can't make namespaces of its own. It shares the host's kernel, so this limits what
+// it can reach, but a kernel exploit could get through.
+func (r *reader) sandboxArgs(call core.Call, s store.Settings) []string {
+	args := []string{"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session"}
+	if call.Network {
+		args = append(args, "--share-net")
+	}
+	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp")
+	home := s.CommandEnv["HOME"]
+	if filepath.IsAbs(home) {
+		args = append(args, "--tmpfs", home)
+	}
+	for _, path := range s.SandboxReadOnly {
+		args = append(args, "--ro-bind-try", path, path)
+	}
+	for _, path := range s.SandboxReadWrite {
+		args = append(args, "--bind-try", path, path)
+	}
+	args = append(args, "--bind", call.Workdir, call.Workdir)
+	for _, path := range s.SandboxProtected {
+		inside := filepath.Join(call.Workdir, path)
+		args = append(args, "--ro-bind-try", inside, inside)
+	}
+	// Listing a directory shouldn't be a way to expose the key inside it.
+	for _, path := range r.protected {
+		visible := within(path, call.Workdir) ||
+			slices.ContainsFunc(s.SandboxReadOnly, func(dir string) bool { return within(path, dir) }) ||
+			slices.ContainsFunc(s.SandboxReadWrite, func(dir string) bool { return within(path, dir) })
+		if visible {
+			args = append(args, "--ro-bind", "/dev/null", path)
+		}
+	}
+	return append(args, "--chdir", call.Workdir)
+}
+
+// runCommand runs a shell string in the sandbox, in the conversation's working
+// directory, with only the configured environment and no input.
+func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error) {
 	args, err := arguments(call, "command")
 	if err != nil {
 		return nil, err
@@ -225,22 +273,40 @@ func runCommand(ctx context.Context, call core.Call) ([]byte, error) {
 	if err := checkWorkdir(call.Workdir); err != nil {
 		return nil, err
 	}
-	var output capped
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", args["command"])
+	s := call.Settings.WithDefaults()
+	sandbox := r.sandboxArgs(call, s)
+	if call.Keep != nil {
+		if err := call.Keep("sandbox", []byte(strings.Join(sandbox, "\n"))); err != nil {
+			return nil, err
+		}
+	}
+	output := capped{limit: s.MaxReadBytes}
+	cmd := exec.CommandContext(ctx, bwrap, append(sandbox, "/bin/bash", "-c", args["command"])...)
 	cmd.Dir = call.Workdir
 	cmd.Env = []string{}
-	for _, name := range slices.Sorted(maps.Keys(call.Settings.CommandEnv)) {
-		cmd.Env = append(cmd.Env, name+"="+call.Settings.CommandEnv[name])
+	for _, name := range slices.Sorted(maps.Keys(s.CommandEnv)) {
+		cmd.Env = append(cmd.Env, name+"="+s.CommandEnv[name])
 	}
 	cmd.Stdout, cmd.Stderr = &output, &output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = waitForPipes
-	err = cmd.Run()
-	if cmd.Process != nil {
-		// Anything it left running in the background goes with it.
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	stop := func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	var group *cgroup.Group
+	if r.cgroups != nil {
+		id := call.Execution
+		if id == "" {
+			return nil, errors.New("a command needs an execution ID")
+		}
+		if group, err = r.cgroups.New(id); err != nil {
+			return nil, fmt.Errorf("making a cgroup for this command: %w", err)
+		}
+		defer group.Close()
+		cmd.SysProcAttr.UseCgroupFD = true
+		cmd.SysProcAttr.CgroupFD = group.FD()
+		stop = group.Kill
 	}
+	cmd.Cancel = stop
+	cmd.WaitDelay = time.Duration(s.OutputWaitSeconds) * time.Second
+	err = cmd.Run()
 	var problems []string
 	if ctx.Err() != nil {
 		problems = append(problems, "the command was stopped: "+context.Cause(ctx).Error())
@@ -253,7 +319,7 @@ func runCommand(ctx context.Context, call core.Call) ([]byte, error) {
 		}
 	}
 	if output.dropped > 0 {
-		problems = append(problems, fmt.Sprintf("%d bytes of output past the first %d were dropped", output.dropped, maxRead))
+		problems = append(problems, fmt.Sprintf("%d bytes of output past the first %d were dropped", output.dropped, s.MaxReadBytes))
 	}
 	if len(problems) > 0 {
 		return output.Bytes(), errors.New(strings.Join(problems, "; "))

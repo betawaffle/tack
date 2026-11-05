@@ -13,6 +13,8 @@ let pollTimer = null;
 const unfolded = new Set();
 // How the viewer has chosen to see each piece of text, kept across redraws.
 const views = new Map();
+// Which conversations have their settings panel open.
+const settingsOpen = new Set();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -364,6 +366,7 @@ function renderToolCall(call, decision) {
   const head = el("div", "tool-head");
   head.append(exact(call.name, "tool-name"), el("span", "tag", STATE_LABELS[call.state] || call.state));
   for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
+  if (call.network) head.append(el("span", "tag unused tool-flag", "Network allowed"));
   head.append(el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
   node.append(head);
   if (call.invalid) node.append(el("div", "tool-invalid", `Can't run: ${call.invalid}`));
@@ -394,6 +397,14 @@ function renderToolCall(call, decision) {
     box.dataset.choice = call.id;
     label.append(box, el("span", "", DECISION_TEXT[decision.kind].allow));
     node.append(label);
+    if (call.network_option) {
+      const network = el("label", "tool-allow tool-network");
+      const netBox = el("input");
+      netBox.type = "checkbox";
+      netBox.dataset.network = call.id;
+      network.append(netBox, el("span", "", "Allow network for this call"));
+      node.append(network);
+    }
   }
   return node;
 }
@@ -433,7 +444,9 @@ function decisionCard(conv) {
   const row = el("div", "row");
   const ticked = () => [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice);
   const go = button("", "mini primary", async () => {
-    await call(conv.id, undefined, { id: decision.id, allow: ticked(), denial_text: area.value });
+    const allow = ticked();
+    const network = [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network).filter((id) => allow.includes(id));
+    await call(conv.id, undefined, { id: decision.id, allow, network, denial_text: area.value });
   });
   go.id = "decide";
   const relabel = () => {
@@ -539,18 +552,53 @@ function renderItem(item, index, decision) {
   return el("div", item.role, item.text);
 }
 
-function settingsNotice(conv) {
-  const node = el("div", "settings-changed");
-  node.append(
-    el("div", "", "The config has changed since this conversation started, and it's still using its own copy."),
-    el("div", "hint", "Using the current settings changes the tool definitions, so the next call misses the whole cache."),
-  );
+// A conversation owns its settings. The config only supplied where they started.
+function settingsPanel(conv) {
+  const node = el("details", "conv-settings");
+  node.open = settingsOpen.has(conv.id) || Boolean(conv.pending_settings);
+  node.addEventListener("toggle", () => {
+    if (node.open) settingsOpen.add(conv.id);
+    else settingsOpen.delete(conv.id);
+  });
+  const summary = el("summary", "", "Settings for this conversation");
+  if (conv.settings_changed) summary.append(el("span", "tag waiting", "Differs from the config"));
+  if (conv.pending_settings) summary.append(el("span", "tag unused", "Unused change"));
+  node.append(summary);
+  const area = el("textarea");
+  area.id = "settings-text";
+  area.rows = 12;
+  area.value = JSON.stringify(conv.settings, null, 2);
   const row = el("div", "row");
-  row.append(button("Use the current settings", "mini", async () => {
-    await postJSON(`/api/conversations/${conv.id}/settings`);
-    await show(conv.id);
-  }));
-  node.append(row);
+  row.append(
+    button("Load from config", "mini", () => {
+      area.value = JSON.stringify(conv.config_settings, null, 2);
+    }),
+    button("Hold change", "mini primary", async () => {
+      await postJSON(`/api/conversations/${conv.id}/settings`, JSON.parse(area.value));
+      await show(conv.id);
+    }),
+  );
+  node.append(area, el("div", "hint", "Changes are held until you apply them."), row);
+  if (conv.pending_settings) {
+    const pending = el("div", "pending");
+    pending.append(
+      exact(JSON.stringify(conv.pending_settings.settings, null, 2)),
+      el("div", "hint", "Changing the model, host or tool settings means the next call misses the cache, usually from the start."),
+    );
+    const actions = el("div", "row");
+    actions.append(
+      button("Apply", "mini primary", async () => {
+        await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/apply`);
+        await show(conv.id);
+      }),
+      button("Discard", "mini", async () => {
+        await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/discard`);
+        await show(conv.id);
+      }),
+    );
+    pending.append(actions);
+    node.append(pending);
+  }
   return node;
 }
 
@@ -622,10 +670,10 @@ async function show(id, polling) {
   if (id !== current) return;
   // Don't throw away something being typed just because a poll came round.
   const live = streaming === id;
-  const typing = polling && document.querySelector("#list .editor");
+  const typing = polling && document.querySelector("#list .editor, #settings-text:focus");
   if (!typing) {
     $("list").replaceChildren(...conv.items.map((item, i) => renderItem(item, i, conv.decision)));
-    if (conv.settings_changed && !conv.decision && !conv.busy && !live) $("list").append(settingsNotice(conv));
+    $("list").prepend(settingsPanel(conv));
     if (conv.decision && !live) $("list").append(decisionCard(conv));
     if (conv.can_reply && !live) $("list").append(replyControl(conv));
     if (conv.busy && !live) {
@@ -686,10 +734,18 @@ async function startNew() {
 // Once it's edited by hand, the checkboxes stop applying until it's reset.
 let start = null;
 
+// Tools that need a working directory drop out without one, and only if none are
+// left does the conversation count as having no tools.
+function offersTools() {
+  const workdir = $("workdir")?.value ?? "";
+  return start.tools && start.defaults.tools.some((t) => workdir || !t.needs_workdir);
+}
+
 function chosenSections() {
   return start.defaults.sections.filter((s) => {
-    if (s.for === "tools") return start.tools;
-    if (s.for === "no-tools") return !start.tools;
+    if (s.for === "tools") return offersTools();
+    if (s.for === "no-tools") return !offersTools();
+    if (s.for === "workdir") return offersTools() && Boolean($("workdir")?.value);
     return !start.off.has(s.name);
   });
 }
@@ -715,10 +771,11 @@ function markEdited() {
 }
 
 function setupStart(defaults) {
-  start = { defaults, tools: defaults.tools, off: new Set() };
+  defaults.tools = defaults.tools || [];
+  start = { defaults, tools: defaults.tools.length > 0, off: new Set() };
   const options = $("prompt-options");
   options.replaceChildren();
-  if (defaults.tools) {
+  if (start.tools) {
     const row = el("div", "prompt-row");
     const offer = el("label", "check");
     const box = el("input");
@@ -731,7 +788,7 @@ function setupStart(defaults) {
     where.type = "text";
     where.value = defaults.workdir;
     where.setAttribute("aria-label", "Working directory");
-    where.placeholder = "Working directory";
+    where.placeholder = "Working directory. Tools that need one are left out without it";
     box.addEventListener("change", () => {
       const edited = isEdited();
       start.tools = box.checked;
@@ -858,7 +915,7 @@ async function call(id, userText, decision) {
     scrollDown();
     let res;
     if (decision) {
-      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, denial_text: decision.denial_text });
+      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, denial_text: decision.denial_text });
     } else if (userText !== undefined) {
       res = await postJSON(`/api/conversations/${id}/messages`, { text: userText });
     } else {

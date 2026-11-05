@@ -44,23 +44,36 @@ setting is optional, and an unknown one is an error:
 | `key` | `~/.config/tack/openrouter-key` | Needs a restart |
 | `url` | OpenRouter | Needs a restart. The key is sent here |
 | `allowed_hosts` | none | Needs a restart. Extra hostnames the page can be reached by |
-| `model` | `deepseek/deepseek-v4.1-flash-1017` | Used by the next call in any conversation |
-| `host` | `morph/fp8` | Used by the next call in any conversation |
-| `prompts` | `~/.config/tack/prompt` | Used by new conversations |
+| `prompts` | `~/.config/tack/prompt` | Read when a conversation starts |
 | `default_workdir` | none | Fills in the field for new conversations |
-| `search_skip` | `.git`, `node_modules` | Copied into each new conversation |
-| `command_env` | a basic `PATH`, `HOME` and `LANG` | Copied in. It's the whole environment for `run_command` |
-| `command_timeout_seconds` | `120` | Copied in |
+| `sandbox_extra_read_only` | none | Added to `sandbox_read_only` |
+
+These are only defaults, copied into each new conversation, which owns them after that:
+
+| Setting | Default | |
+|---|---|---|
+| `model`, `host` | `deepseek/deepseek-v4.1-flash-1017`, `morph/fp8` | |
+| `search_skip` | `.git`, `node_modules` | Directory names `search_files` leaves out |
+| `command_env` | a basic `PATH`, `HOME` and `LANG` | The whole environment for `run_command` |
+| `command_timeout_seconds` | `120` | |
+| `sandbox_read_only` | the system, and common parts of `/etc` | |
+| `sandbox_read_write` | none | Extra writable paths |
+| `sandbox_protected` | `.git` | Paths inside the working directory that stay read-only |
+| `tool_timeout_seconds` | `60` | |
+| `inspect_timeout_seconds` | `2` | The check when a call arrives |
+| `output_wait_seconds` | `5` | How long background children can hold output open |
+| `max_read_bytes` | 16 MiB | For `read_file`, `edit_file` and command output |
+| `max_listed`, `max_matches` | `10000`, `1000` | |
+| `max_search_file_bytes`, `max_line_shown` | 2 MiB, `500` | |
 
 Paths have to be absolute. To apply changes, press **Reload config** in the page,
 which tells you if the file has a problem and leaves the running settings alone if
 so. `systemctl --user reload tack` does the same but only reports to the log. A
-bad file at startup exits with code 78.
+bad file at startup exits with code 78, and so does a key file others can access.
 
-A conversation keeps its own copy of the settings marked "copied", because some of
-them are part of its tool definitions, and changing those misses the whole cache.
-When they differ from the config, the page offers to update it. Each load of the
-config is recorded, so the record shows what applied when.
+Each conversation's settings can be changed from its panel, or loaded from the config.
+Changes are held until you apply them, since changing the model, host or tool
+definitions misses the cache. Each load of the config is recorded.
 
 ## System messages
 
@@ -91,12 +104,25 @@ edit that text by hand, it's sent as written.
 
 New conversations can offer `read_file`, `list_files`, `search_files`, `edit_file`
 and `run_command`, starting from a working directory you choose. There's no sandbox
-yet: the limit on them is you reading each call. Commands run in that directory with
-only the configured environment and no input, and are killed with their process group
-on timeout, though a child that starts its own session can escape that.
+for the file tools, whose limit is you reading each call. Tools that need a working
+directory are left out without one.
+
+Commands run under [bubblewrap](https://github.com/containers/bubblewrap), which is
+required. They see only read-only system paths, a writable working directory and an
+empty `/tmp` and home, with their own process tree, no new namespaces, and only the
+configured environment and no input. There's no network unless you tick that on the
+card for that call. Each run has an execution ID and, with `Delegate=yes`, its own
+cgroup, which ends everything it started. `.git` stays read-only, because its hooks and
+config run unsandboxed the next time you use `git`, so commands can't commit. The
+sandbox shares the host's kernel, and the rest of the working directory is writable, so
+source code a command changes still runs unsandboxed when you build or run it. A `.git`
+in a subdirectory isn't covered unless it's listed.
+
+Syscall tracing is designed but shelved: see [docs/syscall-tracing.md](docs/syscall-tracing.md).
 
 A command that prints a known secret trips the tripwire: tack stops, and the key
-needs rotating. An edit keeps the file's previous contents in the record.
+needs rotating. An edit keeps the file's previous contents in the record, and its
+success message is tack's own, so it goes to the model without a second approval.
 
 When a model asks for tool calls, they wait for a decision, and the wait survives
 restarts. Whatever isn't ticked is denied, and the model is told so in wording you

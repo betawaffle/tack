@@ -53,7 +53,7 @@ const TOOL_CALLS = {
   list: [["list_files", "{}"], ["search_files", '{"pattern":"hel+o"}']],
   wrong: [["read_file", '{"file":"hello.txt"}']],
   edit: [["edit_file", JSON.stringify({ path: "hello.txt", old_string: "hello", new_string: "goodbye" })]],
-  command: [["run_command", JSON.stringify({ command: "pwd; echo $TACK_TEST_VALUE; exit 3" })]],
+  command: [["run_command", JSON.stringify({ command: `pwd; echo $TACK_TEST_VALUE; cat ${process.env.TACK_TEST_KEY} 2>/dev/null || echo no-key; (exec 3<>/dev/tcp/1.1.1.1/53) 2>/dev/null || echo no-network; exit 3` })]],
 };
 let bodies = [];
 http

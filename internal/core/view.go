@@ -60,17 +60,25 @@ type Item struct {
 // that was requested, which is also what runs. State is "waiting", "approved",
 // "running", "interrupted", "finished", "sent" or "denied".
 type ToolCallView struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Arguments string   `json:"arguments"`
-	Invalid   string   `json:"invalid,omitzero"`
-	Flags     []string `json:"flags,omitzero"`
-	State     string   `json:"state"`
-	Output    string   `json:"output,omitzero"`
-	HasOutput bool     `json:"has_output,omitzero"`
-	Error     string   `json:"error,omitzero"`
-	Result    string   `json:"result,omitzero"` // what the model was given
-	Decidable bool     `json:"decidable,omitzero"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Arguments     string   `json:"arguments"`
+	Invalid       string   `json:"invalid,omitzero"`
+	Flags         []string `json:"flags,omitzero"`
+	State         string   `json:"state"`
+	Output        string   `json:"output,omitzero"`
+	HasOutput     bool     `json:"has_output,omitzero"`
+	Error         string   `json:"error,omitzero"`
+	Result        string   `json:"result,omitzero"` // what the model was given
+	Decidable     bool     `json:"decidable,omitzero"`
+	NetworkOption bool     `json:"network_option,omitzero"`
+	Network       bool     `json:"network,omitzero"`
+}
+
+// PendingSettings are settings being held until someone applies them.
+type PendingSettings struct {
+	ID       string         `json:"id"`
+	Settings store.Settings `json:"settings"`
 }
 
 // DecisionView is what's waiting on a person. DenialText is the default for what
@@ -91,9 +99,13 @@ type Conversation struct {
 	CanReply bool   `json:"can_reply"`
 	Tools    bool   `json:"tools,omitzero"`
 	Workdir  string `json:"workdir,omitzero"`
-	// SettingsChanged says the config differs from this conversation's snapshot.
-	SettingsChanged bool   `json:"settings_changed,omitzero"`
-	Items           []Item `json:"items"`
+	// Settings are what it uses, and ConfigSettings what a new conversation would
+	// start with. SettingsChanged says they differ, and PendingSettings are held.
+	Settings        store.Settings   `json:"settings"`
+	ConfigSettings  store.Settings   `json:"config_settings"`
+	SettingsChanged bool             `json:"settings_changed,omitzero"`
+	PendingSettings *PendingSettings `json:"pending_settings,omitzero"`
+	Items           []Item           `json:"items"`
 
 	Decision *DecisionView `json:"decision,omitzero"`
 }
@@ -149,12 +161,13 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Model: c.model, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
-	if conv.tools != "" && conv.settings != nil && !reflect.DeepEqual(*conv.settings, c.settings) {
-		out.SettingsChanged = true
-	}
-	if order := c.routing.Order; len(order) > 0 {
-		out.Host = order[0]
+	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
+	effective := conv.effectiveSettings(c.settings)
+	out.Model, out.Host = effective.Model, effective.Host
+	out.Settings, out.ConfigSettings = effective, c.settings
+	out.SettingsChanged = !reflect.DeepEqual(effective.WithDefaults(), c.settings.WithDefaults())
+	if p := conv.pendingSettings; p != nil {
+		out.PendingSettings = &PendingSettings{ID: p.id, Settings: p.settings}
 	}
 	if d := conv.decision; d != nil {
 		out.Decision = &DecisionView{ID: d.id, Kind: d.kind, Calls: d.calls, DenialText: denialText(d.kind)}

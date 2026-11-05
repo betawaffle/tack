@@ -6,6 +6,8 @@ Description=tack
 # and conversations each name theirs, so this one is useless on purpose.
 WorkingDirectory=/var/empty
 ExecReload=/bin/kill -HUP $MAINPID
+# tack gives each command its own cgroup under this one.
+Delegate=yes
 ExecStart=%h/.local/bin/tack
 Restart=on-failure
 RestartSec=2

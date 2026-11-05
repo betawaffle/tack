@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/config"
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/openrouter"
@@ -49,7 +50,15 @@ func main() {
 
 	key, err := secret.Load(cfg.Key)
 	if err != nil {
-		log.Fatal(err)
+		// A key file with the wrong mode won't fix itself either.
+		log.Print(err)
+		os.Exit(exitUnreadableRecord)
+	}
+	groups, err := cgroup.Setup()
+	if err != nil {
+		// Commands still can't outlive their sandbox, but they don't get a cgroup.
+		log.Printf("no delegated cgroup, so commands won't have their own: %v", err)
+		groups = nil
 	}
 	st, err := store.Open(cfg.Data, secret.NewTripwire(key))
 	if err != nil {
@@ -58,10 +67,8 @@ func main() {
 	c, err := core.New(core.Config{
 		Store:    st,
 		Client:   openrouter.NewClient(cfg.URL, key),
-		Model:    cfg.Model,
-		Routing:  routing(cfg),
-		Tools:    tools.All(tools.Options{Protected: []string{cfg.Key}}),
-		Settings: settings(cfg),
+		Tools:    tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups}),
+		Settings: cfg.Settings,
 	})
 	if err != nil {
 		// Restarting can't help, so this exit code tells systemd not to try.
@@ -95,14 +102,14 @@ func main() {
 		if err := record(c, next); err != nil {
 			return web.Reload{}, err
 		}
-		c.Reconfigure(next.Model, routing(next), settings(next))
+		c.Reconfigure(next.Settings)
 		current = next
 		return web.Reload{NeedsRestart: config.StartupChanges(cfg, next)}, nil
 	}
 	defaults := func() web.Defaults {
 		mu.Lock()
 		defer mu.Unlock()
-		return web.Defaults{Sections: prompt.Load(current.Prompts), Workdir: current.DefaultWorkdir, Tools: true}
+		return web.Defaults{Sections: prompt.Load(current.Prompts), Workdir: current.DefaultWorkdir, Tools: c.ToolInfo()}
 	}
 
 	hangup := make(chan os.Signal, 1)
@@ -127,14 +134,6 @@ func main() {
 		hosts = append(hosts, name)
 	}
 	log.Fatal(http.ListenAndServe(cfg.Addr, web.Handler(c, defaults, reload, hosts)))
-}
-
-func routing(cfg config.Config) openrouter.Routing {
-	return openrouter.Routing{Order: []string{cfg.Host}, AllowFallbacks: false}
-}
-
-func settings(cfg config.Config) store.Settings {
-	return store.Settings{SearchSkip: cfg.SearchSkip, CommandEnv: cfg.CommandEnv, CommandTimeoutSeconds: cfg.CommandTimeoutSeconds}
 }
 
 // record notes the settings in force, so the record shows what applied when.
