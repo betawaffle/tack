@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "name": "tack-browser-tests",
+  "dependencies": {
+    "playwright": "1.56.1"
+  }
+}

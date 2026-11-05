@@ -1,0 +1,31 @@
+#!/bin/bash
+# Tests the page in headless Chromium against a fake provider. It uses a temporary
+# data directory and a fake key, so it never touches real data or spends money.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+tmp=$(mktemp -d)
+pids=()
+cleanup() {
+	[ ${#pids[@]} -gt 0 ] && kill "${pids[@]}" 2>/dev/null
+	rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+(cd "$here/../.." && go build -o "$tmp/tack" .) || exit 1
+
+printf 'sk-or-fake-key-for-browser-tests\n' >"$tmp/key"
+chmod 600 "$tmp/key"
+
+cd "$here"
+mkdir -p shots
+
+node fake.js >"$tmp/fake.log" 2>&1 &
+pids+=($!)
+"$tmp/tack" -addr 127.0.0.1:18601 -data "$tmp/data" -key "$tmp/key" \
+	-url http://127.0.0.1:18600/v1 -system-prompt "$tmp/none" >"$tmp/tack.log" 2>&1 &
+pids+=($!)
+
+node check.js
+status=$?
+[ $status -eq 0 ] || tail -5 "$tmp/tack.log" "$tmp/fake.log"
+exit $status

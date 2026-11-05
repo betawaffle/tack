@@ -40,6 +40,20 @@ call miss the cache from that point.
 `go test ./...` covers the server. The Markdown parser has its own tests, which
 need Node: `node --test internal/web/`.
 
+There are also optional browser tests in `test/browser/`. Nothing else depends
+on them, and they're the only part of tack that uses npm. They drive every
+control of the page in headless Chromium, against a fake provider with a fake
+key and a temporary data directory:
+
+```
+cd test/browser
+npm ci
+npx playwright install chromium
+./run.sh
+```
+
+Screenshots land in `test/browser/shots/`.
+
 ## The record
 
 Everything lives under `~/.local/share/tack/`:
