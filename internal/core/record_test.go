@@ -112,6 +112,7 @@ func TestEveryEventTypeThisBuildWritesIsKnown(t *testing.T) {
 		store.TackStarted, store.ConversationAdded, store.UserMessage, store.SystemMessage,
 		store.EditProposed, store.EditApplied, store.EditDiscarded, store.CallStarted, store.CallFinished,
 		store.DecisionRequested, store.DecisionMade, store.ToolStarted, store.ToolFinished,
+		store.ConfigLoaded, store.SettingsUpdated,
 	} {
 		if !store.Known(eventType) {
 			t.Errorf("%s isn't known", eventType)

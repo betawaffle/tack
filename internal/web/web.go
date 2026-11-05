@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,9 +30,15 @@ type Defaults struct {
 	Tools    bool             `json:"tools"`
 }
 
+// Reload is the result of reloading the config. NeedsRestart names settings that
+// changed but only take effect at startup.
+type Reload struct {
+	NeedsRestart []string `json:"needs_restart"`
+}
+
 // Handler returns the whole site.
-func Handler(c *core.Core, defaults func() Defaults) http.Handler {
-	s := &server{core: c, defaults: defaults}
+func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, error), hosts []string) http.Handler {
+	s := &server{core: c, defaults: defaults, reload: reload}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.Handle("GET /static/", http.FileServerFS(static))
@@ -45,9 +52,30 @@ func Handler(c *core.Core, defaults func() Defaults) http.Handler {
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.applyEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.decide)
+	mux.HandleFunc("POST /api/conversations/{id}/settings", s.updateSettings)
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
+	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
-	return security(http.NewCrossOriginProtection().Handler(mux))
+	return knownHost(hosts, security(http.NewCrossOriginProtection().Handler(mux)))
+}
+
+// knownHost refuses requests for hostnames it doesn't know. Without this, a website
+// could point its own name at this machine, which makes the browser treat this site
+// as that website's own: DNS rebinding. Tools can run commands from here, so that
+// would be serious. IP addresses and localhost can't be rebound to.
+func knownHost(hosts []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if name, _, err := net.SplitHostPort(host); err == nil {
+			host = name
+		}
+		host = strings.Trim(host, "[]")
+		if net.ParseIP(host) == nil && !strings.EqualFold(host, "localhost") && !slices.ContainsFunc(hosts, func(known string) bool { return strings.EqualFold(known, host) }) {
+			http.Error(w, "tack doesn't know this hostname. To allow it, add it to allowed_hosts in the config and restart.", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // security sets the headers every response gets. Model output is only ever shown
@@ -70,6 +98,7 @@ func security(next http.Handler) http.Handler {
 type server struct {
 	core     *core.Core
 	defaults func() Defaults
+	reload   func() (Reload, error)
 }
 
 // readText reads the JSON body every write endpoint takes.
@@ -214,6 +243,25 @@ func (s *server) discardEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+func (s *server) updateSettings(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.UpdateSettings(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// reloadConfig reports failure properly, which a signal can't do. A config that
+// can't be read leaves the running one in place.
+func (s *server) reloadConfig(w http.ResponseWriter, _ *http.Request) {
+	result, err := s.reload()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, result)
+}
+
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Allow      []string `json:"allow"`
@@ -271,7 +319,7 @@ func fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting):
+	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingToUpdate):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice):
 		http.Error(w, err.Error(), http.StatusBadRequest)

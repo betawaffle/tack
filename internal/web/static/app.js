@@ -539,6 +539,21 @@ function renderItem(item, index, decision) {
   return el("div", item.role, item.text);
 }
 
+function settingsNotice(conv) {
+  const node = el("div", "settings-changed");
+  node.append(
+    el("div", "", "The config has changed since this conversation started, and it's still using its own copy."),
+    el("div", "hint", "Using the current settings changes the tool definitions, so the next call misses the whole cache."),
+  );
+  const row = el("div", "row");
+  row.append(button("Use the current settings", "mini", async () => {
+    await postJSON(`/api/conversations/${conv.id}/settings`);
+    await show(conv.id);
+  }));
+  node.append(row);
+  return node;
+}
+
 function replyControl(conv) {
   const last = conv.items[conv.items.length - 1];
   let label = "Get a reply";
@@ -610,6 +625,7 @@ async function show(id, polling) {
   const typing = polling && document.querySelector("#list .editor");
   if (!typing) {
     $("list").replaceChildren(...conv.items.map((item, i) => renderItem(item, i, conv.decision)));
+    if (conv.settings_changed && !conv.decision && !conv.busy && !live) $("list").append(settingsNotice(conv));
     if (conv.decision && !live) $("list").append(decisionCard(conv));
     if (conv.can_reply && !live) $("list").append(replyControl(conv));
     if (conv.busy && !live) {
@@ -924,6 +940,21 @@ $("list").addEventListener("change", (event) => {
 });
 
 $("system-prompt").addEventListener("input", markEdited);
+
+$("reload").addEventListener("click", async () => {
+  const note = $("reload-note");
+  note.classList.remove("bad");
+  try {
+    const res = await postJSON("/api/reload");
+    const { needs_restart: restart } = await res.json();
+    note.textContent = restart && restart.length ? `Reloaded. These need a restart: ${restart.join(", ")}.` : "Reloaded.";
+    if (current) await show(current);
+    else await startNew();
+  } catch (err) {
+    note.classList.add("bad");
+    note.textContent = `Not reloaded, so nothing changed. ${err.message}`;
+  }
+});
 
 $("input").addEventListener("input", resizeInput);
 $("input").addEventListener("keydown", (event) => {

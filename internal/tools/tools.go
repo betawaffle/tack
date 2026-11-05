@@ -22,8 +22,10 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/store"
 )
 
 // Limits on what one call can produce or read. The full output goes in a blob and
@@ -43,26 +45,20 @@ const (
 	FlagPrivate = "Not world-readable"
 )
 
-// Options configure the read tools.
+// FlagCommand is on every run_command. It never goes away, and such a call is never
+// a candidate for approving automatically.
+const FlagCommand = "Runs any command"
+
+// Options configure the tools.
 type Options struct {
 	// Protected files are refused outright, wherever a path to them comes from.
 	// They're compared by identity, which also catches links.
 	Protected []string
-	// SkipDirs are directory names search_files doesn't go into, unless the search
-	// starts at one.
-	SkipDirs []string
 }
-
-// DefaultSkipDirs are the usual directories that are large and rarely useful.
-var DefaultSkipDirs = []string{".git", "node_modules"}
 
 // Read returns the read-only tools.
 func Read(opts Options) []core.Tool {
-	r := &reader{protected: opts.Protected, skipDirs: opts.SkipDirs}
-	skipping := "Skips files that are binary, very large or not world-readable."
-	if len(opts.SkipDirs) > 0 {
-		skipping = "Skips " + strings.Join(opts.SkipDirs, ", ") + ", and files that are binary, very large or not world-readable."
-	}
+	r := &reader{protected: opts.Protected}
 	return []core.Tool{
 		{
 			Name:       "read_file",
@@ -77,12 +73,40 @@ func Read(opts Options) []core.Tool {
 			Run:        r.listFiles,
 		},
 		{
-			Name:       "search_files",
-			Definition: definition("search_files", "Search text files under a path with a regular expression, as path:line:text. "+skipping, `{"pattern":{"type":"string","description":"An RE2 regular expression."},"path":{"type":"string","description":"File or directory to search. Defaults to the working directory."}}`, `["pattern"]`),
-			Inspect:    r.inspectSearch,
-			Run:        r.searchFiles,
+			Name: "search_files",
+			Define: func(settings store.Settings) jsontext.Value {
+				skipping := "Skips files that are binary, very large or not world-readable."
+				if len(settings.SearchSkip) > 0 {
+					skipping = "Skips " + strings.Join(settings.SearchSkip, ", ") + ", and files that are binary, very large or not world-readable."
+				}
+				return definition("search_files", "Search text files under a path with a regular expression, as path:line:text. "+skipping, `{"pattern":{"type":"string","description":"An RE2 regular expression."},"path":{"type":"string","description":"File or directory to search. Defaults to the working directory."}}`, `["pattern"]`)
+			},
+			Inspect: r.inspectSearch,
+			Run:     r.searchFiles,
 		},
 	}
+}
+
+// All returns every tool.
+func All(opts Options) []core.Tool {
+	r := &reader{protected: opts.Protected}
+	return append(Read(opts),
+		core.Tool{
+			Name:       "edit_file",
+			Definition: definition("edit_file", "Change a file by replacing old_string with new_string. old_string has to appear exactly once, so include enough context to make it unique. An empty old_string creates a new file, and fails if the file exists.", `{"path":{"type":"string","description":"Path to the file."},"old_string":{"type":"string","description":"The exact text to replace."},"new_string":{"type":"string","description":"The text to put in its place."}}`, `["path","old_string","new_string"]`),
+			Inspect:    r.inspectEdit,
+			Run:        r.editFile,
+		},
+		core.Tool{
+			Name:       "run_command",
+			Definition: definition("run_command", "Run a command with bash in the working directory. It has a limited environment and no input.", `{"command":{"type":"string","description":"The command to run."}}`, `["command"]`),
+			Inspect:    inspectCommand,
+			Run:        runCommand,
+			Timeout: func(settings store.Settings) time.Duration {
+				return time.Duration(settings.CommandTimeoutSeconds) * time.Second
+			},
+		},
+	)
 }
 
 func definition(name, description, properties, required string) jsontext.Value {
@@ -92,7 +116,6 @@ func definition(name, description, properties, required string) jsontext.Value {
 
 type reader struct {
 	protected []string
-	skipDirs  []string
 }
 
 // arguments reads a call's strings, refusing anything it doesn't expect.
@@ -126,7 +149,8 @@ func location(path, workdir string, fallback bool) (string, error) {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path), nil
 	}
-	if workdir == "" {
+	// Never relative to tack's own working directory.
+	if !filepath.IsAbs(workdir) {
 		return "", errors.New("this conversation has no working directory, so the path has to be absolute")
 	}
 	return filepath.Join(workdir, path), nil
@@ -141,16 +165,30 @@ func (r *reader) isProtected(info fs.FileInfo) bool {
 	return false
 }
 
+// resolveExisting follows symlinks as far as the path exists, so that a new file
+// under a symlinked directory still counts as being where it will really end up.
+func resolveExisting(path string) string {
+	var rest []string
+	for at := path; ; {
+		if real, err := filepath.EvalSymlinks(at); err == nil {
+			return filepath.Join(append([]string{real}, rest...)...)
+		}
+		parent := filepath.Dir(at)
+		if parent == at {
+			return path
+		}
+		rest = append([]string{filepath.Base(at)}, rest...)
+		at = parent
+	}
+}
+
 // flags runs before anyone has approved anything, on a path the model chose. So it
 // only ever looks at metadata and never opens the file. An error means the call
 // would be refused anyway, so it isn't offered for approval. Results go to the
 // person first: the model only hears about an error along with the decision.
 func (r *reader) flags(path, workdir string, wantRegular bool) ([]string, error) {
 	var out []string
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		real = path
-	}
+	real := resolveExisting(path)
 	if workdir != "" {
 		root, err := filepath.EvalSymlinks(workdir)
 		if err != nil {
@@ -336,7 +374,7 @@ func (r *reader) searchFiles(ctx context.Context, call core.Call) ([]byte, error
 			return nil
 		}
 		if d.IsDir() {
-			if path != root && slices.Contains(r.skipDirs, d.Name()) {
+			if path != root && slices.Contains(call.Settings.SearchSkip, d.Name()) {
 				return fs.SkipDir
 			}
 			return nil

@@ -22,11 +22,21 @@ printf 'hello from the test file\n' >"$tmp/work/hello.txt"
 printf 'private\n' >"$tmp/work/private.txt"
 chmod 600 "$tmp/work/private.txt"
 
-export TACK_TEST_KEY="$tmp/key" TACK_TEST_WORKDIR="$tmp/work"
+export TACK_TEST_KEY="$tmp/key" TACK_TEST_WORKDIR="$tmp/work" TACK_TEST_CONFIG="$tmp/config.json"
 node fake.js >"$tmp/fake.log" 2>&1 &
 pids+=($!)
-"$tmp/tack" -addr 127.0.0.1:18601 -data "$tmp/data" -key "$tmp/key" \
-	-url http://127.0.0.1:18600/v1 -prompts "$tmp/none" -workdir "$tmp/work" >"$tmp/tack.log" 2>&1 &
+cat >"$tmp/config.json" <<CONFIG
+{
+  "addr": "127.0.0.1:18601",
+  "data": "$tmp/data",
+  "key": "$tmp/key",
+  "url": "http://127.0.0.1:18600/v1",
+  "prompts": "$tmp/none",
+  "default_workdir": "$tmp/work",
+  "command_env": {"PATH": "/usr/bin:/bin", "TACK_TEST_VALUE": "from-config"}
+}
+CONFIG
+"$tmp/tack" -config "$tmp/config.json" >"$tmp/tack.log" 2>&1 &
 pids+=($!)
 "$tmp/toolserver" -addr 127.0.0.1:18602 -data "$tmp/tools" -url http://127.0.0.1:18600/v1 >"$tmp/tools.log" 2>&1 &
 pids+=($!)

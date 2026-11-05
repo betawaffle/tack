@@ -97,7 +97,25 @@ const (
 	DecisionMade      = "decision_made"
 	ToolStarted       = "tool_started"
 	ToolFinished      = "tool_finished"
+	ConfigLoaded      = "config_loaded"
+	SettingsUpdated   = "conversation_settings_updated"
 )
+
+// Settings is a conversation's snapshot of the settings its tools depend on. Some
+// shape the tool definitions, and changing those misses the whole cache, so a
+// conversation keeps its own until someone chooses to update it.
+type Settings struct {
+	SearchSkip            []string          `json:"search_skip,omitzero"`
+	CommandEnv            map[string]string `json:"command_env,omitzero"`
+	CommandTimeoutSeconds int               `json:"command_timeout_seconds,omitzero"`
+}
+
+// Artifact is a named block a tool wants kept beside its output, like the contents
+// of a file before an edit.
+type Artifact struct {
+	Name  string `json:"name"`
+	Block Ref    `json:"block"`
+}
 
 // Known reports whether this build understands an event type. A record with a type
 // it doesn't know was written by a newer build, and reading it anyway could mean
@@ -105,7 +123,8 @@ const (
 func Known(eventType string) bool {
 	switch eventType {
 	case TackStarted, ConversationAdded, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
-		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished:
+		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
+		ConfigLoaded, SettingsUpdated:
 		return true
 	}
 	return false
@@ -125,8 +144,13 @@ type Event struct {
 
 	// conversation_created: the exact tool definitions its calls send, and where
 	// their relative paths start.
-	Tools   Ref    `json:"tools,omitzero"`
-	Workdir string `json:"workdir,omitzero"`
+	// conversation_settings_updated: the new definitions and snapshot.
+	Tools    Ref       `json:"tools,omitzero"`
+	Workdir  string    `json:"workdir,omitzero"`
+	Settings *Settings `json:"settings,omitzero"`
+
+	// config_loaded: the settings in force, at startup and on each reload.
+	Config Ref `json:"config,omitzero"`
 
 	// user_message, system_message, system_edit_proposed. An edit with no parts
 	// removes the message.
@@ -171,8 +195,9 @@ type Event struct {
 	By            string   `json:"by,omitzero"`
 
 	// tool_*
-	ToolCall string `json:"tool_call,omitzero"`
-	Output   Ref    `json:"output,omitzero"`
+	ToolCall  string     `json:"tool_call,omitzero"`
+	Output    Ref        `json:"output,omitzero"`
+	Artifacts []Artifact `json:"artifacts,omitzero"`
 }
 
 // Store is the single writer for a data directory.

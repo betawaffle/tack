@@ -52,6 +52,8 @@ const TOOL_CALLS = {
   ],
   list: [["list_files", "{}"], ["search_files", '{"pattern":"hel+o"}']],
   wrong: [["read_file", '{"file":"hello.txt"}']],
+  edit: [["edit_file", JSON.stringify({ path: "hello.txt", old_string: "hello", new_string: "goodbye" })]],
+  command: [["run_command", JSON.stringify({ command: "pwd; echo $TACK_TEST_VALUE; exit 3" })]],
 };
 let bodies = [];
 http

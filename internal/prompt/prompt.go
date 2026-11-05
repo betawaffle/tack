@@ -35,7 +35,7 @@ func builtin() []Section {
 		{Name: "tools", For: "tools", Text: "Every tool call needs approval from the user, which can take a while, so ask for what you actually need. " +
 			"A denial isn't an error: read the reason and change your approach rather than repeating the call. " +
 			"You only see a tool's output if the user releases it. " +
-			"Relative paths start from the working directory, " + WorkdirVariable + "."},
+			"Relative paths and commands start from the working directory, " + WorkdirVariable + "."},
 	}
 }
 

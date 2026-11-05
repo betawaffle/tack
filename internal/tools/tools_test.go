@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/store"
 )
 
 type fixture struct {
@@ -29,7 +30,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f.write(f.key, "the key", 0o600)
-	for _, tool := range Read(Options{Protected: []string{f.key}, SkipDirs: DefaultSkipDirs}) {
+	for _, tool := range All(Options{Protected: []string{f.key}}) {
 		f.tools[tool.Name] = tool
 	}
 	return f
@@ -61,7 +62,11 @@ func (f *fixture) call(args map[string]string) core.Call {
 		}
 		out[name] = data
 	}
-	return core.Call{Args: out, Workdir: f.workdir}
+	return core.Call{Args: out, Workdir: f.workdir, Settings: store.Settings{
+		SearchSkip:            []string{".git", "node_modules"},
+		CommandEnv:            map[string]string{"PATH": "/usr/bin:/bin", "ONLY_THIS": "yes"},
+		CommandTimeoutSeconds: 5,
+	}}
 }
 
 func (f *fixture) run(name string, args map[string]string) (string, error) {
@@ -87,8 +92,12 @@ func TestDefinitionsAreValidAndNamed(t *testing.T) {
 				Name string `json:"name"`
 			} `json:"function"`
 		}
-		if err := json.Unmarshal(tool.Definition, &def); err != nil || def.Function.Name != name {
-			t.Errorf("%s: %s, %v", name, tool.Definition, err)
+		definition := tool.Definition
+		if tool.Define != nil {
+			definition = tool.Define(store.Settings{SearchSkip: []string{"x"}})
+		}
+		if err := json.Unmarshal(definition, &def); err != nil || def.Function.Name != name {
+			t.Errorf("%s: %s, %v", name, definition, err)
 		}
 	}
 }
@@ -284,29 +293,251 @@ func TestSearchStopsWhenCancelled(t *testing.T) {
 	}
 }
 
-func TestSkipDirsAreConfigured(t *testing.T) {
+func TestSearchSkipComesFromTheSnapshot(t *testing.T) {
 	f := newFixture(t)
 	f.write(".git/config", "needle\n", 0o644)
 	f.write("vendor/x.txt", "needle\n", 0o644)
-	search := func(skip []string) (string, jsontext.Value) {
-		for _, tool := range Read(Options{SkipDirs: skip}) {
-			if tool.Name == "search_files" {
-				out, err := tool.Run(context.Background(), f.call(map[string]string{"pattern": "needle"}))
-				if err != nil {
-					t.Fatal(err)
-				}
-				return string(out), tool.Definition
-			}
+	search := func(skip []string) string {
+		call := f.call(map[string]string{"pattern": "needle"})
+		call.Settings.SearchSkip = skip
+		out, err := f.tools["search_files"].Run(context.Background(), call)
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Fatal("no search_files")
-		return "", nil
+		return string(out)
 	}
-	got, def := search([]string{"vendor"})
-	if !strings.Contains(got, ".git/config") || strings.Contains(got, "vendor/") || !strings.Contains(string(def), "Skips vendor,") {
-		t.Errorf("skipping vendor: %s\n%s", got, def)
+	if got := search([]string{"vendor"}); !strings.Contains(got, ".git/config") || strings.Contains(got, "vendor/") {
+		t.Errorf("skipping vendor: %s", got)
 	}
-	got, def = search(nil)
-	if !strings.Contains(got, ".git/config") || !strings.Contains(got, "vendor/x.txt") || strings.Contains(string(def), ".git") {
-		t.Errorf("skipping nothing: %s\n%s", got, def)
+	if got := search(nil); !strings.Contains(got, ".git/config") || !strings.Contains(got, "vendor/x.txt") {
+		t.Errorf("skipping nothing: %s", got)
+	}
+	def := string(f.tools["search_files"].Define(store.Settings{SearchSkip: []string{"vendor"}}))
+	if !strings.Contains(def, "Skips vendor,") {
+		t.Errorf("definition = %s", def)
+	}
+	if def := string(f.tools["search_files"].Define(store.Settings{})); strings.Contains(def, ".git") {
+		t.Errorf("definition = %s", def)
+	}
+}
+
+func (f *fixture) read(path string) string {
+	f.t.Helper()
+	data, err := os.ReadFile(filepath.Join(f.workdir, path))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestEditReplacesExactlyOneMatch(t *testing.T) {
+	f := newFixture(t)
+	f.write("a.txt", "one two two\n", 0o640)
+	edit := func(old, new string) (string, error) {
+		return f.run("edit_file", map[string]string{"path": "a.txt", "old_string": old, "new_string": new})
+	}
+	if _, err := edit("missing", "x"); err == nil {
+		t.Error("no match should fail")
+	}
+	if _, err := edit("two", "x"); err == nil || !strings.Contains(err.Error(), "2 times") {
+		t.Errorf("two matches: %v", err)
+	}
+	if f.read("a.txt") != "one two two\n" {
+		t.Error("a failed edit changed the file")
+	}
+	if _, err := edit("one", "uno"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.read("a.txt"); got != "uno two two\n" {
+		t.Errorf("file = %q", got)
+	}
+	if info, _ := os.Stat(filepath.Join(f.workdir, "a.txt")); info.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %o", info.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(f.workdir)
+	if len(entries) != 1 {
+		t.Errorf("left behind: %v", entries)
+	}
+}
+
+func TestEditKeepsWhatWasThere(t *testing.T) {
+	f := newFixture(t)
+	f.write("a.txt", "before\n", 0o644)
+	call := f.call(map[string]string{"path": "a.txt", "old_string": "before", "new_string": "after"})
+	kept := map[string]string{}
+	call.Keep = func(name string, data []byte) error {
+		kept[name] = string(data)
+		return nil
+	}
+	if _, err := f.tools["edit_file"].Run(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	if kept["before"] != "before\n" {
+		t.Errorf("kept = %v", kept)
+	}
+}
+
+func TestEditCreatesOnlyNewFiles(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.run("edit_file", map[string]string{"path": "new.txt", "old_string": "", "new_string": "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.read("new.txt") != "hello" {
+		t.Errorf("file = %q", f.read("new.txt"))
+	}
+	args := map[string]string{"path": "new.txt", "old_string": "", "new_string": "again"}
+	if _, err := f.tools["edit_file"].Inspect(f.call(args)); err == nil {
+		t.Error("an existing file shouldn't be offered as a create")
+	}
+	if _, err := f.run("edit_file", args); err == nil || f.read("new.txt") != "hello" {
+		t.Errorf("create over a file: %v, %q", err, f.read("new.txt"))
+	}
+	if _, err := f.run("edit_file", map[string]string{"path": "no/such/dir/x", "old_string": "", "new_string": "x"}); err == nil {
+		t.Error("a missing directory should fail")
+	}
+}
+
+func TestEditThroughASymlinkKeepsTheLink(t *testing.T) {
+	f := newFixture(t)
+	f.write("real.txt", "text\n", 0o644)
+	if err := os.Symlink("real.txt", filepath.Join(f.workdir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run("edit_file", map[string]string{"path": "link", "old_string": "text", "new_string": "changed"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(filepath.Join(f.workdir, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("link: %v, %v", info, err)
+	}
+	if f.read("real.txt") != "changed\n" {
+		t.Errorf("file = %q", f.read("real.txt"))
+	}
+}
+
+func TestEditRefusesTheKey(t *testing.T) {
+	f := newFixture(t)
+	if err := os.Symlink(f.key, filepath.Join(f.workdir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{f.key, "link"} {
+		args := map[string]string{"path": path, "old_string": "the key", "new_string": "x"}
+		if _, err := f.tools["edit_file"].Inspect(f.call(args)); err == nil {
+			t.Errorf("%s: offered for approval", path)
+		}
+		if _, err := f.run("edit_file", args); err == nil {
+			t.Errorf("%s: edited", path)
+		}
+	}
+	if data, _ := os.ReadFile(f.key); string(data) != "the key" {
+		t.Errorf("key file = %q", data)
+	}
+}
+
+func TestEditFlags(t *testing.T) {
+	f := newFixture(t)
+	outside := filepath.Dir(f.workdir)
+	if err := os.Symlink(outside, filepath.Join(f.workdir, "up")); err != nil {
+		t.Fatal(err)
+	}
+	// A new file under a symlinked directory is outside, though the path doesn't say so.
+	flags := f.inspect("edit_file", map[string]string{"path": "up/new.txt", "old_string": "", "new_string": "x"})
+	if !slices.Contains(flags, FlagOutside) {
+		t.Errorf("flags = %v", flags)
+	}
+	for _, args := range []map[string]string{
+		{"path": "a", "old_string": "x"},
+		{"path": "a", "new_string": "x"},
+		{"old_string": "x", "new_string": "y"},
+		{"path": "a", "old_string": "x", "new_string": "x"},
+	} {
+		if _, err := f.tools["edit_file"].Inspect(f.call(args)); err == nil {
+			t.Errorf("%v: no error", args)
+		}
+	}
+}
+
+func TestCommandRunsInTheWorkdirWithOnlyTheConfiguredEnvironment(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("TACK_SHOULD_NOT_LEAK", "secret-looking")
+	got, err := f.run("run_command", map[string]string{"command": "pwd; env | sort; cat; echo to-stderr >&2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, f.workdir+"\n") || !strings.Contains(got, "ONLY_THIS=yes") || !strings.Contains(got, "to-stderr") {
+		t.Errorf("output = %s", got)
+	}
+	if strings.Contains(got, "TACK_SHOULD_NOT_LEAK") {
+		t.Errorf("the environment leaked: %s", got)
+	}
+}
+
+func TestCommandNeverUsesTacksOwnDirectory(t *testing.T) {
+	f := newFixture(t)
+	for _, workdir := range []string{"", "relative"} {
+		call := f.call(map[string]string{"command": "pwd"})
+		call.Workdir = workdir
+		if out, err := f.tools["run_command"].Run(context.Background(), call); err == nil {
+			t.Errorf("workdir %q ran: %s", workdir, out)
+		}
+		if _, err := f.tools["run_command"].Inspect(call); err == nil {
+			t.Errorf("workdir %q was offered", workdir)
+		}
+	}
+}
+
+func TestCommandFlagIsPermanent(t *testing.T) {
+	f := newFixture(t)
+	if flags := f.inspect("run_command", map[string]string{"command": "true"}); !slices.Equal(flags, []string{FlagCommand}) {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestCommandExitCodeIsReported(t *testing.T) {
+	f := newFixture(t)
+	got, err := f.run("run_command", map[string]string{"command": "echo out; exit 3"})
+	if err == nil || !strings.Contains(err.Error(), "exit code 3") || got != "out\n" {
+		t.Errorf("got %q, %v", got, err)
+	}
+}
+
+func TestCommandIsKilledWithItsChildren(t *testing.T) {
+	f := newFixture(t)
+	marker := filepath.Join(f.workdir, "still-running")
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	call := f.call(map[string]string{"command": "(sleep 1; touch " + marker + ") & echo started; wait"})
+	start := time.Now()
+	out, err := f.tools["run_command"].Run(ctx, call)
+	if err == nil || !strings.Contains(err.Error(), "stopped") || string(out) != "started\n" {
+		t.Errorf("got %q, %v", out, err)
+	}
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("took %s", took)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a child survived")
+	}
+}
+
+func TestBackgroundChildrenCantHangACommand(t *testing.T) {
+	f := newFixture(t)
+	marker := filepath.Join(f.workdir, "left-running")
+	start := time.Now()
+	got, _ := f.run("run_command", map[string]string{"command": "(sleep 8; touch " + marker + ") & echo done"})
+	if !strings.Contains(got, "done") {
+		t.Errorf("output = %q", got)
+	}
+	if took := time.Since(start); took > 7*time.Second {
+		t.Errorf("took %s", took)
+	}
+}
+
+func TestBadCommandsAreCaughtBeforeApproval(t *testing.T) {
+	f := newFixture(t)
+	for _, args := range []map[string]string{{"command": ""}, {"command": "  "}, {"command": "a\x00b"}, {"cmd": "ls"}} {
+		if _, err := f.tools["run_command"].Inspect(f.call(args)); err == nil {
+			t.Errorf("%v: no error", args)
+		}
 	}
 }

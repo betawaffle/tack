@@ -19,14 +19,15 @@ import (
 
 // Errors a caller can act on.
 var (
-	ErrNotFound      = errors.New("no such conversation")
-	ErrNoMessage     = errors.New("no such system message")
-	ErrNoEdit        = errors.New("no such unused edit")
-	ErrBusy          = errors.New("a reply is already in progress")
-	ErrNothingToSend = errors.New("the model has already replied to everything in this conversation")
-	ErrAwaiting      = errors.New("tool calls in this conversation are waiting for a decision")
-	ErrNoDecision    = errors.New("no such open decision")
-	ErrBadChoice     = errors.New("that choice isn't possible for this decision")
+	ErrNotFound        = errors.New("no such conversation")
+	ErrNoMessage       = errors.New("no such system message")
+	ErrNoEdit          = errors.New("no such unused edit")
+	ErrBusy            = errors.New("a reply is already in progress")
+	ErrNothingToSend   = errors.New("the model has already replied to everything in this conversation")
+	ErrAwaiting        = errors.New("tool calls in this conversation are waiting for a decision")
+	ErrNoDecision      = errors.New("no such open decision")
+	ErrBadChoice       = errors.New("that choice isn't possible for this decision")
+	ErrNothingToUpdate = errors.New("this conversation has no tools, so it has no settings to update")
 )
 
 // Config is what a Core needs.
@@ -36,15 +37,20 @@ type Config struct {
 	Model   string
 	Routing openrouter.Routing
 	Tools   []Tool // offered to new conversations
+	// Settings are what new conversations take a snapshot of.
+	Settings store.Settings
 }
 
 // Core runs conversations.
 type Core struct {
 	cfg Config
 
-	mu    sync.Mutex
-	convs map[string]*conversation
-	order []string
+	mu       sync.Mutex
+	model    string
+	routing  openrouter.Routing
+	settings store.Settings
+	convs    map[string]*conversation
+	order    []string
 }
 
 type conversation struct {
@@ -55,6 +61,7 @@ type conversation struct {
 
 	tools    store.Ref // the exact definitions it sends, if it has any
 	workdir  string    // where its tools' relative paths start
+	settings *store.Settings
 	decision *decision // what's waiting on a person, if anything
 }
 
@@ -87,7 +94,7 @@ type edit struct {
 // New rebuilds state from the record.
 func New(cfg Config) (*Core, error) {
 	for _, tool := range cfg.Tools {
-		names, err := definedNames(append(append([]byte{'['}, tool.Definition...), ']'))
+		names, err := definedNames(append(append([]byte{'['}, tool.define(cfg.Settings)...), ']'))
 		if err != nil {
 			return nil, fmt.Errorf("tool %s: %w", tool.Name, err)
 		}
@@ -95,7 +102,7 @@ func New(cfg Config) (*Core, error) {
 			return nil, fmt.Errorf("tool %s is defined with the name %q", tool.Name, names[0])
 		}
 	}
-	c := &Core{cfg: cfg, convs: map[string]*conversation{}}
+	c := &Core{cfg: cfg, convs: map[string]*conversation{}, model: cfg.Model, routing: cfg.Routing, settings: cfg.Settings}
 	err := cfg.Store.Replay(func(ev *store.Event) error {
 		if !store.Known(ev.Type) {
 			return fmt.Errorf("unknown event type %q: a newer build wrote this record, so run that build or a later one", ev.Type)
@@ -139,7 +146,7 @@ func (c *Core) record(ev *store.Event) error {
 // apply updates state from an event. The caller holds mu, or is New.
 func (c *Core) apply(ev *store.Event) {
 	if ev.Type == store.ConversationAdded {
-		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir}
+		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir, settings: ev.Settings}
 		c.order = append(c.order, ev.Conversation)
 		return
 	}
@@ -277,14 +284,16 @@ func (c *Core) NewConversationWith(opts Options) (string, error) {
 	var tools store.Ref
 	if opts.Tools {
 		var err error
-		if tools, err = c.storeDefinitions(); err != nil {
+		if tools, err = c.storeDefinitions(c.currentSettings()); err != nil {
 			return "", err
 		}
 	}
 	id := store.NewID()
 	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools}
 	if tools != "" {
+		settings := c.currentSettings()
 		event.Workdir = opts.Workdir
+		event.Settings = &settings
 	}
 	if err := c.record(event); err != nil {
 		return "", err
@@ -514,6 +523,8 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	unanswered := conv.unanswered()
 	tools := conv.tools
 	workdir := conv.workdir
+	settings := conv.effectiveSettings(c.settings)
+	model, routingChoice := c.model, c.routing
 	c.mu.Unlock()
 	if unanswered {
 		// Hosts may accept this silently, but the model would be told nothing.
@@ -531,8 +542,8 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		}
 	}
 	body, err := openrouter.Render(openrouter.Request{
-		Model:     c.cfg.Model,
-		Routing:   c.cfg.Routing,
+		Model:     model,
+		Routing:   routingChoice,
 		Messages:  messages,
 		SessionID: conv.id,
 		Tools:     definitions,
@@ -544,7 +555,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	if err != nil {
 		return err
 	}
-	routing, err := json.Marshal(c.cfg.Routing, json.Deterministic(true))
+	routing, err := json.Marshal(routingChoice, json.Deterministic(true))
 	if err != nil {
 		return err
 	}
@@ -554,7 +565,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		Conversation:   conv.id,
 		Call:           callID,
 		Context:        entries,
-		Model:          c.cfg.Model,
+		Model:          model,
 		Routing:        routing,
 		URL:            c.cfg.Client.URL,
 		Request:        request,
@@ -614,7 +625,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		}
 	}
 	if finished.Error == "" {
-		if finished.ToolCalls, err = c.storeCalls(definitions, workdir, res.ToolCalls); err != nil {
+		if finished.ToolCalls, err = c.storeCalls(definitions, workdir, settings, res.ToolCalls); err != nil {
 			return err
 		}
 	}

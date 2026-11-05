@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +35,7 @@ func site(t *testing.T) *httptest.Server {
 	}
 	s := httptest.NewServer(Handler(c, func() Defaults {
 		return Defaults{Sections: []prompt.Section{{Name: "a", Text: "the default"}}}
-	}))
+	}, noReload, []string{"framework"}))
 	t.Cleanup(s.Close)
 	return s
 }
@@ -197,7 +198,45 @@ func toolSite(t *testing.T, workdir string) *httptest.Server {
 	}
 	s := httptest.NewServer(Handler(c, func() Defaults {
 		return Defaults{Sections: []prompt.Section{{Name: "tools", For: "tools", Text: "x"}}, Workdir: workdir, Tools: true}
-	}))
+	}, noReload, []string{"framework"}))
 	t.Cleanup(s.Close)
 	return s
+}
+
+func noReload() (Reload, error) { return Reload{}, errors.New("nothing to reload") }
+
+func TestReloadReportsFailure(t *testing.T) {
+	s := site(t)
+	if got := post(t, s.URL+"/api/reload", "", http.StatusBadRequest); !strings.Contains(got, "nothing to reload") {
+		t.Errorf("reload = %s", got)
+	}
+}
+
+func TestOnlyKnownHostnamesGetIn(t *testing.T) {
+	s := site(t)
+	for host, want := range map[string]int{
+		"evil.example":       http.StatusForbidden,
+		"evil.example:8484":  http.StatusForbidden,
+		"framework.evil.com": http.StatusForbidden,
+		"framework":          http.StatusOK,
+		"FRAMEWORK:8484":     http.StatusOK,
+		"localhost:8484":     http.StatusOK,
+		"127.0.0.1:8484":     http.StatusOK,
+		"100.64.0.1":         http.StatusOK,
+		"[::1]:8484":         http.StatusOK,
+	} {
+		req, err := http.NewRequest(http.MethodGet, s.URL+"/api/conversations", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("%s: %d, want %d", host, resp.StatusCode, want)
+		}
+	}
 }

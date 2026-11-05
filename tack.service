@@ -2,12 +2,15 @@
 Description=tack
 
 [Service]
-# The default working directory for new conversations, if it exists.
-WorkingDirectory=-%h/tack
+# Empty and not writable. Nothing in tack should depend on its own working directory,
+# and conversations each name theirs, so this one is useless on purpose.
+WorkingDirectory=/var/empty
+ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=%h/.local/bin/tack
 Restart=on-failure
 RestartSec=2
-# 70 is the secret tripwire. It has to stay down until someone looks.
+# 70 is the secret tripwire, and 78 is a config or record tack can't read. Both have
+# to stay down until someone looks.
 RestartPreventExitStatus=70 78
 NoNewPrivileges=true
 

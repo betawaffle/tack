@@ -38,6 +38,7 @@ type fake struct {
 	tripwire *secret.Tripwire
 	store    *store.Store
 	tools    []Tool
+	settings store.Settings
 }
 
 func newFake(t *testing.T) *fake {
@@ -74,11 +75,12 @@ func (f *fake) open() *Core {
 	}
 	f.store = st
 	c, err := New(Config{
-		Store:   st,
-		Client:  openrouter.NewClient(f.server.URL, secret.NewKey(testKey)),
-		Model:   "test/model",
-		Routing: openrouter.Routing{Order: []string{"morph/fp8"}},
-		Tools:   f.tools,
+		Store:    st,
+		Client:   openrouter.NewClient(f.server.URL, secret.NewKey(testKey)),
+		Model:    "test/model",
+		Routing:  openrouter.Routing{Order: []string{"morph/fp8"}},
+		Tools:    f.tools,
+		Settings: f.settings,
 	})
 	if err != nil {
 		f.t.Fatal(err)

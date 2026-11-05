@@ -23,6 +23,12 @@ type Tool struct {
 	Definition jsontext.Value
 	Run        func(ctx context.Context, call Call) ([]byte, error)
 
+	// Define overrides Definition for a tool whose definition depends on settings.
+	Define func(store.Settings) jsontext.Value
+
+	// Timeout overrides the default limit on how long a call can take.
+	Timeout func(store.Settings) time.Duration
+
 	// Inspect runs when a call arrives, before any approval, on input the model
 	// chose. An error means the call can't run. Flags draw a person's attention on
 	// the approval card. It can touch metadata but mustn't open anything.
@@ -31,8 +37,29 @@ type Tool struct {
 
 // Call is what a tool gets. Arguments were parsed by parseArguments.
 type Call struct {
-	Args    map[string]jsontext.Value
-	Workdir string
+	Args     map[string]jsontext.Value
+	Workdir  string
+	Settings store.Settings
+
+	// Keep stores a block beside the output. It's nil during Inspect, which mustn't
+	// do anything but look.
+	Keep func(name string, data []byte) error
+}
+
+func (t *Tool) define(settings store.Settings) jsontext.Value {
+	if t.Define != nil {
+		return t.Define(settings)
+	}
+	return t.Definition
+}
+
+// effectiveSettings returns a conversation's snapshot, or the current settings for
+// one recorded before snapshots existed.
+func (conv *conversation) effectiveSettings(current store.Settings) store.Settings {
+	if conv.settings != nil {
+		return *conv.settings
+	}
+	return current
 }
 
 const (
@@ -135,6 +162,8 @@ func (conv *conversation) unanswered() bool { return len(conv.openCalls()) > 0 }
 
 func (conv *conversation) applyTool(ev *store.Event) {
 	switch ev.Type {
+	case store.SettingsUpdated:
+		conv.tools, conv.settings = ev.Tools, ev.Settings
 	case store.DecisionRequested:
 		conv.decision = &decision{id: ev.Decision, kind: ev.Kind, calls: ev.DecisionCalls}
 	case store.DecisionMade:
@@ -167,13 +196,13 @@ func (conv *conversation) applyTool(ev *store.Event) {
 // storeDefinitions writes the offered tools as a block. A conversation keeps
 // sending these exact bytes, so changing a tool can't alter its cached prefix or
 // what its earlier calls appear to have seen.
-func (c *Core) storeDefinitions() (store.Ref, error) {
+func (c *Core) storeDefinitions(settings store.Settings) (store.Ref, error) {
 	if len(c.cfg.Tools) == 0 {
 		return "", nil
 	}
 	definitions := make([]jsontext.Value, len(c.cfg.Tools))
 	for i, tool := range c.cfg.Tools {
-		definitions[i] = tool.Definition
+		definitions[i] = tool.define(settings)
 	}
 	data, err := json.Marshal(definitions, json.Deterministic(true))
 	if err != nil {
@@ -250,7 +279,7 @@ func definedNames(definitions []byte) ([]string, error) {
 // storeCalls records calls, judging each one once. A call has to name a tool this
 // conversation was actually offered. A call that can't run still goes to a person:
 // no automatic reply means no loop a model can spend money on.
-func (c *Core) storeCalls(definitions []byte, workdir string, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
+func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Settings, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
 	offered, err := definedNames(definitions)
 	if err != nil {
 		return nil, err
@@ -267,7 +296,7 @@ func (c *Core) storeCalls(definitions []byte, workdir string, calls []openrouter
 			stored.Invalid = fmt.Sprintf("there is no tool named %q", call.Name)
 		} else if args, err := parseArguments([]byte(call.Arguments)); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
-		} else if flags, err := inspect(tool, Call{Args: args, Workdir: workdir}); err != nil {
+		} else if flags, err := inspect(tool, Call{Args: args, Workdir: workdir, Settings: settings}); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
 		} else {
 			stored.Flags = flags
@@ -354,8 +383,17 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	start := time.Now()
 	c.mu.Lock()
 	workdir := conv.workdir
+	settings := conv.effectiveSettings(c.settings)
 	c.mu.Unlock()
-	output, failure := c.execute(call, workdir)
+	var artifacts []store.Artifact
+	output, failure := c.execute(call, workdir, settings, func(name string, data []byte) error {
+		block, err := c.cfg.Store.Put(data)
+		if err != nil {
+			return err
+		}
+		artifacts = append(artifacts, store.Artifact{Name: name, Block: block})
+		return nil
+	})
 	ref, err := c.cfg.Store.Put(output)
 	if err != nil {
 		return err
@@ -365,6 +403,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		Conversation:   conv.id,
 		ToolCall:       call.ID,
 		Output:         ref,
+		Artifacts:      artifacts,
 		DurationMillis: time.Since(start).Milliseconds(),
 	}
 	if failure != nil {
@@ -373,7 +412,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	return c.record(finished)
 }
 
-func (c *Core) execute(call *toolCall, workdir string) ([]byte, error) {
+func (c *Core) execute(call *toolCall, workdir string, settings store.Settings, keep func(string, []byte) error) ([]byte, error) {
 	tool := c.findTool(call.Name)
 	if tool == nil {
 		return nil, fmt.Errorf("there is no tool named %q", call.Name)
@@ -386,9 +425,72 @@ func (c *Core) execute(call *toolCall, workdir string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
+	// Time passes between approving a call and running it, and an earlier call in
+	// the batch may have changed things. If it no longer looks as it did on the card,
+	// the approval doesn't cover it.
+	look := Call{Args: args, Workdir: workdir, Settings: settings}
+	flags, err := inspect(tool, look)
+	if err != nil {
+		return nil, fmt.Errorf("this changed since it was approved: %w", err)
+	}
+	if !slices.Equal(flags, call.Flags) {
+		return nil, fmt.Errorf("this changed since it was approved: the card showed %q, and now it's %q", call.Flags, flags)
+	}
+	timeout := toolTimeout
+	if tool.Timeout != nil {
+		timeout = tool.Timeout(settings)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return tool.Run(ctx, Call{Args: args, Workdir: workdir})
+	look.Keep = keep
+	return tool.Run(ctx, look)
+}
+
+// Reconfigure changes what later calls and new conversations use. Conversations keep
+// their snapshot of the settings until UpdateSettings.
+func (c *Core) Reconfigure(model string, routing openrouter.Routing, settings store.Settings) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.model, c.routing, c.settings = model, routing, settings
+}
+
+func (c *Core) currentSettings() store.Settings {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.settings
+}
+
+// RecordConfig notes the settings in force.
+func (c *Core) RecordConfig(data []byte) error {
+	block, err := c.cfg.Store.Put(data)
+	if err != nil {
+		return err
+	}
+	return c.record(&store.Event{Type: store.ConfigLoaded, Config: block})
+}
+
+// UpdateSettings brings a conversation's snapshot up to date with the config. The
+// tool definitions come first in every request, so the next call misses the cache.
+func (c *Core) UpdateSettings(convID string) error {
+	conv, err := c.reserve(convID, func(conv *conversation) error {
+		if conv.decision != nil || conv.unanswered() {
+			return ErrAwaiting
+		}
+		if conv.tools == "" {
+			return ErrNothingToUpdate
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	defer c.release(conv)
+	settings := c.currentSettings()
+	tools, err := c.storeDefinitions(settings)
+	if err != nil {
+		return err
+	}
+	return c.record(&store.Event{Type: store.SettingsUpdated, Conversation: convID, Tools: tools, Settings: &settings})
 }
 
 // Decide answers the open decision. Calls not named in allow are denied, so an

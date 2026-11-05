@@ -1,5 +1,6 @@
 // Drives the start panel and the real read tools in a real browser, against the
 // real binary with a fake provider.
+const fs = require("fs");
 const { chromium } = require("playwright");
 const B = "http://127.0.0.1:18601",
   F = "http://127.0.0.1:18600";
@@ -82,7 +83,7 @@ let page;
   await idle();
   b = await bodies();
   ok(b[0].messages[0].content === "Written by hand.", "hand edit is what gets sent");
-  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files", "tools are offered");
+  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command", "tools are offered");
 
   // A bad directory is refused, and nothing is lost.
   await fresh();
@@ -128,9 +129,9 @@ let page;
   await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
   await card();
   const list = await p.locator(".tool.state-finished .tool-output .tool-text").nth(0).textContent();
-  const search = await p.locator(".tool.state-finished .tool-output .tool-text").nth(1).textContent();
+  const found = await p.locator(".tool.state-finished .tool-output .tool-text").nth(1).textContent();
   ok(list.includes("hello.txt"), "list_files works");
-  ok(search.includes("hello.txt:1:hello") && !search.includes("private.txt:"), "search_files works and skips private files");
+  ok(found.includes("hello.txt:1:hello") && !found.includes("private.txt:"), "search_files works and skips private files");
   await p.click("#decide");
   await p.waitForFunction(() => !document.querySelector(".decision-card"));
   await idle();
@@ -140,6 +141,77 @@ let page;
   await card();
   ok((await p.locator(".tool.state-waiting .tool-invalid").textContent()).includes("unexpected argument"), "wrong arguments are caught before approval");
   ok((await p.locator("input[data-choice]").count()) === 0, "and can't be approved");
+
+  // Editing and commands.
+  await fresh();
+  await reset();
+  await send("tools edit");
+  await card();
+  ok((await tool(0).locator(".tool-text").nth(1).textContent()) === "hello", "the edit shows the exact text");
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
+  await card();
+  ok(fs.readFileSync(`${WORK}/hello.txt`, "utf8") === "goodbye from the test file\n", "the file changed");
+  ok((await bodies()).length === 1, "the model hasn't heard yet");
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+
+  await reset();
+  await send("tools command");
+  await card();
+  ok((await p.locator(".tool-flag").last().textContent()) === "Runs any command", "commands carry a permanent flag");
+  await p.locator("input[data-choice]").check();
+  await p.screenshot({ path: "shots/command.png" });
+  await p.click("#decide");
+  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
+  await card();
+  const ran = await p.locator(".tool.state-finished .tool-output").textContent();
+  ok(ran.includes(WORK) && ran.includes("from-config"), "the command ran in the working directory with the configured environment");
+  ok(ran.includes("exit code 3"), "the exit code is shown");
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForFunction(() => !document.querySelector(".decision-card"), null, { timeout: 15000 });
+  await idle();
+
+  // Reloading the config.
+  const originalConfig = fs.readFileSync(process.env.TACK_TEST_CONFIG, "utf8");
+  ok((await p.locator(".settings-changed").count()) === 0, "no notice while nothing has changed");
+  fs.writeFileSync(process.env.TACK_TEST_CONFIG, "{ not json");
+  await p.click("#reload");
+  await p.waitForSelector("#reload-note.bad");
+  ok((await p.locator("#reload-note").textContent()).includes("nothing changed"), "a bad config is reported and changes nothing");
+  fs.writeFileSync(process.env.TACK_TEST_CONFIG, JSON.stringify({ ...JSON.parse(originalConfig), search_skip: ["hidden-dir"], url: "http://127.0.0.1:1/elsewhere" }));
+  await p.click("#reload");
+  await p.waitForFunction(() => document.getElementById("reload-note").textContent.startsWith("Reloaded"));
+  ok((await p.locator("#reload-note").textContent()).includes("url"), "startup settings are reported as needing a restart");
+  await p.waitForSelector(".settings-changed");
+  await p.screenshot({ path: "shots/settings-changed.png" });
+  await reset();
+  await send("short after a reload");
+  await idle();
+  await p.waitForSelector(".prose:has-text('A short reply')");
+  b = await bodies();
+  const search = (body) => body.tools.find((t) => t.function.name === "search_files").function.description;
+  ok(search(b[0]).includes(".git") && !search(b[0]).includes("hidden-dir"), "an open conversation keeps its snapshot");
+  ok(b.length === 1, "the new URL wasn't used: replies still come from the fake provider");
+  await reset();
+  await p.locator(".settings-changed button").click();
+  await p.waitForFunction(() => !document.querySelector(".settings-changed"));
+  await send("short once more");
+  await p.waitForFunction(() => document.querySelectorAll(".assistant > .prose").length > 0);
+  await idle();
+  b = await bodies();
+  ok(search(b[0]).includes("hidden-dir"), "updating uses the new settings");
+  await fresh();
+  await reset();
+  await send("short in a new one");
+  await p.waitForSelector(".ledger", { timeout: 15000 });
+  await idle();
+  b = await bodies();
+  ok(search(b[0]).includes("hidden-dir"), "new conversations use the new settings");
+  fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
 
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
   await br.close();

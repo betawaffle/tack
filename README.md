@@ -1,7 +1,8 @@
 # tack
 
 A coding agent harness. For now it's a browser chat with one model, through
-[OpenRouter](https://openrouter.ai), that records everything. It has no tools.
+[OpenRouter](https://openrouter.ai), that records everything. Its tools can read and
+edit files and run commands, and every call needs your approval.
 
 The code is written by Claude and hasn't had human code review, so commits are
 authored by Claude.
@@ -21,8 +22,45 @@ systemctl --user enable --now tack
 To update it, rebuild and run `systemctl --user restart tack`. Logs are in
 `journalctl --user -u tack`.
 
-It serves port 8484 on all interfaces with **no authentication**, so only run it
-on a network you trust. See `tack -help` for options.
+It serves port 8484 on all interfaces with **no authentication**, and anyone who can
+reach it can approve commands that run as you. Only run it on a network you trust,
+and use a firewall if some of that network isn't. Browsers only get in by IP
+address, `localhost`, the machine's hostname or a name in `allowed_hosts`, which
+stops other websites reaching it through DNS rebinding.
+
+The service runs from `/var/empty` on purpose. tack never uses its own working
+directory for anything: conversations each name theirs, and relative paths in the
+config are refused.
+
+## Config
+
+Settings live in `~/.config/tack/config.json`, or wherever `-config` says. Every
+setting is optional, and an unknown one is an error:
+
+| Setting | Default | |
+|---|---|---|
+| `addr` | `0.0.0.0:8484` | Needs a restart |
+| `data` | `~/.local/share/tack` | Needs a restart |
+| `key` | `~/.config/tack/openrouter-key` | Needs a restart |
+| `url` | OpenRouter | Needs a restart. The key is sent here |
+| `allowed_hosts` | none | Needs a restart. Extra hostnames the page can be reached by |
+| `model` | `deepseek/deepseek-v4.1-flash-1017` | Used by the next call in any conversation |
+| `host` | `morph/fp8` | Used by the next call in any conversation |
+| `prompts` | `~/.config/tack/prompt` | Used by new conversations |
+| `default_workdir` | none | Fills in the field for new conversations |
+| `search_skip` | `.git`, `node_modules` | Copied into each new conversation |
+| `command_env` | a basic `PATH`, `HOME` and `LANG` | Copied in. It's the whole environment for `run_command` |
+| `command_timeout_seconds` | `120` | Copied in |
+
+Paths have to be absolute. To apply changes, press **Reload config** in the page,
+which tells you if the file has a problem and leaves the running settings alone if
+so. `systemctl --user reload tack` does the same but only reports to the log. A
+bad file at startup exits with code 78.
+
+A conversation keeps its own copy of the settings marked "copied", because some of
+them are part of its tool definitions, and changing those misses the whole cache.
+When they differ from the config, the page offers to update it. Each load of the
+config is recorded, so the record shows what applied when.
 
 ## System messages
 
@@ -51,9 +89,14 @@ edit that text by hand, it's sent as written.
 
 ## Tool calls
 
-New conversations can offer `read_file`, `list_files` and `search_files`, starting
-from a working directory you choose. There's no sandbox yet: the limit on them is
-you reading each call.
+New conversations can offer `read_file`, `list_files`, `search_files`, `edit_file`
+and `run_command`, starting from a working directory you choose. There's no sandbox
+yet: the limit on them is you reading each call. Commands run in that directory with
+only the configured environment and no input, and are killed with their process group
+on timeout, though a child that starts its own session can escape that.
+
+A command that prints a known secret trips the tripwire: tack stops, and the key
+needs rotating. An edit keeps the file's previous contents in the record.
 
 When a model asks for tool calls, they wait for a decision, and the wait survives
 restarts. Whatever isn't ticked is denied, and the model is told so in wording you
@@ -62,10 +105,12 @@ before the model sees any of it. A call that was interrupted is never run again
 without asking.
 
 Approval cards flag paths outside the working directory and files that aren't
-world-readable. A flag means look here, and no flag doesn't mean safe. The key file
+world-readable, and every `run_command` carries a permanent flag. A flag means look
+here, and no flag doesn't mean safe. If what a card showed has changed by the time a
+call would run, it doesn't run. The key file
 is refused however it's reached, and isn't even offered for approval. `search_files`
 skips anything not world-readable, since nobody approves its files one by one, plus
-the directories named by `-search-skip`.
+the directories named by `search_skip`.
 
 Arguments and output are stored as blocks, not in event lines. A conversation
 keeps sending the tool definitions it started with, byte for byte.
@@ -80,7 +125,7 @@ need Node: `node --test internal/web/`.
 There are also optional browser tests in `test/browser/`. Nothing else depends
 on them, and they're the only part of tack that uses npm. They drive every
 control of the page in headless Chromium, against a fake provider with a fake
-key and a temporary data directory. Tool approvals use a small test server with
+key, a temporary data directory and a temporary config. Tool approvals use a small test server with
 tools of its own, in `test/browser/toolserver`:
 
 ```

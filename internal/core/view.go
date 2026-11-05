@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json/v2"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -90,7 +91,9 @@ type Conversation struct {
 	CanReply bool   `json:"can_reply"`
 	Tools    bool   `json:"tools,omitzero"`
 	Workdir  string `json:"workdir,omitzero"`
-	Items    []Item `json:"items"`
+	// SettingsChanged says the config differs from this conversation's snapshot.
+	SettingsChanged bool   `json:"settings_changed,omitzero"`
+	Items           []Item `json:"items"`
 
 	Decision *DecisionView `json:"decision,omitzero"`
 }
@@ -146,8 +149,11 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Model: c.cfg.Model, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
-	if order := c.cfg.Routing.Order; len(order) > 0 {
+	out := Conversation{ID: id, Model: c.model, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
+	if conv.tools != "" && conv.settings != nil && !reflect.DeepEqual(*conv.settings, c.settings) {
+		out.SettingsChanged = true
+	}
+	if order := c.routing.Order; len(order) > 0 {
 		out.Host = order[0]
 	}
 	if d := conv.decision; d != nil {
