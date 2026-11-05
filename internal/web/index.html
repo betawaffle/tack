@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tack</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: light-dark(#fbfbfa, #15161a);
+    --panel: light-dark(#f1f0ed, #1d1f24);
+    --line: light-dark(#dcdad4, #2e3138);
+    --text: light-dark(#1d1d1b, #e6e6e3);
+    --muted: light-dark(#6b6a65, #94959b);
+    --accent: light-dark(#2f5fb3, #86aef0);
+    --user: light-dark(#e6ecf7, #232c3d);
+    --warn: light-dark(#94400f, #eda76d);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  aside {
+    width: 260px; flex: none; display: flex; flex-direction: column; gap: 8px;
+    padding: 12px; background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto;
+  }
+  aside h1 { font-size: 15px; margin: 0; padding: 4px 8px; }
+  #conversations { display: flex; flex-direction: column; gap: 2px; }
+  #conversations button {
+    all: unset; cursor: pointer; display: block; padding: 6px 8px; border-radius: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text);
+  }
+  #conversations button:hover { background: var(--line); }
+  #conversations button:focus-visible { outline: 2px solid var(--accent); }
+  #conversations button[aria-current="true"] { background: var(--line); font-weight: 600; }
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #items { flex: 1; overflow-y: auto; padding: 16px; }
+  .inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+  .item { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 10px; background: var(--user); }
+  .notice { color: var(--warn); font-size: 14px; }
+  .stats { color: var(--muted); font-size: 12px; margin-top: 4px; white-space: normal; }
+  details { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  summary { cursor: pointer; }
+  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+  form .inner { flex-direction: row; flex: 1; width: 100%; gap: 8px; }
+  textarea {
+    flex: 1; min-width: 0; resize: vertical; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: inherit; font: inherit;
+  }
+  button.action {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: inherit; font: inherit; cursor: pointer;
+  }
+  button.action:disabled { opacity: .5; cursor: default; }
+  @media (max-width: 640px) {
+    body { flex-direction: column; }
+    aside { width: auto; max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    main { min-height: 0; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>tack</h1>
+  <button class="action" id="new" type="button">New conversation</button>
+  <nav id="conversations"></nav>
+</aside>
+<main>
+  <div id="items"><div class="inner" id="list"></div></div>
+  <form id="form">
+    <div class="inner">
+      <textarea id="input" rows="3" placeholder="Message" aria-label="Message"></textarea>
+      <button class="action" id="send" type="submit">Send</button>
+    </div>
+  </form>
+</main>
+<script>
+// Everything from the server goes through textContent. Model output is never
+// treated as markup.
+const $ = (id) => document.getElementById(id);
+let current = null;
+let streaming = false;
+let pollTimer = null;
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+  return res;
+}
+
+function statsLine(s) {
+  const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
+  const parts = [];
+  if (s.host) parts.push(s.host);
+  parts.push(`${s.prompt_tokens} in (${s.cached_tokens} cached)`);
+  parts.push(`${s.completion_tokens} out (${s.reasoning_tokens} reasoning)`);
+  parts.push("$" + s.cost_usd.toFixed(6));
+  parts.push(`first token ${seconds(s.ttft_ms)}`, `total ${seconds(s.duration_ms)}`);
+  return parts.join(" · ");
+}
+
+function replyNode() {
+  const node = el("div", "item assistant");
+  const details = el("details");
+  details.hidden = true;
+  details.append(el("summary", "", "Reasoning"));
+  const reasoning = el("div");
+  details.append(reasoning);
+  const text = el("div");
+  node.append(details, text);
+  return { node, details, reasoning, text };
+}
+
+function renderItem(item) {
+  if (item.role !== "assistant") {
+    return el("div", `item ${item.role}`, item.text);
+  }
+  const r = replyNode();
+  r.text.textContent = item.text;
+  if (item.reasoning) {
+    r.reasoning.textContent = item.reasoning;
+    r.details.hidden = false;
+  }
+  if (item.stats) r.node.append(el("div", "stats", statsLine(item.stats)));
+  return r.node;
+}
+
+function nearBottom() {
+  const box = $("items");
+  return box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+}
+
+function scrollDown() {
+  const box = $("items");
+  box.scrollTop = box.scrollHeight;
+}
+
+async function refreshList() {
+  const res = await api("/api/conversations");
+  const summaries = await res.json();
+  $("conversations").replaceChildren(...summaries.map((s) => {
+    const b = el("button", "", (s.busy ? "… " : "") + (s.preview || "New conversation"));
+    b.type = "button";
+    b.setAttribute("aria-current", String(s.id === current));
+    b.addEventListener("click", () => open(s.id));
+    return b;
+  }));
+}
+
+function setBusy(busy) {
+  $("send").disabled = busy;
+}
+
+async function show(id) {
+  clearTimeout(pollTimer);
+  const res = await api(`/api/conversations/${id}`);
+  const conv = await res.json();
+  if (id !== current) return;
+  $("list").replaceChildren(...conv.items.map(renderItem));
+  if (conv.busy) {
+    // A reply started before this page loaded. Its text arrives when it's done.
+    $("list").append(el("div", "notice", "A reply is in progress…"));
+    pollTimer = setTimeout(() => show(id).catch(reportError), 2000);
+  }
+  setBusy(conv.busy);
+  scrollDown();
+}
+
+async function open(id) {
+  current = id;
+  location.hash = id;
+  await refreshList();
+  await show(id);
+  $("input").focus();
+}
+
+function reportError(err) {
+  $("list").append(el("div", "item notice", String(err.message || err)));
+  scrollDown();
+}
+
+async function send(text) {
+  if (!current) {
+    const res = await api("/api/conversations", { method: "POST" });
+    current = (await res.json()).id;
+    location.hash = current;
+  }
+  const id = current;
+  $("list").append(el("div", "item user", text));
+  const reply = replyNode();
+  $("list").append(reply.node);
+  scrollDown();
+
+  const res = await api(`/api/conversations/${id}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  refreshList().catch(() => {});
+
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffered += value;
+    const lines = buffered.split("\n");
+    buffered = lines.pop();
+    for (const line of lines) {
+      if (!line || id !== current) continue;
+      const update = JSON.parse(line);
+      const follow = nearBottom();
+      if (update.kind === "content") reply.text.textContent += update.text;
+      if (update.kind === "reasoning") {
+        reply.details.hidden = false;
+        reply.reasoning.textContent += update.text;
+      }
+      if (follow) scrollDown();
+    }
+  }
+}
+
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = $("input").value;
+  if (!text.trim() || streaming) return;
+  streaming = true;
+  setBusy(true);
+  $("input").value = "";
+  try {
+    await send(text);
+  } catch (err) {
+    reportError(err);
+  } finally {
+    streaming = false;
+    setBusy(false);
+  }
+  // The record is the truth. Redraw from it now that the call is finished.
+  if (current) {
+    await show(current).catch(reportError);
+    await refreshList().catch(reportError);
+  }
+});
+
+$("input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    $("form").requestSubmit();
+  }
+});
+
+$("new").addEventListener("click", () => {
+  current = null;
+  clearTimeout(pollTimer);
+  history.replaceState(null, "", location.pathname);
+  $("list").replaceChildren();
+  setBusy(false);
+  refreshList().catch(reportError);
+  $("input").focus();
+});
+
+(async () => {
+  const id = location.hash.slice(1);
+  if (id) {
+    await open(id).catch(() => {
+      current = null;
+      return refreshList();
+    });
+  } else {
+    await refreshList();
+  }
+  $("input").focus();
+})().catch(reportError);
+</script>
+</body>
+</html>
