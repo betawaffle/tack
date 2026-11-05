@@ -12,7 +12,7 @@ import (
 	"github.com/betawaffle/tack/internal/core"
 )
 
-//go:embed static/index.html static/style.css static/app.js static/markdown.js
+//go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js
 var static embed.FS
 
 const maxMessageBytes = 8 << 20

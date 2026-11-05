@@ -9,8 +9,10 @@ let current = null;
 // detaches the page from the stream, and the call carries on regardless.
 let streaming = null;
 let pollTimer = null;
-// Which messages the viewer has unfolded or switched to raw, kept across redraws.
+// Which system messages the viewer has unfolded, kept across redraws.
 const unfolded = new Set();
+// How the viewer has chosen to see each piece of text, kept across redraws.
+const views = new Map();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -209,7 +211,7 @@ const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
 const count = (n) => n.toLocaleString("en-US");
 const dollars = (n) => "$" + n.toFixed(n >= 0.01 ? 4 : 6);
 
-function ledger(s, text, key, onToggleRaw) {
+function ledger(s, controls) {
   const row = el("div", "ledger");
   if (s.host) row.append(el("span", "", s.host));
   const cache = el("span", "cache");
@@ -225,14 +227,7 @@ function ledger(s, text, key, onToggleRaw) {
   row.append(out, el("span", "", dollars(s.cost_usd)));
   const time = el("span", "", `${seconds(s.ttft_ms)} first, ${seconds(s.duration_ms)} total`);
   row.append(time);
-  if (text) {
-    const actions = el("span", "ledger-actions");
-    actions.append(
-      copyButton("Copy", () => text),
-      button(unfolded.has(key) ? "Formatted" : "Raw", "mini", onToggleRaw),
-    );
-    row.append(actions);
-  }
+  if (controls) row.append(controls);
   return row;
 }
 
@@ -241,7 +236,7 @@ function replyNode() {
   const thinking = el("details", "thinking");
   thinking.hidden = true;
   thinking.append(el("summary", "", "Reasoning"));
-  const reasoning = el("div", "thinking-text");
+  const reasoning = el("div", "thinking-text prose");
   thinking.append(reasoning);
   const text = el("div", "prose");
   node.append(thinking, text);
@@ -250,23 +245,63 @@ function replyNode() {
 
 function renderReply(item, key, decision) {
   const r = replyNode();
-  const showRaw = unfolded.has(key);
-  if (showRaw) r.text.replaceChildren(el("pre", "raw", item.text));
-  else setMarkdown(r.text, item.text);
+  const controls = item.text ? viewed(`${key}-text`, item.text, ["markdown", "raw", "json"], r.text, "raw") : null;
   if (item.reasoning) {
-    r.reasoning.textContent = item.reasoning;
+    const row = el("div", "view-row");
+    row.append(viewed(`${key}-reasoning`, item.reasoning, ["markdown", "raw", "json"], r.reasoning, "raw"));
+    r.reasoning.before(row);
     r.thinking.hidden = false;
   }
   if (!item.text) r.text.hidden = true;
   for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
-  if (item.stats) {
-    r.node.append(ledger(item.stats, item.text, key, () => {
-      if (unfolded.has(key)) unfolded.delete(key);
-      else unfolded.add(key);
-      r.node.replaceWith(renderReply(item, key, decision));
-    }));
-  }
+  if (item.stats) r.node.append(ledger(item.stats, controls));
   return r.node;
+}
+
+// Ways of showing text.
+
+const VIEW_LABELS = { markdown: "Markdown", raw: "Raw", json: "JSON" };
+
+function jsonNode(tokens) {
+  const pre = el("pre", "json");
+  for (const token of tokens) {
+    if (token.type === "space") pre.append(token.text);
+    else {
+      const span = el("span", `j-${token.type}`);
+      appendExact(span, token.text);
+      pre.append(span);
+    }
+  }
+  return pre;
+}
+
+// viewed shows text in body and returns its controls: Copy, plus a button for each
+// way of showing it. JSON is offered only for valid JSON. Switching redraws only
+// the body, so it can't disturb anything else on the page, like a ticked box.
+function viewed(key, text, modes, body, rawClass) {
+  const tokens = modes.includes("json") ? tackJSON.tokens(text) : null;
+  const available = modes.filter((mode) => mode !== "json" || tokens);
+  const controls = el("span", "ledger-actions");
+  const buttons = new Map();
+  const paint = () => {
+    const stored = views.get(key);
+    const mode = available.includes(stored) ? stored : available[0];
+    if (mode === "markdown") setMarkdown(body, text);
+    else if (mode === "json") body.replaceChildren(jsonNode(tokens));
+    else body.replaceChildren(exact(text, rawClass));
+    for (const [name, b] of buttons) b.setAttribute("aria-pressed", String(name === mode));
+  };
+  controls.append(copyButton("Copy", () => text));
+  for (const mode of available) {
+    const b = button(VIEW_LABELS[mode], "mini view", () => {
+      views.set(key, mode);
+      paint();
+    });
+    buttons.set(mode, b);
+    controls.append(b);
+  }
+  paint();
+  return controls;
 }
 
 // Tool calls.
@@ -278,15 +313,19 @@ const HIDDEN = /(?![\t\n])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 // original bytes, because the copy buttons don't read from this.
 function exact(text, className) {
   const pre = el("pre", className || "tool-text");
+  appendExact(pre, text);
+  return pre;
+}
+
+function appendExact(node, text) {
   let at = 0;
   for (const match of text.matchAll(HIDDEN)) {
-    pre.append(text.slice(at, match.index));
+    node.append(text.slice(at, match.index));
     const code = match[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
-    pre.append(el("span", "ctrl", `U+${code}`));
+    node.append(el("span", "ctrl", `U+${code}`));
     at = match.index + match[0].length;
   }
-  pre.append(text.slice(at));
-  return pre;
+  node.append(text.slice(at));
 }
 
 function argumentRows(call) {
@@ -335,10 +374,10 @@ function renderToolCall(call, decision) {
   if (call.has_output) {
     const output = el("details", "tool-output");
     output.open = call.state === "finished";
-    const summary = el("summary", "", `Output, ${count(new TextEncoder().encode(call.output).length)} bytes`);
-    const copy = copyButton("Copy", () => call.output);
-    summary.append(copy);
-    output.append(summary, exact(call.output));
+    const body = el("div");
+    const row = el("div", "view-row");
+    row.append(viewed(`output-${call.id}`, call.output, ["raw", "markdown", "json"], body, "tool-text"));
+    output.append(el("summary", "", `Output, ${count(new TextEncoder().encode(call.output).length)} bytes`), row, body);
     if (call.error) output.append(el("div", "tool-invalid", `The tool reported an error: ${call.error}`));
     node.append(output);
   }
@@ -592,7 +631,10 @@ function closeDrawer() {
 }
 
 async function open(id) {
-  if (id !== current) unfolded.clear();
+  if (id !== current) {
+    unfolded.clear();
+    views.clear();
+  }
   streaming = null;
   current = id;
   location.hash = id;
@@ -605,6 +647,7 @@ async function open(id) {
 
 async function startNew() {
   unfolded.clear();
+  views.clear();
   streaming = null;
   current = null;
   clearTimeout(pollTimer);
@@ -631,12 +674,21 @@ async function consume(res, id, reply) {
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffered = "";
   let text = "";
+  let reasoning = "";
   let scheduled = false;
   const draw = () => {
     scheduled = false;
     const follow = nearBottom();
     setMarkdown(reply.text, text);
+    setMarkdown(reply.reasoning, reasoning);
+    reply.reasoning.scrollTop = reply.reasoning.scrollHeight;
     if (follow) scrollDown();
+  };
+  const schedule = () => {
+    if (!scheduled) {
+      scheduled = true;
+      requestAnimationFrame(draw);
+    }
   };
   for (;;) {
     const { value, done } = await reader.read();
@@ -651,18 +703,13 @@ async function consume(res, id, reply) {
       if (update.kind === "content") {
         text += update.text;
         if (!reply.thinking.hidden) reply.thinking.open = false;
-        if (!scheduled) {
-          scheduled = true;
-          requestAnimationFrame(draw);
-        }
+        schedule();
       }
       if (update.kind === "reasoning") {
-        const follow = nearBottom();
+        reasoning += update.text;
         reply.thinking.hidden = false;
         reply.thinking.open = true;
-        reply.reasoning.textContent += update.text;
-        reply.reasoning.scrollTop = reply.reasoning.scrollHeight;
-        if (follow) scrollDown();
+        schedule();
       }
     }
   }

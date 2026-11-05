@@ -6,7 +6,7 @@ ExecStart=%h/.local/bin/tack
 Restart=on-failure
 RestartSec=2
 # 70 is the secret tripwire. It has to stay down until someone looks.
-RestartPreventExitStatus=70
+RestartPreventExitStatus=70 78
 NoNewPrivileges=true
 
 [Install]

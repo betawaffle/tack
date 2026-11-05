@@ -171,8 +171,10 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .thinking summary:hover { color: var(--text); }
 .thinking-text {
   margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--line);
-  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto;
+  overflow-wrap: anywhere; max-height: 340px; overflow-y: auto;
 }
+.thinking-text.prose { color: inherit; font: inherit; }
+.view-row .ledger-actions { margin-left: 0; font: 11.5px/1.5 var(--mono); }
 
 /* The ledger under each reply */
 .ledger {
@@ -209,6 +211,17 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .system-body.is-removed { color: var(--muted); font-style: italic; }
 .pending { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); }
 .pending-body { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mini.view[aria-pressed="true"] { color: var(--on-brass); background: var(--brass); border-color: var(--brass); }
+.view-row { display: flex; margin: 4px 0; }
+.json {
+  margin: 4px 0 0; padding: 6px 8px; max-height: 480px; overflow: auto; background: var(--code);
+  border-radius: 6px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.j-key { color: var(--brass); }
+.j-string { color: var(--link); }
+.j-number, .j-literal { color: var(--warn); }
+.j-punct { color: var(--muted); }
+
 /* Tool calls */
 .tool {
   margin: 8px 0; padding: 9px 11px; background: var(--surface);

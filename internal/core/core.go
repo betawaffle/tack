@@ -91,6 +91,9 @@ type edit struct {
 func New(cfg Config) (*Core, error) {
 	c := &Core{cfg: cfg, convs: map[string]*conversation{}}
 	err := cfg.Store.Replay(func(ev *store.Event) error {
+		if !store.Known(ev.Type) {
+			return fmt.Errorf("unknown event type %q: a newer build wrote this record, so run that build or a later one", ev.Type)
+		}
 		c.apply(ev)
 		return nil
 	}, func(file string, line int) {
@@ -99,14 +102,20 @@ func New(cfg Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A stop can fall anywhere in a tool turn. Whatever it left has to go through
-	// a person, and the wait is recorded before anything else happens.
+	return c, nil
+}
+
+// Recover deals with whatever a stop left behind. It can fall anywhere in a tool
+// turn, and anything unfinished has to go through a person. It's separate from New
+// so that reading the record writes nothing, and a build that can't read it leaves
+// no trace.
+func (c *Core) Recover() error {
 	for _, id := range c.order {
 		if _, err := c.ensureDecision(c.convs[id]); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return c, nil
+	return nil
 }
 
 // record writes an event and applies it. The lock covers both, so live state
@@ -121,8 +130,7 @@ func (c *Core) record(ev *store.Event) error {
 	return nil
 }
 
-// apply updates state from an event. The caller holds mu, or is New. Event
-// types it doesn't know are ignored, so old binaries can read newer records.
+// apply updates state from an event. The caller holds mu, or is New.
 func (c *Core) apply(ev *store.Event) {
 	if ev.Type == store.ConversationAdded {
 		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools}

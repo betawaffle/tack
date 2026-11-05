@@ -43,6 +43,7 @@ const TOOL_CALLS = {
   bad: [["echo", '{"text":"cut off'], ["nothing", "{}"]],
   hidden: [["echo", JSON.stringify({ text: "safe\u202eevil\u0007 <img src=x onerror=\"window.__pwned=1\">\u{E0041}\nline two" })]],
   boom: [["boom", "{}"]],
+  json: [["json", "{}"]],
 };
 let bodies = [];
 http
@@ -89,6 +90,8 @@ http
       let text = RICH;
       if (final.role === "tool") text = "Done with tools.";
     else if (/^xss/.test(last)) text = XSS;
+    else if (/^jsonreply/.test(last)) text = '{"big":12345678901234567890,"ok":true}';
+    else if (/^notmd/.test(last)) text = "a *b* c";
       else if (/^long/.test(last)) text = LONG;
       else if (/^short|^fail|^slow/.test(last)) text = "A short reply.";
       else if (/respond|Speak/.test(last)) text = "Speaking out of turn.";
@@ -96,7 +99,7 @@ http
       send({
         id: "g",
         provider: "FakeHost",
-        choices: [{ delta: { reasoning: "Let me think about this for a moment. " } }],
+        choices: [{ delta: { reasoning: "Let me think about this for a **moment**. " } }],
       });
       if (slow) await new Promise((r) => setTimeout(r, 2500));
       for (let i = 0; i < text.length; i += 40) {

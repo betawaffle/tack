@@ -19,6 +19,11 @@ import (
 	"github.com/betawaffle/tack/internal/web"
 )
 
+// exitUnreadableRecord is EX_CONFIG: tack can't read its record, such as one
+// written by a newer build, and that needs a person. tack.service lists it in
+// RestartPreventExitStatus.
+const exitUnreadableRecord = 78
+
 func main() {
 	addr := flag.String("addr", "0.0.0.0:8484", "address to listen on")
 	dataDir := flag.String("data", defaultPath("XDG_DATA_HOME", ".local/share", "tack"), "data directory")
@@ -37,11 +42,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// First, because starting up can record events, and those belong to this build.
-	err = st.Append(&store.Event{Type: store.TackStarted, Version: version(), PID: os.Getpid()})
-	if err != nil {
-		log.Fatal(err)
-	}
 	c, err := core.New(core.Config{
 		Store:   st,
 		Client:  openrouter.NewClient(*url, key),
@@ -49,6 +49,17 @@ func main() {
 		Routing: openrouter.Routing{Order: []string{*host}, AllowFallbacks: false},
 	})
 	if err != nil {
+		// Restarting can't help, so this exit code tells systemd not to try.
+		log.Print(err)
+		os.Exit(exitUnreadableRecord)
+	}
+	// After reading the record, so a build that can't read it writes nothing, and
+	// before recovering, because recovery's events belong to this build.
+	err = st.Append(&store.Event{Type: store.TackStarted, Version: version(), PID: os.Getpid()})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := c.Recover(); err != nil {
 		log.Fatal(err)
 	}
 

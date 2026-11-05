@@ -70,7 +70,7 @@ const msgs = (b) => JSON.parse(b).messages;
     "code keeps tabs",
   );
   ok(
-    (await p.locator(".prose").first().textContent()).includes("snake_case_name"),
+    (await p.locator(".assistant > .prose").first().textContent()).includes("snake_case_name"),
     "snake_case left alone",
   );
   ok((await p.locator(".prose li.task input").count()) === 2, "task list");
@@ -103,8 +103,22 @@ const msgs = (b) => JSON.parse(b).messages;
       (await p.locator("pre.raw").textContent()).includes("**tour**"),
     "raw view shows source",
   );
-  await p.locator(".ledger button", { hasText: "Formatted" }).click();
-  ok((await p.locator("pre.raw").count()) === 0, "formatted view returns");
+  await p.locator(".ledger button", { hasText: "Markdown" }).click();
+  ok((await p.locator("pre.raw").count()) === 0, "markdown view returns");
+  ok((await p.locator(".ledger button", { hasText: "JSON" }).count()) === 0, "no JSON view for text that isn't JSON");
+  ok(
+    (await p.locator(".thinking-text strong", { hasText: "moment" }).count()) === 1,
+    "reasoning renders as markdown",
+  );
+  await p.locator(".thinking summary").click();
+  await p.locator(".thinking button", { hasText: "Raw" }).click();
+  ok(
+    (await p.locator(".thinking-text pre.raw").textContent()).includes("**moment**"),
+    "reasoning has its own raw view",
+  );
+  ok((await p.locator(".assistant > .prose h2").count()) === 1, "the reply's view stays as it was");
+  await p.locator(".thinking button", { hasText: "Markdown" }).click();
+  await p.locator(".thinking summary").click();
   await p.locator(".codeblock button").click();
   ok(
     await p
@@ -132,6 +146,27 @@ const msgs = (b) => JSON.parse(b).messages;
   ok((await last.locator('a[href^="javascript"]').count()) === 0, "no javascript link");
   ok((await last.textContent()).includes("<script>"), "html shown as text");
   ok((await last.locator("a", { hasText: "Image:" }).count()) === 1, "image is only a link");
+
+  // JSON and raw views
+  await send("jsonreply please");
+  await idle();
+  const jsonLedger = p.locator(".ledger").last();
+  ok((await jsonLedger.locator("button", { hasText: "JSON" }).count()) === 1, "JSON view offered for valid JSON");
+  await jsonLedger.locator("button", { hasText: "JSON" }).click();
+  const pretty = await p.locator(".assistant > .prose .json").textContent();
+  ok(pretty === '{\n  "big": 12345678901234567890,\n  "ok": true\n}', "JSON is indented and numbers stay exact");
+  await p.evaluate(() => window.scrollTo(0, 0));
+  await send("notmd please");
+  await idle();
+  ok(
+    (await p.locator(".assistant > .prose .json").count()) === 1,
+    "the chosen view survives a redraw",
+  );
+  await p.locator(".ledger").last().locator("button", { hasText: "Raw" }).click();
+  ok(
+    (await p.locator(".assistant > .prose").last().textContent()) === "a *b* c",
+    "markdown can be turned off for one message",
+  );
 
   // System messages
   await fetch(F + "/reset");
@@ -378,7 +413,7 @@ const msgs = (b) => JSON.parse(b).messages;
   });
   const lp = await light.newPage();
   await lp.goto(url);
-  await lp.waitForSelector(".prose");
+  await lp.waitForSelector(".assistant > .prose");
   await lp.evaluate(() => {
     document.getElementById("items").scrollTop = 0;
   });
@@ -395,7 +430,7 @@ const msgs = (b) => JSON.parse(b).messages;
   const merr = [];
   mp.on("pageerror", (e) => merr.push(e.message));
   await mp.goto(url);
-  await mp.waitForSelector(".prose");
+  await mp.waitForSelector(".assistant > .prose");
   for (const sel of ["html", "body", "main"]) {
     const over = await mp.evaluate((s) => {
       const e = document.querySelector(s);

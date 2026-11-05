@@ -94,7 +94,7 @@ const reset = () => fetch(F + "/reset");
   ok(m[m.length - 2].content === "Not that one.", "denied call gets your wording");
   ok(m[m.length - 1].content === "echoed second", "released output reaches the model");
   ok(m[m.length - 2].tool_call_id === asst.tool_calls[0].id, "results match their calls");
-  ok(JSON.stringify(b[0].tools) === JSON.stringify(b[1].tools) && b[0].tools.length === 2, "same tool definitions sent");
+  ok(JSON.stringify(b[0].tools) === JSON.stringify(b[1].tools) && b[0].tools.length === 3, "same tool definitions sent");
   ok((await p.locator(".decision-card").count()) === 0, "card gone afterwards");
   ok(!(await p.isDisabled("#send")), "send works again");
   await p.screenshot({ path: "shots/tools-done.png" });
@@ -158,6 +158,28 @@ const reset = () => fetch(F + "/reset");
   await finished();
   b = await bodies();
   ok(b[1].messages[b[1].messages.length - 1].content.includes("it broke"), "error reaches the model");
+
+  // Views of tool output don't disturb a decision.
+  await reset();
+  await p.click("#new");
+  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await send("tools json");
+  await card();
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
+  await card();
+  await p.locator("input[data-choice]").check();
+  ok((await p.locator(".tool-output .tool-text").count()) === 1, "tool output starts raw");
+  await p.locator(".tool-output button", { hasText: "JSON" }).click();
+  const shown = await p.locator(".tool-output .json").textContent();
+  ok(shown.includes("12345678901234567890") && shown.includes('\n  "empty": {},'), "tool output has a JSON view");
+  ok((await p.locator(".tool-output .json .ctrl").count()) === 0, "escaped characters stay escaped");
+  ok(await p.locator("input[data-choice]").isChecked(), "switching views keeps the tick");
+  ok((await p.locator("#decide").textContent()) === "Send 1", "and the button stays right");
+  await p.screenshot({ path: "shots/tools-json.png" });
+  await p.click("#decide");
+  await finished();
 
   // Phone.
   const url = p.url();

@@ -95,5 +95,6 @@ Anything else, including what the UI shows, is derived from this and can be
 rebuilt.
 
 Only one tack can use a data directory at a time, and a second one refuses to
-start. Keep the directory on a local disk: the lock and tack's assumptions about
+start. tack also refuses to start if it can't read the record, such as one written
+by a newer build, and exits with code 78 so that systemd doesn't keep retrying. Keep the directory on a local disk: the lock and tack's assumptions about
 appends aren't safe on network storage. Reading the files while tack runs is fine.

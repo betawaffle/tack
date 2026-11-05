@@ -97,6 +97,18 @@ const (
 	ToolFinished      = "tool_finished"
 )
 
+// Known reports whether this build understands an event type. A record with a type
+// it doesn't know was written by a newer build, and reading it anyway could mean
+// getting history wrong, such as not knowing a tool call was already decided.
+func Known(eventType string) bool {
+	switch eventType {
+	case TackStarted, ConversationAdded, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
+		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished:
+		return true
+	}
+	return false
+}
+
 // Event is one recorded fact. Fields beyond Time and Type depend on the type.
 type Event struct {
 	Time time.Time `json:"time"`

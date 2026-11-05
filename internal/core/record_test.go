@@ -87,3 +87,34 @@ func TestOldRecordContinuesWithExpectedBytes(t *testing.T) {
 		t.Errorf("request:\n got %s\nwant %s", got, want)
 	}
 }
+
+func TestAnUnknownEventTypeRefusesToStart(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	if _, err := c.NewConversation(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Append(&store.Event{Type: "from_the_future"}); err != nil {
+		t.Fatal(err)
+	}
+	events := len(f.events())
+	_, err := New(Config{Store: f.store})
+	if err == nil || !strings.Contains(err.Error(), "from_the_future") {
+		t.Fatalf("New = %v", err)
+	}
+	if got := len(f.events()); got != events {
+		t.Errorf("reading the record wrote %d events", got-events)
+	}
+}
+
+func TestEveryEventTypeThisBuildWritesIsKnown(t *testing.T) {
+	for _, eventType := range []string{
+		store.TackStarted, store.ConversationAdded, store.UserMessage, store.SystemMessage,
+		store.EditProposed, store.EditApplied, store.EditDiscarded, store.CallStarted, store.CallFinished,
+		store.DecisionRequested, store.DecisionMade, store.ToolStarted, store.ToolFinished,
+	} {
+		if !store.Known(eventType) {
+			t.Errorf("%s isn't known", eventType)
+		}
+	}
+}

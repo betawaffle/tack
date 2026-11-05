@@ -83,6 +83,9 @@ func (f *fake) open() *Core {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	if err := c.Recover(); err != nil {
+		f.t.Fatal(err)
+	}
 	return c
 }
 
