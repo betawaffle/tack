@@ -8,15 +8,21 @@ authored by Claude.
 
 ## Running
 
-Needs Go 1.27 and an OpenRouter key in a file only you can read:
+Needs Go 1.27 and an OpenRouter key in `~/.config/tack/openrouter-key`, readable
+only by you. It runs as a systemd user service:
 
 ```bash
-go build -o tack . && ./tack
+go build -o ~/.local/bin/tack .
+cp tack.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now tack
 ```
 
-Then open port 8484 in a browser. It listens on all interfaces and has **no
-authentication**, so only run it on a network you trust. See `./tack -help` for
-options.
+To update it, rebuild and run `systemctl --user restart tack`. Logs are in
+`journalctl --user -u tack`.
+
+It serves port 8484 on all interfaces with **no authentication**, so only run it
+on a network you trust. See `tack -help` for options.
 
 ## The record
 
