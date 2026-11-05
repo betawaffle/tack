@@ -26,25 +26,46 @@ on a network you trust. See `tack -help` for options.
 
 ## System messages
 
-New conversations start with a default system prompt, which you can change or clear
-before the first message. To change the default, put your own text in
-`~/.config/tack/system-prompt`.
+New conversations start with a system prompt built from sections, which you can
+change or clear before the first message. See below.
 
 Later system messages wait for the next call, unless you ask the model to respond
 straight away. Edits to a system message are held and shown as unused until you
 apply them. Applying one to a message the model has already seen makes the next
 call miss the cache from that point.
 
+## System prompts
+
+A system prompt is made of sections, joined into an ordinary system message when a
+conversation starts and never rendered again, because changing the start of a
+context misses the whole cache. The built-in sections are `base`, and `tools` or
+`no-tools` depending on whether the conversation offers tools.
+
+Put your own in `~/.config/tack/prompt/`: `<name>.md` replaces the section of that
+name, an empty file removes it, and any other name adds a section. There's no
+template language, only `{{workdir}}`, which becomes the working directory. They're
+read each time, so editing them doesn't need a restart.
+
+The start panel has a checkbox per section above the text that will be sent. If you
+edit that text by hand, it's sent as written.
+
 ## Tool calls
 
-The approval flow is built, but the binary doesn't offer any tools yet, so nothing
-can reach it outside the tests.
+New conversations can offer `read_file`, `list_files` and `search_files`, starting
+from a working directory you choose. There's no sandbox yet: the limit on them is
+you reading each call.
 
 When a model asks for tool calls, they wait for a decision, and the wait survives
 restarts. Whatever isn't ticked is denied, and the model is told so in wording you
 can edit. Approved calls then run, and their output waits for a second decision
 before the model sees any of it. A call that was interrupted is never run again
 without asking.
+
+Approval cards flag paths outside the working directory and files that aren't
+world-readable. A flag means look here, and no flag doesn't mean safe. The key file
+is refused however it's reached, and isn't even offered for approval. `search_files`
+skips anything not world-readable, since nobody approves its files one by one, plus
+the directories named by `-search-skip`.
 
 Arguments and output are stored as blocks, not in event lines. A conversation
 keeps sending the tool definitions it started with, byte for byte.

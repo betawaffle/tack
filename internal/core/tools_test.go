@@ -33,9 +33,9 @@ func newToolFake(t *testing.T) *toolFake {
 	f.tools = []Tool{{
 		Name:       "echo",
 		Definition: jsontext.Value(definition),
-		Run: func(_ context.Context, args map[string]jsontext.Value) ([]byte, error) {
+		Run: func(_ context.Context, call Call) ([]byte, error) {
 			var text string
-			json.Unmarshal(args["text"], &text)
+			json.Unmarshal(call.Args["text"], &text)
 			f.runs = append(f.runs, text)
 			return f.output(text)
 		},
@@ -686,5 +686,110 @@ func TestOnlyTheNewestCallWithAnIDIsDecidable(t *testing.T) {
 	got := f.calls(c, id)
 	if got[0].Decidable || !got[1].Decidable {
 		t.Errorf("calls = %+v", got)
+	}
+}
+
+func TestInspectResultsAreRecordedBeforeApproval(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].Inspect = func(call Call) ([]string, error) {
+		var text string
+		json.Unmarshal(call.Args["text"], &text)
+		if text == "bad" {
+			return nil, errors.New("not allowed")
+		}
+		return []string{"Look at " + text + " in " + call.Workdir}, nil
+	}
+	c := f.open()
+	id, err := c.NewConversationWith(Options{System: "x", Tools: true, Workdir: "/somewhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.replyWith(toolStream(callA, wireCall{"call-b", "echo", `{"text":"bad"}`}))
+	updates, err := c.Send(id, "go")
+	mustFinish(t, updates, err)
+	got := f.calls(c, id)
+	if !reflect.DeepEqual(got[0].Flags, []string{"Look at a in /somewhere"}) || !got[0].Decidable {
+		t.Errorf("call = %+v", got[0])
+	}
+	if !strings.Contains(got[1].Invalid, "not allowed") || got[1].Decidable {
+		t.Errorf("call = %+v", got[1])
+	}
+	c = f.open()
+	if got := f.calls(c, id); len(got[0].Flags) != 1 {
+		t.Errorf("flags after a restart: %+v", got[0])
+	}
+	if conv, _ := c.Conversation(id); conv.Workdir != "/somewhere" || !conv.Tools {
+		t.Errorf("conversation = %+v", conv)
+	}
+}
+
+func TestToolsRunInTheConversationsWorkdir(t *testing.T) {
+	f := newToolFake(t)
+	var seen string
+	f.tools[0].Run = func(_ context.Context, call Call) ([]byte, error) {
+		seen = call.Workdir
+		return nil, nil
+	}
+	c := f.open()
+	id, _ := c.NewConversationWith(Options{Tools: true, Workdir: "/there"})
+	f.replyWith(toolStream(callA))
+	updates, err := c.Send(id, "go")
+	mustFinish(t, updates, err)
+	f.replyWith(replyStream)
+	f.decide(c, id, store.DecideCalls, "", "call-a")
+	if seen != "/there" {
+		t.Errorf("workdir = %q", seen)
+	}
+}
+
+func TestAConversationCanStartWithoutTools(t *testing.T) {
+	f := newToolFake(t)
+	c := f.open()
+	id, err := c.NewConversationWith(Options{Tools: false, Workdir: "/ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, err := c.Send(id, "hi")
+	mustFinish(t, updates, err)
+	if strings.Contains(string(f.bodies[0]), `"tools"`) {
+		t.Errorf("request = %s", f.bodies[0])
+	}
+	if conv, _ := c.Conversation(id); conv.Tools || conv.Workdir != "" {
+		t.Errorf("conversation = %+v", conv)
+	}
+}
+
+func TestSectionsAreSeparateBlocks(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, err := c.NewConversationWith(Options{System: "A\n\nB", Blocks: []string{"A", "\n\n", "B"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := c.NewConversationWith(Options{System: "edited by hand", Blocks: []string{"A"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, err := c.Send(id, "hi")
+	mustFinish(t, updates, err)
+	f.wantMessages(0, sys("A\n\nB"), user("hi"))
+	counts := map[string]int{}
+	for _, ev := range f.events() {
+		if ev.Type == store.SystemMessage {
+			counts[ev.Conversation] = len(ev.Parts)
+		}
+	}
+	if counts[id] != 3 || counts[other] != 1 {
+		t.Errorf("parts = %v", counts)
+	}
+}
+
+func TestToolNameHasToMatchItsDefinition(t *testing.T) {
+	f := newFake(t)
+	st := f.open()
+	_ = st
+	_, err := New(Config{Store: f.store, Tools: []Tool{{Name: "other", Definition: jsontext.Value(definition)}}})
+	if err == nil {
+		t.Error("expected an error")
 	}
 }

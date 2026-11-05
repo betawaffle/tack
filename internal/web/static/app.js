@@ -363,6 +363,7 @@ function renderToolCall(call, decision) {
   node.dataset.call = call.id;
   const head = el("div", "tool-head");
   head.append(exact(call.name, "tool-name"), el("span", "tag", STATE_LABELS[call.state] || call.state));
+  for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
   head.append(el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
   node.append(head);
   if (call.invalid) node.append(el("div", "tool-invalid", `Can't run: ${call.invalid}`));
@@ -372,17 +373,19 @@ function renderToolCall(call, decision) {
   }
 
   if (call.has_output) {
+    // Empty output is left out of the JSON, and it's still output.
+    const text = call.output || "";
     const output = el("details", "tool-output");
     output.open = call.state === "finished";
     const body = el("div");
     const row = el("div", "view-row");
-    row.append(viewed(`output-${call.id}`, call.output, ["raw", "markdown", "json"], body, "tool-text"));
-    output.append(el("summary", "", `Output, ${count(new TextEncoder().encode(call.output).length)} bytes`), row, body);
+    row.append(viewed(`output-${call.id}`, text, ["raw", "markdown", "json"], body, "tool-text"));
+    output.append(el("summary", "", `Output, ${count(new TextEncoder().encode(text).length)} bytes`), row, body);
     if (call.error) output.append(el("div", "tool-invalid", `The tool reported an error: ${call.error}`));
     node.append(output);
   }
   if (call.state === "denied") {
-    node.append(el("div", "hint", "The model was told:"), exact(call.result));
+    node.append(el("div", "hint", "The model was told:"), exact(call.result || ""));
   }
   if (decision && call.decidable) {
     const label = el("label", "tool-allow");
@@ -592,6 +595,7 @@ function showMeta(conv) {
   const total = stats.reduce((sum, s) => sum + s.cost_usd, 0);
   const parts = [conv.model.replace(/^.*\//, "")];
   if (conv.host) parts.push(conv.host);
+  if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`, dollars(total));
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
 }
@@ -657,9 +661,113 @@ async function startNew() {
   setOpenMode(false);
   closeDrawer();
   setBusy(false);
-  const res = await api("/api/system-default");
-  $("system-prompt").value = (await res.json()).text;
+  const res = await api("/api/defaults");
+  setupStart(await res.json());
   await refreshList();
+}
+
+// The start panel. The checkboxes build the text, and the text is what gets sent.
+// Once it's edited by hand, the checkboxes stop applying until it's reset.
+let start = null;
+
+function chosenSections() {
+  return start.defaults.sections.filter((s) => {
+    if (s.for === "tools") return start.tools;
+    if (s.for === "no-tools") return !start.tools;
+    return !start.off.has(s.name);
+  });
+}
+
+function composePrompt() {
+  const workdir = $("workdir")?.value ?? "";
+  return chosenSections().map((s) => s.text.replaceAll("{{workdir}}", workdir)).join("\n\n");
+}
+
+function isEdited() {
+  return $("system-prompt").value !== composePrompt();
+}
+
+function refreshPrompt() {
+  $("system-prompt").value = composePrompt();
+  markEdited();
+}
+
+function markEdited() {
+  const edited = isEdited();
+  for (const box of $("prompt-options").querySelectorAll("input[data-section]")) box.disabled = edited;
+  $("prompt-reset").hidden = !edited;
+}
+
+function setupStart(defaults) {
+  start = { defaults, tools: defaults.tools, off: new Set() };
+  const options = $("prompt-options");
+  options.replaceChildren();
+  if (defaults.tools) {
+    const row = el("div", "prompt-row");
+    const offer = el("label", "check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.id = "offer-tools";
+    box.checked = true;
+    offer.append(box, "Offer tools");
+    const where = el("input");
+    where.id = "workdir";
+    where.type = "text";
+    where.value = defaults.workdir;
+    where.setAttribute("aria-label", "Working directory");
+    where.placeholder = "Working directory";
+    box.addEventListener("change", () => {
+      const edited = isEdited();
+      start.tools = box.checked;
+      where.disabled = !box.checked;
+      if (!edited) refreshPrompt();
+      else markEdited();
+    });
+    where.addEventListener("input", () => {
+      // Compare against the old value first, so a hand edit isn't overwritten.
+      const typed = where.value;
+      where.value = start.workdir ?? defaults.workdir;
+      const edited = isEdited();
+      where.value = typed;
+      start.workdir = typed;
+      if (!edited) refreshPrompt();
+      else markEdited();
+    });
+    row.append(offer, where);
+    options.append(row);
+  }
+  const row = el("div", "prompt-row");
+  for (const section of defaults.sections) {
+    if (section.for) continue;
+    const label = el("label", "check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.dataset.section = section.name;
+    label.title = section.text;
+    box.addEventListener("change", () => {
+      if (box.checked) start.off.delete(section.name);
+      else start.off.add(section.name);
+      refreshPrompt();
+    });
+    label.append(box, section.name);
+    row.append(label);
+  }
+  const reset = button("Use the sections again", "mini", refreshPrompt);
+  reset.id = "prompt-reset";
+  row.append(reset);
+  options.append(row);
+  refreshPrompt();
+}
+
+function newConversationBody() {
+  const edited = isEdited();
+  return {
+    system: $("system-prompt").value,
+    sections: edited ? [] : chosenSections().map((s) => s.name),
+    tools: start.tools,
+    workdir: start.tools ? $("workdir").value : "",
+  };
 }
 
 function reportError(err) {
@@ -776,7 +884,7 @@ $("form").addEventListener("submit", async (event) => {
   setInput("");
   try {
     if (!current) {
-      const res = await postJSON("/api/conversations", { system: $("system-prompt").value });
+      const res = await postJSON("/api/conversations", newConversationBody());
       current = (await res.json()).id;
       location.hash = current;
       setOpenMode(true);
@@ -814,6 +922,8 @@ $("list").addEventListener("change", (event) => {
     document.querySelector(".decision-card")?.dispatchEvent(new Event("refresh"));
   }
 });
+
+$("system-prompt").addEventListener("input", markEdited);
 
 $("input").addEventListener("input", resizeInput);
 $("input").addEventListener("keydown", (event) => {

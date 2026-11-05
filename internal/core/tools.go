@@ -21,7 +21,50 @@ import (
 type Tool struct {
 	Name       string
 	Definition jsontext.Value
-	Run        func(ctx context.Context, args map[string]jsontext.Value) ([]byte, error)
+	Run        func(ctx context.Context, call Call) ([]byte, error)
+
+	// Inspect runs when a call arrives, before any approval, on input the model
+	// chose. An error means the call can't run. Flags draw a person's attention on
+	// the approval card. It can touch metadata but mustn't open anything.
+	Inspect func(call Call) (flags []string, err error)
+}
+
+// Call is what a tool gets. Arguments were parsed by parseArguments.
+type Call struct {
+	Args    map[string]jsontext.Value
+	Workdir string
+}
+
+const (
+	inspectTimeout = 2 * time.Second
+	toolTimeout    = time.Minute
+)
+
+// FlagUnchecked is the flag on a call whose inspection didn't finish in time, as
+// could happen with a path on a hung mount.
+const FlagUnchecked = "Couldn't be checked in time"
+
+// inspect runs a tool's Inspect with a time limit. A hung check leaves a goroutine
+// behind, which is better than the whole reply hanging on what a model chose.
+func inspect(tool *Tool, call Call) ([]string, error) {
+	if tool.Inspect == nil {
+		return nil, nil
+	}
+	type result struct {
+		flags []string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		flags, err := tool.Inspect(call)
+		done <- result{flags, err}
+	}()
+	select {
+	case r := <-done:
+		return r.flags, r.err
+	case <-time.After(inspectTimeout):
+		return []string{FlagUnchecked}, nil
+	}
 }
 
 // What the model is told about anything denied, unless the person says otherwise.
@@ -207,7 +250,7 @@ func definedNames(definitions []byte) ([]string, error) {
 // storeCalls records calls, judging each one once. A call has to name a tool this
 // conversation was actually offered. A call that can't run still goes to a person:
 // no automatic reply means no loop a model can spend money on.
-func (c *Core) storeCalls(definitions []byte, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
+func (c *Core) storeCalls(definitions []byte, workdir string, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
 	offered, err := definedNames(definitions)
 	if err != nil {
 		return nil, err
@@ -219,10 +262,15 @@ func (c *Core) storeCalls(definitions []byte, calls []openrouter.FunctionCallRes
 			return nil, err
 		}
 		stored := store.ToolCall{ID: call.ID, Name: call.Name, Arguments: arguments}
-		if !slices.Contains(offered, call.Name) || c.findTool(call.Name) == nil {
+		tool := c.findTool(call.Name)
+		if !slices.Contains(offered, call.Name) || tool == nil {
 			stored.Invalid = fmt.Sprintf("there is no tool named %q", call.Name)
-		} else if _, err := parseArguments([]byte(call.Arguments)); err != nil {
+		} else if args, err := parseArguments([]byte(call.Arguments)); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
+		} else if flags, err := inspect(tool, Call{Args: args, Workdir: workdir}); err != nil {
+			stored.Invalid = "the arguments can't be used: " + err.Error()
+		} else {
+			stored.Flags = flags
 		}
 		out = append(out, stored)
 	}
@@ -304,7 +352,10 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	}
 	send(Update{Kind: "tool", Text: call.Name})
 	start := time.Now()
-	output, failure := c.execute(call)
+	c.mu.Lock()
+	workdir := conv.workdir
+	c.mu.Unlock()
+	output, failure := c.execute(call, workdir)
 	ref, err := c.cfg.Store.Put(output)
 	if err != nil {
 		return err
@@ -322,7 +373,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	return c.record(finished)
 }
 
-func (c *Core) execute(call *toolCall) ([]byte, error) {
+func (c *Core) execute(call *toolCall, workdir string) ([]byte, error) {
 	tool := c.findTool(call.Name)
 	if tool == nil {
 		return nil, fmt.Errorf("there is no tool named %q", call.Name)
@@ -335,7 +386,9 @@ func (c *Core) execute(call *toolCall) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tool.Run(context.Background(), args)
+	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
+	defer cancel()
+	return tool.Run(ctx, Call{Args: args, Workdir: workdir})
 }
 
 // Decide answers the open decision. Calls not named in allow are denied, so an
@@ -431,6 +484,7 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		Name:      call.Name,
 		Arguments: c.text([]store.Part{{Block: call.Arguments}}),
 		Invalid:   call.Invalid,
+		Flags:     call.Flags,
 		Error:     call.failure,
 		// Only the newest call with an ID can be the one a decision means.
 		Decidable: conv.decision != nil && slices.Contains(conv.decision.calls, call.ID) &&

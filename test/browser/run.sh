@@ -17,20 +17,26 @@ printf 'sk-or-fake-key-for-browser-tests\n' >"$tmp/key"
 chmod 600 "$tmp/key"
 
 cd "$here"
-mkdir -p shots
+mkdir -p shots "$tmp/work"
+printf 'hello from the test file\n' >"$tmp/work/hello.txt"
+printf 'private\n' >"$tmp/work/private.txt"
+chmod 600 "$tmp/work/private.txt"
 
+export TACK_TEST_KEY="$tmp/key" TACK_TEST_WORKDIR="$tmp/work"
 node fake.js >"$tmp/fake.log" 2>&1 &
 pids+=($!)
 "$tmp/tack" -addr 127.0.0.1:18601 -data "$tmp/data" -key "$tmp/key" \
-	-url http://127.0.0.1:18600/v1 -system-prompt "$tmp/none" >"$tmp/tack.log" 2>&1 &
+	-url http://127.0.0.1:18600/v1 -prompts "$tmp/none" -workdir "$tmp/work" >"$tmp/tack.log" 2>&1 &
 pids+=($!)
 "$tmp/toolserver" -addr 127.0.0.1:18602 -data "$tmp/tools" -url http://127.0.0.1:18600/v1 >"$tmp/tools.log" 2>&1 &
 pids+=($!)
 
 node check.js
 status=$?
-node check-tools.js
-tools=$?
-[ $status -eq 0 ] && status=$tools
+for check in check-tools.js check-start.js; do
+	node "$check"
+	result=$?
+	[ $status -eq 0 ] && status=$result
+done
 [ $status -eq 0 ] || tail -n 5 "$tmp/tack.log" "$tmp/tools.log" "$tmp/fake.log"
 exit $status

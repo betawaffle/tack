@@ -7,9 +7,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/prompt"
 )
 
 //go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js
@@ -17,9 +21,17 @@ var static embed.FS
 
 const maxMessageBytes = 8 << 20
 
+// Defaults are what the page offers for a new conversation. Sections are read each
+// time, so editing them doesn't need a restart.
+type Defaults struct {
+	Sections []prompt.Section `json:"sections"`
+	Workdir  string           `json:"workdir"`
+	Tools    bool             `json:"tools"`
+}
+
 // Handler returns the whole site.
-func Handler(c *core.Core, defaultPrompt func() string) http.Handler {
-	s := &server{core: c, defaultPrompt: defaultPrompt}
+func Handler(c *core.Core, defaults func() Defaults) http.Handler {
+	s := &server{core: c, defaults: defaults}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.Handle("GET /static/", http.FileServerFS(static))
@@ -33,7 +45,7 @@ func Handler(c *core.Core, defaultPrompt func() string) http.Handler {
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.applyEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.decide)
-	mux.HandleFunc("GET /api/system-default", s.systemDefault)
+	mux.HandleFunc("GET /api/defaults", s.newDefaults)
 	// Other websites open in the same browser shouldn't be able to post here.
 	return security(http.NewCrossOriginProtection().Handler(mux))
 }
@@ -56,8 +68,8 @@ func security(next http.Handler) http.Handler {
 }
 
 type server struct {
-	core          *core.Core
-	defaultPrompt func() string
+	core     *core.Core
+	defaults func() Defaults
 }
 
 // readText reads the JSON body every write endpoint takes.
@@ -81,11 +93,30 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) create(w http.ResponseWriter, r *http.Request) {
-	system, ok := readText(w, r, "system")
-	if !ok {
+	var body struct {
+		System   string   `json:"system"`
+		Sections []string `json:"sections"`
+		Tools    bool     `json:"tools"`
+		Workdir  string   `json:"workdir"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	id, err := s.core.NewConversation(system)
+	defaults := s.defaults()
+	body.Tools = body.Tools && defaults.Tools
+	if body.Tools {
+		info, err := os.Stat(body.Workdir)
+		if err != nil || !info.IsDir() || !filepath.IsAbs(body.Workdir) {
+			http.Error(w, "the working directory has to be an absolute path to a directory", http.StatusBadRequest)
+			return
+		}
+	}
+	// If the text is exactly what the sections make, it's stored section by section.
+	// Otherwise it was edited, or a section file changed, and the text as sent wins.
+	blocks := prompt.Blocks(defaults.Sections, body.Sections, body.Workdir)
+	id, err := s.core.NewConversationWith(core.Options{System: body.System, Blocks: blocks, Tools: body.Tools, Workdir: body.Workdir})
 	if err != nil {
 		fail(w, err)
 		return
@@ -102,8 +133,13 @@ func (s *server) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, conv)
 }
 
-func (s *server) systemDefault(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, map[string]string{"text": s.defaultPrompt()})
+func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
+	defaults := s.defaults()
+	if !defaults.Tools {
+		// Nothing can offer them, so the choice shouldn't appear.
+		defaults.Sections = slices.DeleteFunc(slices.Clone(defaults.Sections), func(section prompt.Section) bool { return section.For == "tools" })
+	}
+	writeJSON(w, defaults)
 }
 
 func (s *server) send(w http.ResponseWriter, r *http.Request) {

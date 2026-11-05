@@ -45,7 +45,7 @@ const msgs = (b) => JSON.parse(b).messages;
   await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
   ok(await p.isVisible("#start"), "start panel shows");
   ok(
-    (await p.inputValue("#system-prompt")).startsWith("You have no tools"),
+    (await p.inputValue("#system-prompt")).startsWith("Be direct"),
     "default prompt prefilled",
   );
   ok(await p.isDisabled("#add-system"), "add-system disabled before a conversation");
@@ -192,7 +192,7 @@ const msgs = (b) => JSON.parse(b).messages;
   );
   ok((await p.locator(".tag.waiting").count()) === 0, "waiting tag clears once sent");
   ok(
-    m[0].role === "system" && m[0].content.startsWith("You have no tools"),
+    m[0].role === "system" && m[0].content.startsWith("Be direct"),
     "start prompt comes first",
   );
 
@@ -236,7 +236,7 @@ const msgs = (b) => JSON.parse(b).messages;
   await send("short two");
   await idle();
   b = await bodies();
-  ok(msgs(b[0])[0].content.startsWith("You have no tools"), "held edit is not used");
+  ok(msgs(b[0])[0].content.startsWith("Be direct"), "held edit is not used");
   ok((await p.locator(".tag.unused").count()) === 1, "held edit still shown after a call");
   await p.locator(".pending button", { hasText: "Apply" }).click();
   await p.waitForSelector('.tag:text("Edited")');

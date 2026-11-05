@@ -44,6 +44,14 @@ const TOOL_CALLS = {
   hidden: [["echo", JSON.stringify({ text: "safe\u202eevil\u0007 <img src=x onerror=\"window.__pwned=1\">\u{E0041}\nline two" })]],
   boom: [["boom", "{}"]],
   json: [["json", "{}"]],
+  read: [
+    ["read_file", '{"path":"hello.txt"}'],
+    ["read_file", '{"path":"/etc/hostname"}'],
+    ["read_file", '{"path":"private.txt"}'],
+    ["read_file", JSON.stringify({ path: process.env.TACK_TEST_KEY || "" })],
+  ],
+  list: [["list_files", "{}"], ["search_files", '{"pattern":"hel+o"}']],
+  wrong: [["read_file", '{"file":"hello.txt"}']],
 };
 let bodies = [];
 http

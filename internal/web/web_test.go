@@ -10,6 +10,7 @@ import (
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/openrouter"
+	"github.com/betawaffle/tack/internal/prompt"
 	"github.com/betawaffle/tack/internal/secret"
 	"github.com/betawaffle/tack/internal/store"
 )
@@ -31,7 +32,9 @@ func site(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := httptest.NewServer(Handler(c, func() string { return "the default" }))
+	s := httptest.NewServer(Handler(c, func() Defaults {
+		return Defaults{Sections: []prompt.Section{{Name: "a", Text: "the default"}}}
+	}))
 	t.Cleanup(s.Close)
 	return s
 }
@@ -63,14 +66,14 @@ func TestSystemPromptFlow(t *testing.T) {
 	s := site(t)
 	conv := s.URL + "/api/conversations"
 
-	resp, err := http.Get(s.URL + "/api/system-default")
+	resp, err := http.Get(s.URL + "/api/defaults")
 	if err != nil {
 		t.Fatal(err)
 	}
 	data, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if field(t, string(data), "text") != "the default" {
-		t.Errorf("default = %s", data)
+	if !strings.Contains(string(data), `"the default"`) {
+		t.Errorf("defaults = %s", data)
 	}
 
 	id := field(t, post(t, conv, `{"system":"Be brief."}`, 200), "id")
@@ -129,4 +132,72 @@ func TestCrossSitePostIsRefused(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
+}
+
+func TestNewConversationNeedsARealWorkdirForTools(t *testing.T) {
+	s := toolSite(t, t.TempDir())
+	conv := s.URL + "/api/conversations"
+	for _, workdir := range []string{"", "relative", "/does/not/exist", "/etc/hostname"} {
+		body, _ := json.Marshal(map[string]any{"tools": true, "workdir": workdir})
+		post(t, conv, string(body), http.StatusBadRequest)
+	}
+	post(t, conv, `{"tools":false,"workdir":"relative"}`, 200)
+}
+
+func TestToolsAreOnlyOfferedWhenAvailable(t *testing.T) {
+	s := site(t)
+	workdir := t.TempDir()
+	body, _ := json.Marshal(map[string]any{"tools": true, "workdir": workdir})
+	id := field(t, post(t, s.URL+"/api/conversations", string(body), 200), "id")
+	resp, err := http.Get(s.URL + "/api/conversations/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(data), `"tools"`) {
+		t.Errorf("conversation = %s", data)
+	}
+}
+
+func TestDefaultsHideTheToolsSectionWhenThereAreNone(t *testing.T) {
+	s := toolSite(t, "")
+	data := get(t, s.URL+"/api/defaults")
+	if !strings.Contains(data, `"name":"tools"`) {
+		t.Errorf("with tools: %s", data)
+	}
+	s = site(t)
+	if data := get(t, s.URL+"/api/defaults"); strings.Contains(data, "with-tools") {
+		t.Errorf("without tools: %s", data)
+	}
+}
+
+func get(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return string(data)
+}
+
+func toolSite(t *testing.T, workdir string) *httptest.Server {
+	t.Helper()
+	key := secret.NewKey("sk-or-test-not-a-real-key")
+	st, err := store.Open(t.TempDir(), secret.NewTestTripwire(func(where string) { t.Errorf("tripwire: %s", where) }, key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	c, err := core.New(core.Config{Store: st, Client: openrouter.NewClient("http://127.0.0.1:1", key), Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(Handler(c, func() Defaults {
+		return Defaults{Sections: []prompt.Section{{Name: "tools", For: "tools", Text: "x"}}, Workdir: workdir, Tools: true}
+	}))
+	t.Cleanup(s.Close)
+	return s
 }

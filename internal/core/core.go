@@ -17,10 +17,6 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-// DefaultSystemPrompt starts new conversations unless it's overridden.
-const DefaultSystemPrompt = "You have no tools and can't access files, commands or the internet, so never imply you did something you can't do. " +
-	"Be direct and concise. Say when you're unsure, and don't invent facts, citations or results."
-
 // Errors a caller can act on.
 var (
 	ErrNotFound      = errors.New("no such conversation")
@@ -58,6 +54,7 @@ type conversation struct {
 	busy    bool
 
 	tools    store.Ref // the exact definitions it sends, if it has any
+	workdir  string    // where its tools' relative paths start
 	decision *decision // what's waiting on a person, if anything
 }
 
@@ -89,6 +86,15 @@ type edit struct {
 
 // New rebuilds state from the record.
 func New(cfg Config) (*Core, error) {
+	for _, tool := range cfg.Tools {
+		names, err := definedNames(append(append([]byte{'['}, tool.Definition...), ']'))
+		if err != nil {
+			return nil, fmt.Errorf("tool %s: %w", tool.Name, err)
+		}
+		if names[0] != tool.Name {
+			return nil, fmt.Errorf("tool %s is defined with the name %q", tool.Name, names[0])
+		}
+	}
 	c := &Core{cfg: cfg, convs: map[string]*conversation{}}
 	err := cfg.Store.Replay(func(ev *store.Event) error {
 		if !store.Known(ev.Type) {
@@ -133,7 +139,7 @@ func (c *Core) record(ev *store.Event) error {
 // apply updates state from an event. The caller holds mu, or is New.
 func (c *Core) apply(ev *store.Event) {
 	if ev.Type == store.ConversationAdded {
-		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools}
+		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir}
 		c.order = append(c.order, ev.Conversation)
 		return
 	}
@@ -250,22 +256,58 @@ func (conv *conversation) canReply() bool {
 	return len(entries) > 0 && entries[len(entries)-1].Role != "assistant"
 }
 
-// NewConversation records a new conversation. An empty system prompt means the
-// conversation starts without one.
+// Options describe a new conversation.
+type Options struct {
+	// System is the system prompt. Empty means the conversation starts without one.
+	System string
+	// Blocks, if they join to exactly System, are stored as separate blocks.
+	Blocks []string
+	// Tools says whether to offer the configured tools.
+	Tools   bool
+	Workdir string
+}
+
+// NewConversation records a new conversation offering every configured tool.
 func (c *Core) NewConversation(systemPrompt string) (string, error) {
-	tools, err := c.storeDefinitions()
-	if err != nil {
-		return "", err
+	return c.NewConversationWith(Options{System: systemPrompt, Tools: true})
+}
+
+// NewConversationWith records a new conversation.
+func (c *Core) NewConversationWith(opts Options) (string, error) {
+	var tools store.Ref
+	if opts.Tools {
+		var err error
+		if tools, err = c.storeDefinitions(); err != nil {
+			return "", err
+		}
 	}
 	id := store.NewID()
-	if err := c.record(&store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools}); err != nil {
+	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools}
+	if tools != "" {
+		event.Workdir = opts.Workdir
+	}
+	if err := c.record(event); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(systemPrompt) == "" {
+	if strings.TrimSpace(opts.System) == "" {
 		return id, nil
 	}
-	_, err = c.AddSystemMessage(id, systemPrompt)
-	return id, err
+	var parts []store.Part
+	if strings.Join(opts.Blocks, "") == opts.System {
+		for _, block := range opts.Blocks {
+			piece, err := c.parts(block)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, piece...)
+		}
+	} else {
+		var err error
+		if parts, err = c.parts(opts.System); err != nil {
+			return "", err
+		}
+	}
+	return id, c.record(&store.Event{Type: store.SystemMessage, Conversation: id, Message: store.NewID(), Parts: parts})
 }
 
 func (c *Core) parts(text string) ([]store.Part, error) {
@@ -471,6 +513,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	entries := conv.context()
 	unanswered := conv.unanswered()
 	tools := conv.tools
+	workdir := conv.workdir
 	c.mu.Unlock()
 	if unanswered {
 		// Hosts may accept this silently, but the model would be told nothing.
@@ -571,7 +614,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		}
 	}
 	if finished.Error == "" {
-		if finished.ToolCalls, err = c.storeCalls(definitions, res.ToolCalls); err != nil {
+		if finished.ToolCalls, err = c.storeCalls(definitions, workdir, res.ToolCalls); err != nil {
 			return err
 		}
 	}

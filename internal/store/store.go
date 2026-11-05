@@ -63,6 +63,8 @@ type ToolCall struct {
 	Name      string `json:"name"`
 	Arguments Ref    `json:"arguments"`
 	Invalid   string `json:"invalid,omitzero"`
+	// Flags are what the approval card pointed out, as judged when the call arrived.
+	Flags []string `json:"flags,omitzero"`
 }
 
 // Choice is what was decided about one tool call. Parts are the result the model
@@ -121,8 +123,10 @@ type Event struct {
 	// conversation_created and everything that happens in a conversation
 	Conversation string `json:"conversation,omitzero"`
 
-	// conversation_created: the exact tool definitions its calls send.
-	Tools Ref `json:"tools,omitzero"`
+	// conversation_created: the exact tool definitions its calls send, and where
+	// their relative paths start.
+	Tools   Ref    `json:"tools,omitzero"`
+	Workdir string `json:"workdir,omitzero"`
 
 	// user_message, system_message, system_edit_proposed. An edit with no parts
 	// removes the message.

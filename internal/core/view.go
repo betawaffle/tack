@@ -59,16 +59,17 @@ type Item struct {
 // that was requested, which is also what runs. State is "waiting", "approved",
 // "running", "interrupted", "finished", "sent" or "denied".
 type ToolCallView struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-	Invalid   string `json:"invalid,omitzero"`
-	State     string `json:"state"`
-	Output    string `json:"output,omitzero"`
-	HasOutput bool   `json:"has_output,omitzero"`
-	Error     string `json:"error,omitzero"`
-	Result    string `json:"result,omitzero"` // what the model was given
-	Decidable bool   `json:"decidable,omitzero"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Arguments string   `json:"arguments"`
+	Invalid   string   `json:"invalid,omitzero"`
+	Flags     []string `json:"flags,omitzero"`
+	State     string   `json:"state"`
+	Output    string   `json:"output,omitzero"`
+	HasOutput bool     `json:"has_output,omitzero"`
+	Error     string   `json:"error,omitzero"`
+	Result    string   `json:"result,omitzero"` // what the model was given
+	Decidable bool     `json:"decidable,omitzero"`
 }
 
 // DecisionView is what's waiting on a person. DenialText is the default for what
@@ -87,6 +88,8 @@ type Conversation struct {
 	Host     string `json:"host,omitzero"` // the pinned host, if any
 	Busy     bool   `json:"busy"`
 	CanReply bool   `json:"can_reply"`
+	Tools    bool   `json:"tools,omitzero"`
+	Workdir  string `json:"workdir,omitzero"`
 	Items    []Item `json:"items"`
 
 	Decision *DecisionView `json:"decision,omitzero"`
@@ -143,7 +146,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Model: c.cfg.Model, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Items: []Item{}}
+	out := Conversation{ID: id, Model: c.cfg.Model, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
 	if order := c.cfg.Routing.Order; len(order) > 0 {
 		out.Host = order[0]
 	}

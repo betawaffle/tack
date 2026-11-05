@@ -2,6 +2,8 @@
 Description=tack
 
 [Service]
+# The default working directory for new conversations, if it exists.
+WorkingDirectory=-%h/tack
 ExecStart=%h/.local/bin/tack
 Restart=on-failure
 RestartSec=2

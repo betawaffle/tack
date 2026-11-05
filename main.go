@@ -1,21 +1,22 @@
 // Command tack is a coding agent harness. For now it's a browser chat with one
-// model that records everything.
+// model and read-only tools that each need approval, and it records everything.
 package main
 
 import (
-	"errors"
 	"flag"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/openrouter"
+	"github.com/betawaffle/tack/internal/prompt"
 	"github.com/betawaffle/tack/internal/secret"
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/tools"
 	"github.com/betawaffle/tack/internal/web"
 )
 
@@ -31,7 +32,9 @@ func main() {
 	url := flag.String("url", openrouter.DefaultURL, "OpenRouter endpoint. The key is sent here")
 	model := flag.String("model", "deepseek/deepseek-v4.1-flash-1017", "model")
 	host := flag.String("host", "morph/fp8", "OpenRouter provider to pin")
-	promptPath := flag.String("system-prompt", defaultPath("XDG_CONFIG_HOME", ".config", "tack/system-prompt"), "file overriding the default system prompt for new conversations")
+	promptDir := flag.String("prompts", defaultPath("XDG_CONFIG_HOME", ".config", "tack/prompt"), "directory of system prompt sections, as <name>.md, overriding or adding to the built-in ones")
+	searchSkip := flag.String("search-skip", strings.Join(tools.DefaultSkipDirs, ","), "comma-separated directory names search_files doesn't go into")
+	workdir := flag.String("workdir", "", "default working directory for new conversations (default: the current directory)")
 	flag.Parse()
 
 	key, err := secret.Load(*keyPath)
@@ -47,6 +50,7 @@ func main() {
 		Client:  openrouter.NewClient(*url, key),
 		Model:   *model,
 		Routing: openrouter.Routing{Order: []string{*host}, AllowFallbacks: false},
+		Tools:   tools.Read(tools.Options{Protected: []string{*keyPath}, SkipDirs: strings.FieldsFunc(*searchSkip, func(r rune) bool { return r == ',' })}),
 	})
 	if err != nil {
 		// Restarting can't help, so this exit code tells systemd not to try.
@@ -64,20 +68,15 @@ func main() {
 	}
 
 	log.Printf("listening on %s, recording to %s, using %s on %s", *addr, *dataDir, *model, *host)
-	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, func() string { return defaultPrompt(*promptPath) })))
-}
-
-// defaultPrompt reads the override each time, so editing the file doesn't need a
-// restart.
-func defaultPrompt(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("using the built-in system prompt: %v", err)
+	if *workdir == "" {
+		if *workdir, err = os.Getwd(); err != nil {
+			log.Fatal(err)
 		}
-		return core.DefaultSystemPrompt
 	}
-	return string(data)
+	defaults := func() web.Defaults {
+		return web.Defaults{Sections: prompt.Load(*promptDir), Workdir: *workdir, Tools: true}
+	}
+	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, defaults)))
 }
 
 func defaultPath(env, fallback, name string) string {
