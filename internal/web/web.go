@@ -32,6 +32,7 @@ func Handler(c *core.Core, defaultPrompt func() string) http.Handler {
 	mux.HandleFunc("POST /api/conversations/{id}/system/{message}/edits", s.proposeEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.applyEdit)
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
+	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.decide)
 	mux.HandleFunc("GET /api/system-default", s.systemDefault)
 	// Other websites open in the same browser shouldn't be able to post here.
 	return security(http.NewCrossOriginProtection().Handler(mux))
@@ -177,6 +178,24 @@ func (s *server) discardEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+func (s *server) decide(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Allow      []string `json:"allow"`
+		DenialText string   `json:"denial_text"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	updates, err := s.core.Decide(r.PathValue("id"), r.PathValue("decision"), body.Allow, body.DenialText)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	stream(w, r, updates)
+}
+
 // stream sends updates as one JSON object per line. If the browser goes away
 // the call carries on: it belongs to the core, not to this request.
 func stream(w http.ResponseWriter, r *http.Request, updates <-chan core.Update) {
@@ -214,10 +233,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func fail(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit):
+	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend):
+	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, core.ErrBadChoice):
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		log.Printf("request failed: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

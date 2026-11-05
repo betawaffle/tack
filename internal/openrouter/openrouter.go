@@ -32,8 +32,24 @@ type Routing struct {
 
 // Message is a rendered message.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning,omitzero"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitzero"`
+	ToolCallID string     `json:"tool_call_id,omitzero"`
+}
+
+// ToolCall is a tool call as the API writes it.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall names a function and holds its arguments as exact text.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // Request describes a call to render.
@@ -42,18 +58,20 @@ type Request struct {
 	Routing   Routing
 	Messages  []Message
 	SessionID string
+	Tools     jsontext.Value // exact definitions, if there are any
 }
 
 // Render produces the exact request body. The same Request always gives the
 // same bytes, which is what keeps a provider's prefix cache working.
 func Render(r Request) ([]byte, error) {
 	return json.Marshal(struct {
-		Model     string    `json:"model"`
-		Messages  []Message `json:"messages"`
-		Provider  Routing   `json:"provider"`
-		SessionID string    `json:"session_id,omitzero"`
-		Stream    bool      `json:"stream"`
-	}{r.Model, r.Messages, r.Routing, r.SessionID, true}, json.Deterministic(true))
+		Model     string         `json:"model"`
+		Messages  []Message      `json:"messages"`
+		Provider  Routing        `json:"provider"`
+		SessionID string         `json:"session_id,omitzero"`
+		Stream    bool           `json:"stream"`
+		Tools     jsontext.Value `json:"tools,omitzero"`
+	}{r.Model, r.Messages, r.Routing, r.SessionID, true, r.Tools}, json.Deterministic(true))
 }
 
 // Delta is a piece of a reply as it arrives.
@@ -75,8 +93,16 @@ type Result struct {
 	Duration        time.Duration
 	Text            string
 	Reasoning       string
+	ToolCalls       []FunctionCallResult
 	ParseErrors     int
 	Error           string
+}
+
+// FunctionCallResult is a tool call put together from a stream.
+type FunctionCallResult struct {
+	ID        string
+	Name      string
+	Arguments string
 }
 
 type chunk struct {
@@ -89,11 +115,22 @@ type chunk struct {
 			Content          string `json:"content"`
 			Reasoning        string `json:"reasoning"`
 			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string         `json:"finish_reason"`
 		Error        jsontext.Value `json:"error"`
 	} `json:"choices"`
 }
+
+// maxToolCalls bounds the index a stream can name, since the index sizes a slice.
+const maxToolCalls = 1024
 
 // Client sends requests.
 type Client struct {
@@ -218,6 +255,26 @@ func (c *Client) apply(res *Result, ch *chunk, text, reasoning *strings.Builder,
 		}
 		if choice.FinishReason != "" {
 			res.FinishReason = choice.FinishReason
+		}
+		for _, piece := range choice.Delta.ToolCalls {
+			if piece.Index < 0 || piece.Index > maxToolCalls {
+				res.ParseErrors++
+				continue
+			}
+			for len(res.ToolCalls) <= piece.Index {
+				res.ToolCalls = append(res.ToolCalls, FunctionCallResult{})
+			}
+			call := &res.ToolCalls[piece.Index]
+			if call.ID == "" {
+				call.ID = piece.ID
+			}
+			if call.Name == "" {
+				call.Name = piece.Function.Name
+			}
+			call.Arguments += piece.Function.Arguments
+			if res.TTFT == 0 {
+				res.TTFT = time.Since(start)
+			}
 		}
 		d := Delta{Content: choice.Delta.Content, Reasoning: choice.Delta.Reasoning}
 		if d.Reasoning == "" {

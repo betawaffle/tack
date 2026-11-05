@@ -38,6 +38,12 @@ Done. See https://go.dev/doc/effective_go.`;
 const XSS = `<img src=x onerror="window.__pwned=1"> and <script>window.__pwned=1</script>
 
 [click](javascript:window.__pwned=1) ![pic](https://evil.example/leak.png) <b>not bold</b>`;
+const TOOL_CALLS = {
+  two: [["echo", '{"text":"first"}'], ["echo", '{"text":"second"}']],
+  bad: [["echo", '{"text":"cut off'], ["nothing", "{}"]],
+  hidden: [["echo", JSON.stringify({ text: "safe\u202eevil\u0007 <img src=x onerror=\"window.__pwned=1\">\u{E0041}\nline two" })]],
+  boom: [["boom", "{}"]],
+};
 let bodies = [];
 http
   .createServer((req, res) => {
@@ -64,8 +70,25 @@ http
       res.setHeader("Content-Type", "text/event-stream");
       const send = (o) => res.write("data: " + JSON.stringify(o) + "\n\n");
       const slow = /^slow/.test(last);
+      const final = b.messages[b.messages.length - 1];
+    if (final.role === "user" && /^tools /.test(last)) {
+      const calls = TOOL_CALLS[last.slice(6)] || [];
+      send({ id: "g", provider: "FakeHost", choices: [{ delta: { reasoning: "Let me use a tool." } }] });
+      calls.forEach(([name, args], index) => {
+        const id = `call-${index}-${bodies.length}`;
+        send({ id: "g", choices: [{ delta: { tool_calls: [{ index, id, type: "function", function: { name, arguments: "" } }] } }] });
+        for (let i = 0; i < args.length; i += 7) {
+          send({ id: "g", choices: [{ delta: { tool_calls: [{ index, function: { arguments: args.slice(i, i + 7) } }] } }] });
+        }
+      });
+      send({ id: "g", provider: "FakeHost", choices: [{ delta: { content: "" }, finish_reason: "tool_calls" }] });
+      send({ id: "g", choices: [], provider: "FakeHost", usage: { prompt_tokens: 100, completion_tokens: 13, cost: 0.00001, prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 5 } } });
+      res.end("data: [DONE]\n\n");
+      return;
+    }
       let text = RICH;
-      if (/^xss/.test(last)) text = XSS;
+      if (final.role === "tool") text = "Done with tools.";
+    else if (/^xss/.test(last)) text = XSS;
       else if (/^long/.test(last)) text = LONG;
       else if (/^short|^fail|^slow/.test(last)) text = "A short reply.";
       else if (/respond|Speak/.test(last)) text = "Speaking out of turn.";

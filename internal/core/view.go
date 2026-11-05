@@ -50,6 +50,34 @@ type Item struct {
 	Edited  bool         `json:"edited,omitzero"`
 	Removed bool         `json:"removed,omitzero"`
 	Pending *PendingEdit `json:"pending,omitzero"`
+
+	// Replies that made tool calls.
+	ToolCalls []ToolCallView `json:"tool_calls,omitzero"`
+}
+
+// ToolCallView is a tool call as the UI shows it. Arguments are the exact text
+// that was requested, which is also what runs. State is "waiting", "approved",
+// "running", "interrupted", "finished", "sent" or "denied".
+type ToolCallView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Invalid   string `json:"invalid,omitzero"`
+	State     string `json:"state"`
+	Output    string `json:"output,omitzero"`
+	HasOutput bool   `json:"has_output,omitzero"`
+	Error     string `json:"error,omitzero"`
+	Result    string `json:"result,omitzero"` // what the model was given
+	Decidable bool   `json:"decidable,omitzero"`
+}
+
+// DecisionView is what's waiting on a person. DenialText is the default for what
+// the model sees about anything denied.
+type DecisionView struct {
+	ID         string   `json:"id"`
+	Kind       string   `json:"kind"`
+	Calls      []string `json:"calls"`
+	DenialText string   `json:"denial_text"`
 }
 
 // Conversation is a conversation as the UI shows it.
@@ -60,6 +88,8 @@ type Conversation struct {
 	Busy     bool   `json:"busy"`
 	CanReply bool   `json:"can_reply"`
 	Items    []Item `json:"items"`
+
+	Decision *DecisionView `json:"decision,omitzero"`
 }
 
 // Conversations lists conversations, newest first.
@@ -117,6 +147,9 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if order := c.cfg.Routing.Order; len(order) > 0 {
 		out.Host = order[0]
 	}
+	if d := conv.decision; d != nil {
+		out.Decision = &DecisionView{ID: d.id, Kind: d.kind, Calls: d.calls, DenialText: denialText(d.kind)}
+	}
 	lastCall := -1
 	for i, it := range conv.items {
 		if it.role == "" {
@@ -136,10 +169,14 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 			}
 		case it.finished.Error != "":
 			out.Items = append(out.Items, Item{Role: "notice", Text: it.finished.Error})
-		case it.finished.Text == "":
+		case !usable(it.finished):
 			out.Items = append(out.Items, Item{Role: "notice", Text: "The model returned no text."})
 		default:
-			out.Items = append(out.Items, c.reply(it.finished))
+			reply := c.reply(it.finished)
+			for _, call := range it.calls {
+				reply.ToolCalls = append(reply.ToolCalls, c.toolCallView(conv, call))
+			}
+			out.Items = append(out.Items, reply)
 		}
 	}
 	return out, nil
@@ -161,10 +198,9 @@ func (c *Core) systemItem(it *item) Item {
 }
 
 func (c *Core) reply(ev *store.Event) Item {
-	item := Item{
-		Role:  "assistant",
-		Text:  c.text([]store.Part{{Block: ev.Text}}),
-		Stats: statsFrom(ev),
+	item := Item{Role: "assistant", Stats: statsFrom(ev)}
+	if ev.Text != "" {
+		item.Text = c.text([]store.Part{{Block: ev.Text}})
 	}
 	if ev.Reasoning != "" {
 		item.Reasoning = c.text([]store.Part{{Block: ev.Reasoning}})

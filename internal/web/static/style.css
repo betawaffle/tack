@@ -209,6 +209,39 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .system-body.is-removed { color: var(--muted); font-style: italic; }
 .pending { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); }
 .pending-body { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Tool calls */
+.tool {
+  margin: 8px 0; padding: 9px 11px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; font: 13px/1.45 var(--ui);
+}
+.tool.state-waiting, .tool.state-finished, .tool.state-interrupted { border-color: var(--brass); }
+.tool-head, .tool-arg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tool-name { margin: 0; font: 600 13px var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.tool-arg { margin-top: 7px; }
+.tool-arg-name { margin: 0; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.tool-text {
+  margin: 4px 0 0; padding: 6px 8px; max-height: 320px; overflow: auto; background: var(--code);
+  border-radius: 6px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ctrl {
+  margin: 0 1px; padding: 0 3px; border-radius: 3px; background: var(--warn-soft); color: var(--warn);
+  font-size: 10.5px;
+}
+.tool-invalid { margin-top: 6px; color: var(--warn); overflow-wrap: anywhere; }
+.tool-output { margin-top: 8px; }
+.tool-output summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; color: var(--muted); }
+.tool-allow { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-weight: 600; cursor: pointer; }
+.tool-allow input { width: 16px; height: 16px; accent-color: var(--brass); }
+.decision-card {
+  margin: 10px 0; padding: 11px 13px; background: var(--brass-soft);
+  border: 1px solid var(--brass); border-radius: 8px;
+}
+.denial { display: block; margin-top: 7px; }
+.denial textarea {
+  display: block; width: 100%; padding: 6px 8px; resize: vertical; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.decision-card .mini { padding: 4px 12px; font-size: 13px; }
 .hint { margin: 5px 0; color: var(--muted); font-size: 12px; }
 .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .editor { margin-top: 8px; }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,7 @@ type fake struct {
 	dataDir  string
 	tripwire *secret.Tripwire
 	store    *store.Store
+	tools    []Tool
 }
 
 func newFake(t *testing.T) *fake {
@@ -76,6 +78,7 @@ func (f *fake) open() *Core {
 		Client:  openrouter.NewClient(f.server.URL, secret.NewKey(testKey)),
 		Model:   "test/model",
 		Routing: openrouter.Routing{Order: []string{"morph/fp8"}},
+		Tools:   f.tools,
 	})
 	if err != nil {
 		f.t.Fatal(err)
@@ -218,7 +221,7 @@ func TestContextGrowsAndPrefixIsStable(t *testing.T) {
 		t.Fatalf("messages = %+v", second.Messages)
 	}
 	for i := range want {
-		if second.Messages[i] != want[i] {
+		if !reflect.DeepEqual(second.Messages[i], want[i]) {
 			t.Errorf("message %d = %+v, want %+v", i, second.Messages[i], want[i])
 		}
 	}
@@ -425,7 +428,7 @@ func (f *fake) wantMessages(n int, want ...openrouter.Message) {
 		f.t.Fatalf("request %d messages = %+v, want %+v", n, got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			f.t.Errorf("request %d message %d = %+v, want %+v", n, i, got[i], want[i])
 		}
 	}

@@ -45,7 +45,40 @@ type Part struct {
 type Entry struct {
 	Role  string `json:"role"`
 	Parts []Part `json:"parts"`
+
+	// An assistant message that made tool calls. Its reasoning has to be sent back
+	// exactly, or the host's cache misses from that point.
+	ToolCalls []ToolCall `json:"tool_calls,omitzero"`
+	Reasoning Ref        `json:"reasoning,omitzero"`
+
+	// A tool message: the call it answers.
+	ToolCall string `json:"tool_call,omitzero"`
 }
+
+// ToolCall is one call a model asked for. Arguments are a block holding the exact
+// text the model sent, since they can carry whole files. Invalid says why the call
+// can't run, as judged when it arrived.
+type ToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments Ref    `json:"arguments"`
+	Invalid   string `json:"invalid,omitzero"`
+}
+
+// Choice is what was decided about one tool call. Parts are the result the model
+// will see, and they're absent only when a call was allowed to run.
+type Choice struct {
+	ToolCall string `json:"tool_call"`
+	Allow    bool   `json:"allow"`
+	Parts    []Part `json:"parts,omitzero"`
+}
+
+// Decision kinds.
+const (
+	DecideCalls       = "tool_calls"  // may these run?
+	DecideOutput      = "tool_output" // may the model see what they produced?
+	DecideInterrupted = "interrupted" // tack stopped before these finished
+)
 
 // Event types.
 const (
@@ -58,6 +91,10 @@ const (
 	EditDiscarded     = "system_edit_discarded"
 	CallStarted       = "model_call_started"
 	CallFinished      = "model_call_finished"
+	DecisionRequested = "decision_requested"
+	DecisionMade      = "decision_made"
+	ToolStarted       = "tool_started"
+	ToolFinished      = "tool_finished"
 )
 
 // Event is one recorded fact. Fields beyond Time and Type depend on the type.
@@ -69,8 +106,11 @@ type Event struct {
 	Version string `json:"version,omitzero"`
 	PID     int    `json:"pid,omitzero"`
 
-	// conversation_created, user_message, model_call_*
+	// conversation_created and everything that happens in a conversation
 	Conversation string `json:"conversation,omitzero"`
+
+	// conversation_created: the exact tool definitions its calls send.
+	Tools Ref `json:"tools,omitzero"`
 
 	// user_message, system_message, system_edit_proposed. An edit with no parts
 	// removes the message.
@@ -104,7 +144,19 @@ type Event struct {
 	Text            Ref                 `json:"text,omitzero"`
 	Reasoning       Ref                 `json:"reasoning,omitzero"`
 	ParseErrors     int                 `json:"parse_errors,omitzero"`
-	Error           string              `json:"error,omitzero"`
+	Error           string              `json:"error,omitzero"` // also tool_finished
+	ToolCalls       []ToolCall          `json:"tool_calls,omitzero"`
+
+	// decision_*
+	Decision      string   `json:"decision,omitzero"`
+	Kind          string   `json:"kind,omitzero"`
+	DecisionCalls []string `json:"decision_calls,omitzero"`
+	Choices       []Choice `json:"choices,omitzero"`
+	By            string   `json:"by,omitzero"`
+
+	// tool_*
+	ToolCall string `json:"tool_call,omitzero"`
+	Output   Ref    `json:"output,omitzero"`
 }
 
 // Store is the single writer for a data directory.

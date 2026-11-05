@@ -11,7 +11,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-(cd "$here/../.." && go build -o "$tmp/tack" .) || exit 1
+(cd "$here/../.." && go build -o "$tmp/tack" . && go build -o "$tmp/toolserver" ./test/browser/toolserver) || exit 1
 
 printf 'sk-or-fake-key-for-browser-tests\n' >"$tmp/key"
 chmod 600 "$tmp/key"
@@ -24,8 +24,13 @@ pids+=($!)
 "$tmp/tack" -addr 127.0.0.1:18601 -data "$tmp/data" -key "$tmp/key" \
 	-url http://127.0.0.1:18600/v1 -system-prompt "$tmp/none" >"$tmp/tack.log" 2>&1 &
 pids+=($!)
+"$tmp/toolserver" -addr 127.0.0.1:18602 -data "$tmp/tools" -url http://127.0.0.1:18600/v1 >"$tmp/tools.log" 2>&1 &
+pids+=($!)
 
 node check.js
 status=$?
-[ $status -eq 0 ] || tail -5 "$tmp/tack.log" "$tmp/fake.log"
+node check-tools.js
+tools=$?
+[ $status -eq 0 ] && status=$tools
+[ $status -eq 0 ] || tail -n 5 "$tmp/tack.log" "$tmp/tools.log" "$tmp/fake.log"
 exit $status

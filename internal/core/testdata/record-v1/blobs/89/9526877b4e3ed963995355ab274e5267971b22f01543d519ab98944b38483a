@@ -1,0 +1,1 @@
+{"model":"test/model","messages":[{"role":"system","content":"Be brief."},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hello there"},{"role":"system","content":"Prefer very short words."},{"role":"user","content":"This one fails"}],"provider":{"order":["morph/fp8"],"allow_fallbacks":false},"session_id":"957a7c942ae967f3","stream":true}

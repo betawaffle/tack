@@ -35,15 +35,32 @@ straight away. Edits to a system message are held and shown as unused until you
 apply them. Applying one to a message the model has already seen makes the next
 call miss the cache from that point.
 
+## Tool calls
+
+The approval flow is built, but the binary doesn't offer any tools yet, so nothing
+can reach it outside the tests.
+
+When a model asks for tool calls, they wait for a decision, and the wait survives
+restarts. Whatever isn't ticked is denied, and the model is told so in wording you
+can edit. Approved calls then run, and their output waits for a second decision
+before the model sees any of it. A call that was interrupted is never run again
+without asking.
+
+Arguments and output are stored as blocks, not in event lines. A conversation
+keeps sending the tool definitions it started with, byte for byte.
+
 ## Testing
 
-`go test ./...` covers the server. The Markdown parser has its own tests, which
+`go test ./...` covers the server, including a record in the first event format
+(`internal/core/testdata/record-v1`). Raw data is immutable, so every build has to
+read that record and render the exact requests it sent. The Markdown parser has its own tests, which
 need Node: `node --test internal/web/`.
 
 There are also optional browser tests in `test/browser/`. Nothing else depends
 on them, and they're the only part of tack that uses npm. They drive every
 control of the page in headless Chromium, against a fake provider with a fake
-key and a temporary data directory:
+key and a temporary data directory. Tool approvals use a small test server with
+tools of its own, in `test/browser/toolserver`:
 
 ```
 cd test/browser

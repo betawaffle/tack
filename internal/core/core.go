@@ -28,6 +28,9 @@ var (
 	ErrNoEdit        = errors.New("no such unused edit")
 	ErrBusy          = errors.New("a reply is already in progress")
 	ErrNothingToSend = errors.New("the model has already replied to everything in this conversation")
+	ErrAwaiting      = errors.New("tool calls in this conversation are waiting for a decision")
+	ErrNoDecision    = errors.New("no such open decision")
+	ErrBadChoice     = errors.New("that choice isn't possible for this decision")
 )
 
 // Config is what a Core needs.
@@ -36,6 +39,7 @@ type Config struct {
 	Client  *openrouter.Client
 	Model   string
 	Routing openrouter.Routing
+	Tools   []Tool // offered to new conversations
 }
 
 // Core runs conversations.
@@ -52,6 +56,9 @@ type conversation struct {
 	created time.Time
 	items   []*item
 	busy    bool
+
+	tools    store.Ref // the exact definitions it sends, if it has any
+	decision *decision // what's waiting on a person, if anything
 }
 
 // item is a message or a model call, in the order they were recorded. Its role
@@ -72,6 +79,7 @@ type item struct {
 	// Calls.
 	callID   string
 	finished *store.Event
+	calls    []*toolCall // what a usable reply asked for
 }
 
 type edit struct {
@@ -90,6 +98,13 @@ func New(cfg Config) (*Core, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	// A stop can fall anywhere in a tool turn. Whatever it left has to go through
+	// a person, and the wait is recorded before anything else happens.
+	for _, id := range c.order {
+		if _, err := c.ensureDecision(c.convs[id]); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -110,7 +125,7 @@ func (c *Core) record(ev *store.Event) error {
 // types it doesn't know are ignored, so old binaries can read newer records.
 func (c *Core) apply(ev *store.Event) {
 	if ev.Type == store.ConversationAdded {
-		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time}
+		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools}
 		c.order = append(c.order, ev.Conversation)
 		return
 	}
@@ -132,6 +147,11 @@ func (c *Core) apply(ev *store.Event) {
 		for _, it := range conv.items {
 			if it.callID == ev.Call {
 				it.finished = ev
+				if usable(ev) {
+					for _, call := range ev.ToolCalls {
+						it.calls = append(it.calls, &toolCall{ToolCall: call})
+					}
+				}
 			}
 		}
 	case store.EditProposed:
@@ -150,6 +170,8 @@ func (c *Core) apply(ev *store.Event) {
 		if it := conv.editing(ev.Edit); it != nil {
 			it.pending = nil
 		}
+	default:
+		conv.applyTool(ev)
 	}
 }
 
@@ -173,11 +195,12 @@ func (conv *conversation) editing(editID string) *item {
 
 // usable reports whether a finished call's reply belongs in the next context.
 func usable(ev *store.Event) bool {
-	return ev != nil && ev.Error == "" && ev.Text != ""
+	return ev != nil && ev.Error == "" && (ev.Text != "" || len(ev.ToolCalls) > 0)
 }
 
 // context returns what the next call sends. The caller holds mu. Unused edits
-// aren't part of it, and neither are failed calls.
+// aren't part of it, and neither are failed calls. A tool call with no result yet
+// is left unanswered here, and call refuses to send that.
 func (conv *conversation) context() []store.Entry {
 	var out []store.Entry
 	for _, it := range conv.items {
@@ -187,7 +210,20 @@ func (conv *conversation) context() []store.Entry {
 				out = append(out, store.Entry{Role: it.role, Parts: it.parts})
 			}
 		case usable(it.finished):
-			out = append(out, store.Entry{Role: "assistant", Parts: []store.Part{{Block: it.finished.Text}}})
+			entry := store.Entry{Role: "assistant"}
+			if it.finished.Text != "" {
+				entry.Parts = []store.Part{{Block: it.finished.Text}}
+			}
+			if len(it.calls) > 0 {
+				entry.ToolCalls = it.finished.ToolCalls
+				entry.Reasoning = it.finished.Reasoning
+			}
+			out = append(out, entry)
+			for _, call := range it.calls {
+				if call.resolved() {
+					out = append(out, store.Entry{Role: "tool", ToolCall: call.ID, Parts: call.result})
+				}
+			}
 		}
 	}
 	return out
@@ -196,6 +232,12 @@ func (conv *conversation) context() []store.Entry {
 // canReply reports whether there's anything for the model to respond to. The
 // caller holds mu.
 func (conv *conversation) canReply() bool {
+	if conv.decision != nil {
+		return false
+	}
+	if conv.unanswered() {
+		return true // the rest of an interrupted tool turn
+	}
 	entries := conv.context()
 	return len(entries) > 0 && entries[len(entries)-1].Role != "assistant"
 }
@@ -203,14 +245,18 @@ func (conv *conversation) canReply() bool {
 // NewConversation records a new conversation. An empty system prompt means the
 // conversation starts without one.
 func (c *Core) NewConversation(systemPrompt string) (string, error) {
+	tools, err := c.storeDefinitions()
+	if err != nil {
+		return "", err
+	}
 	id := store.NewID()
-	if err := c.record(&store.Event{Type: store.ConversationAdded, Conversation: id}); err != nil {
+	if err := c.record(&store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools}); err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(systemPrompt) == "" {
 		return id, nil
 	}
-	_, err := c.AddSystemMessage(id, systemPrompt)
+	_, err = c.AddSystemMessage(id, systemPrompt)
 	return id, err
 }
 
@@ -295,8 +341,8 @@ func (c *Core) resolveEdit(convID, editID, eventType string) error {
 	return c.record(&store.Event{Type: eventType, Conversation: convID, Edit: editID})
 }
 
-// Update is a step in a reply. The kinds are "reasoning" and "content" while it
-// streams, then one "done" or "error" at the end.
+// Update is a step in a reply. The kinds are "tool", "reasoning" and "content"
+// while it streams, then one "done" or "error" at the end.
 type Update struct {
 	Kind string `json:"kind"`
 	Text string `json:"text,omitzero"`
@@ -337,7 +383,12 @@ func (c *Core) release(conv *conversation) {
 // waiting in the conversation go with it. The call runs to completion even if
 // nobody reads the updates, so closing the browser loses nothing.
 func (c *Core) Send(convID, text string) (<-chan Update, error) {
-	conv, err := c.reserve(convID, nil)
+	conv, err := c.reserve(convID, func(conv *conversation) error {
+		if conv.decision != nil || conv.unanswered() {
+			return ErrAwaiting
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -359,6 +410,9 @@ func (c *Core) Send(convID, text string) (<-chan Update, error) {
 // out of turn after a system message.
 func (c *Core) Reply(convID string) (<-chan Update, error) {
 	conv, err := c.reserve(convID, func(conv *conversation) error {
+		if conv.decision != nil {
+			return ErrAwaiting
+		}
 		if !conv.canReply() {
 			return ErrNothingToSend
 		}
@@ -370,8 +424,8 @@ func (c *Core) Reply(convID string) (<-chan Update, error) {
 	return c.start(conv), nil
 }
 
-// start runs a call for a reserved conversation. The channel closes once the
-// call has been recorded.
+// start moves a reserved conversation along. The channel closes once everything
+// has been recorded.
 func (c *Core) start(conv *conversation) <-chan Update {
 	updates := make(chan Update, updateBuffer)
 	send := func(u Update) {
@@ -391,7 +445,7 @@ func (c *Core) start(conv *conversation) <-chan Update {
 	go func() {
 		defer close(updates)
 		defer c.release(conv)
-		if err := c.call(conv, send); err != nil {
+		if err := c.advance(conv, send); err != nil {
 			log.Printf("call in conversation %s: %v", conv.id, err)
 			final(Update{Kind: "error", Text: err.Error()})
 			return
@@ -407,17 +461,30 @@ func (c *Core) start(conv *conversation) <-chan Update {
 func (c *Core) call(conv *conversation, send func(Update)) error {
 	c.mu.Lock()
 	entries := conv.context()
+	unanswered := conv.unanswered()
+	tools := conv.tools
 	c.mu.Unlock()
+	if unanswered {
+		// Hosts may accept this silently, but the model would be told nothing.
+		return errors.New("refusing to send a tool call with no result")
+	}
 
 	messages, err := c.renderMessages(entries)
 	if err != nil {
 		return err
+	}
+	var definitions []byte
+	if tools != "" {
+		if definitions, err = c.cfg.Store.Get(tools); err != nil {
+			return err
+		}
 	}
 	body, err := openrouter.Render(openrouter.Request{
 		Model:     c.cfg.Model,
 		Routing:   c.cfg.Routing,
 		Messages:  messages,
 		SessionID: conv.id,
+		Tools:     definitions,
 	})
 	if err != nil {
 		return err
@@ -477,6 +544,9 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	if finished.Error == "" && doErr != nil {
 		finished.Error = doErr.Error()
 	}
+	if finished.Error == "" {
+		finished.Error = malformedCalls(res)
+	}
 	if partial.Size() == 0 {
 		partial.Abort()
 	} else if finished.Response, err = partial.Commit(); err != nil {
@@ -492,13 +562,18 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 			return err
 		}
 	}
+	if finished.Error == "" {
+		if finished.ToolCalls, err = c.storeCalls(definitions, res.ToolCalls); err != nil {
+			return err
+		}
+	}
 	if err := c.record(finished); err != nil {
 		return err
 	}
 	if finished.Error != "" {
 		return errors.New(finished.Error)
 	}
-	if finished.Text == "" {
+	if finished.Text == "" && len(finished.ToolCalls) == 0 {
 		return fmt.Errorf("the model returned no text (finish reason %q)", finished.FinishReason)
 	}
 	return nil
@@ -507,15 +582,42 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 func (c *Core) renderMessages(entries []store.Entry) ([]openrouter.Message, error) {
 	out := make([]openrouter.Message, 0, len(entries))
 	for _, e := range entries {
-		var content strings.Builder
-		for _, p := range e.Parts {
-			data, err := c.cfg.Store.Get(p.Block)
+		content, err := c.joined(e.Parts)
+		if err != nil {
+			return nil, err
+		}
+		message := openrouter.Message{Role: e.Role, Content: content, ToolCallID: e.ToolCall}
+		if e.Reasoning != "" {
+			reasoning, err := c.cfg.Store.Get(e.Reasoning)
 			if err != nil {
 				return nil, err
 			}
-			content.Write(data)
+			message.Reasoning = string(reasoning)
 		}
-		out = append(out, openrouter.Message{Role: e.Role, Content: content.String()})
+		for _, call := range e.ToolCalls {
+			arguments, err := c.cfg.Store.Get(call.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			message.ToolCalls = append(message.ToolCalls, openrouter.ToolCall{
+				ID:       call.ID,
+				Type:     "function",
+				Function: openrouter.FunctionCall{Name: call.Name, Arguments: string(arguments)},
+			})
+		}
+		out = append(out, message)
 	}
 	return out, nil
+}
+
+func (c *Core) joined(parts []store.Part) (string, error) {
+	var content strings.Builder
+	for _, p := range parts {
+		data, err := c.cfg.Store.Get(p.Block)
+		if err != nil {
+			return "", err
+		}
+		content.Write(data)
+	}
+	return content.String(), nil
 }

@@ -225,12 +225,14 @@ function ledger(s, text, key, onToggleRaw) {
   row.append(out, el("span", "", dollars(s.cost_usd)));
   const time = el("span", "", `${seconds(s.ttft_ms)} first, ${seconds(s.duration_ms)} total`);
   row.append(time);
-  const actions = el("span", "ledger-actions");
-  actions.append(
-    copyButton("Copy", () => text),
-    button(unfolded.has(key) ? "Formatted" : "Raw", "mini", onToggleRaw),
-  );
-  row.append(actions);
+  if (text) {
+    const actions = el("span", "ledger-actions");
+    actions.append(
+      copyButton("Copy", () => text),
+      button(unfolded.has(key) ? "Formatted" : "Raw", "mini", onToggleRaw),
+    );
+    row.append(actions);
+  }
   return row;
 }
 
@@ -246,7 +248,7 @@ function replyNode() {
   return { node, thinking, reasoning, text };
 }
 
-function renderReply(item, key) {
+function renderReply(item, key, decision) {
   const r = replyNode();
   const showRaw = unfolded.has(key);
   if (showRaw) r.text.replaceChildren(el("pre", "raw", item.text));
@@ -255,14 +257,155 @@ function renderReply(item, key) {
     r.reasoning.textContent = item.reasoning;
     r.thinking.hidden = false;
   }
+  if (!item.text) r.text.hidden = true;
+  for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
   if (item.stats) {
     r.node.append(ledger(item.stats, item.text, key, () => {
       if (unfolded.has(key)) unfolded.delete(key);
       else unfolded.add(key);
-      r.node.replaceWith(renderReply(item, key));
+      r.node.replaceWith(renderReply(item, key, decision));
     }));
   }
   return r.node;
+}
+
+// Tool calls.
+
+// Characters that could hide what a call really does from whoever is approving it.
+const HIDDEN = /(?![\t\n])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+// exact shows text with hidden characters made visible. Copying still gives the
+// original bytes, because the copy buttons don't read from this.
+function exact(text, className) {
+  const pre = el("pre", className || "tool-text");
+  let at = 0;
+  for (const match of text.matchAll(HIDDEN)) {
+    pre.append(text.slice(at, match.index));
+    const code = match[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+    pre.append(el("span", "ctrl", `U+${code}`));
+    at = match.index + match[0].length;
+  }
+  pre.append(text.slice(at));
+  return pre;
+}
+
+function argumentRows(call) {
+  let args = null;
+  if (!call.invalid) {
+    try {
+      args = JSON.parse(call.arguments);
+    } catch {
+      // Shown raw below.
+    }
+  }
+  if (!args || typeof args !== "object") return [exact(call.arguments)];
+  return Object.entries(args).map(([name, value]) => {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    const row = el("div", "tool-arg");
+    const head = el("div", "tool-arg-head");
+    head.append(exact(name, "tool-arg-name"), el("span", "spacer"), copyButton("Copy", () => text));
+    row.append(head, exact(text));
+    return row;
+  });
+}
+
+const STATE_LABELS = {
+  waiting: "Waiting for you",
+  approved: "Approved",
+  running: "Running",
+  interrupted: "Interrupted",
+  finished: "Ran, output held",
+  sent: "Output sent",
+  denied: "Denied",
+};
+
+function renderToolCall(call, decision) {
+  const node = el("div", `tool state-${call.state}`);
+  node.dataset.call = call.id;
+  const head = el("div", "tool-head");
+  head.append(exact(call.name, "tool-name"), el("span", "tag", STATE_LABELS[call.state] || call.state));
+  head.append(el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
+  node.append(head);
+  if (call.invalid) node.append(el("div", "tool-invalid", `Can't run: ${call.invalid}`));
+  node.append(...argumentRows(call));
+  if (node.querySelector(".ctrl")) {
+    head.insertBefore(el("span", "tag unused", "Has hidden characters"), head.querySelector(".spacer"));
+  }
+
+  if (call.has_output) {
+    const output = el("details", "tool-output");
+    output.open = call.state === "finished";
+    const summary = el("summary", "", `Output, ${count(new TextEncoder().encode(call.output).length)} bytes`);
+    const copy = copyButton("Copy", () => call.output);
+    summary.append(copy);
+    output.append(summary, exact(call.output));
+    if (call.error) output.append(el("div", "tool-invalid", `The tool reported an error: ${call.error}`));
+    node.append(output);
+  }
+  if (call.state === "denied") {
+    node.append(el("div", "hint", "The model was told:"), exact(call.result));
+  }
+  if (decision && call.decidable) {
+    const label = el("label", "tool-allow");
+    const box = el("input");
+    box.type = "checkbox";
+    box.dataset.choice = call.id;
+    label.append(box, el("span", "", DECISION_TEXT[decision.kind].allow));
+    node.append(label);
+  }
+  return node;
+}
+
+const DECISION_TEXT = {
+  tool_calls: {
+    title: "Approve these tool calls?",
+    hint: "Nothing has run yet. Anything you leave unticked is denied.",
+    allow: "Allow this call",
+    verb: "Run",
+  },
+  tool_output: {
+    title: "Send this output to the model?",
+    hint: "The tools have run. The model sees only the output you tick.",
+    allow: "Send this output",
+    verb: "Send",
+  },
+  interrupted: {
+    title: "These calls didn't finish",
+    hint: "tack stopped before they finished, and any that started may have partly run. Tick one to run it again. The model is told about the rest.",
+    allow: "Run this again",
+    verb: "Run",
+  },
+};
+
+function decisionCard(conv) {
+  const decision = conv.decision;
+  const text = DECISION_TEXT[decision.kind];
+  const card = el("div", "decision-card");
+  card.append(el("strong", "", text.title), el("div", "hint", text.hint));
+  const label = el("label", "denial");
+  label.append(el("span", "hint", "What the model sees about anything denied"));
+  const area = el("textarea");
+  area.rows = 2;
+  area.value = decision.denial_text;
+  label.append(area);
+  const row = el("div", "row");
+  const ticked = () => [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice);
+  const go = button("", "mini primary", async () => {
+    await call(conv.id, undefined, { id: decision.id, allow: ticked(), denial_text: area.value });
+  });
+  go.id = "decide";
+  const relabel = () => {
+    const allowed = ticked().length;
+    const denied = decision.calls.length - allowed;
+    if (!allowed) go.textContent = "Deny all";
+    else if (!denied) go.textContent = `${text.verb} ${allowed}`;
+    else go.textContent = `${text.verb} ${allowed}, deny ${denied}`;
+  };
+  relabel();
+  card.addEventListener("refresh", relabel);
+  row.append(go);
+  card.append(label, row);
+  return card;
 }
 
 // System messages.
@@ -348,9 +491,9 @@ function renderSystem(item) {
   return node;
 }
 
-function renderItem(item, index) {
+function renderItem(item, index, decision) {
   if (item.role === "system") return renderSystem(item);
-  if (item.role === "assistant") return renderReply(item, `reply-${index}`);
+  if (item.role === "assistant") return renderReply(item, `reply-${index}`, decision);
   return el("div", item.role, item.text);
 }
 
@@ -423,7 +566,8 @@ async function show(id, polling) {
   const live = streaming === id;
   const typing = polling && document.querySelector("#list .editor");
   if (!typing) {
-    $("list").replaceChildren(...conv.items.map(renderItem));
+    $("list").replaceChildren(...conv.items.map((item, i) => renderItem(item, i, conv.decision)));
+    if (conv.decision && !live) $("list").append(decisionCard(conv));
     if (conv.can_reply && !live) $("list").append(replyControl(conv));
     if (conv.busy && !live) {
       // A reply started before this page loaded. Its text arrives when it's done.
@@ -433,7 +577,7 @@ async function show(id, polling) {
   showMeta(conv);
   if (conv.busy) pollTimer = setTimeout(() => show(id, true).catch(reportError), 2000);
   else if (polling) refreshList().catch(reportError);
-  setBusy(conv.busy);
+  setBusy(conv.busy || Boolean(conv.decision));
   if (!polling) scrollDown();
 }
 
@@ -526,8 +670,8 @@ async function consume(res, id, reply) {
 
 // call runs one model call and redraws afterwards. A user message is optional:
 // without one, the model responds to the conversation as it stands. It reports
-// whether the server took the request.
-async function call(id, userText) {
+// whether the server took the request. A decision moves things along the same way.
+async function call(id, userText, decision) {
   if (streaming === id) return false;
   streaming = id;
   setBusy(true);
@@ -536,14 +680,19 @@ async function call(id, userText) {
   const reply = replyNode();
   const waiting = el("div", "waiting-note cursor");
   try {
-    for (const node of $("list").querySelectorAll(":scope > .reply-control, :scope > .waiting-note")) node.remove();
+    for (const node of $("list").querySelectorAll(":scope > .reply-control, :scope > .waiting-note, :scope > .decision-card")) node.remove();
     if (userText !== undefined) $("list").append(el("div", "user", userText));
     reply.node.append(waiting);
     $("list").append(reply.node);
     scrollDown();
-    const res = userText !== undefined
-      ? await postJSON(`/api/conversations/${id}/messages`, { text: userText })
-      : await postJSON(`/api/conversations/${id}/reply`);
+    let res;
+    if (decision) {
+      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, denial_text: decision.denial_text });
+    } else if (userText !== undefined) {
+      res = await postJSON(`/api/conversations/${id}/messages`, { text: userText });
+    } else {
+      res = await postJSON(`/api/conversations/${id}/reply`);
+    }
     accepted = true;
     refreshList().catch(() => {});
     await consume(res, id, reply);
@@ -611,6 +760,12 @@ window.addEventListener("hashchange", () => {
   const id = location.hash.slice(1);
   if (id && id !== current) open(id).catch(reportError);
   else if (!id && current) startNew().catch(reportError);
+});
+
+$("list").addEventListener("change", (event) => {
+  if (event.target.matches("input[data-choice]")) {
+    document.querySelector(".decision-card")?.dispatchEvent(new Event("refresh"));
+  }
 });
 
 $("input").addEventListener("input", resizeInput);

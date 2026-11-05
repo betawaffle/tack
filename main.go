@@ -37,16 +37,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// First, because starting up can record events, and those belong to this build.
+	err = st.Append(&store.Event{Type: store.TackStarted, Version: version(), PID: os.Getpid()})
+	if err != nil {
+		log.Fatal(err)
+	}
 	c, err := core.New(core.Config{
 		Store:   st,
 		Client:  openrouter.NewClient(*url, key),
 		Model:   *model,
 		Routing: openrouter.Routing{Order: []string{*host}, AllowFallbacks: false},
 	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = st.Append(&store.Event{Type: store.TackStarted, Version: version(), PID: os.Getpid()})
 	if err != nil {
 		log.Fatal(err)
 	}
