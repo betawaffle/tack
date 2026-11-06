@@ -1832,7 +1832,8 @@ function reportError(err) {
 const HOLD_MS = 1500;
 
 function completeTo(text) {
-  return text.lastIndexOf("\n\n") + 2;
+  const at = text.lastIndexOf("\n\n");
+  return at < 0 ? 0 : at + 2;
 }
 
 function wholeWordsTo(text) {

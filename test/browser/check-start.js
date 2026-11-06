@@ -661,6 +661,8 @@ let page;
   }));
   ok(during.top === watch, "the page doesn't scroll while a reply comes in");
   ok(during.same, "what's already drawn isn't redrawn");
+  const heldBack = await p.locator(".thinking-text").innerText();
+  ok(heldBack === "" || heldBack.startsWith("Let me think"), `reasoning with no blank line is held back whole (${heldBack})`);
   ok(during.changes < 20, `and it draws in whole blocks (${during.changes} changes)`);
   ok(during.open, "reasoning stays open once the reply starts");
   ok(during.pendingShown, "and something shows it's still going");
