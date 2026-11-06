@@ -2170,3 +2170,23 @@ func TestKeptFilesFollowTheConversationAndItsForks(t *testing.T) {
 		t.Errorf("forked saw = %q", saw)
 	}
 }
+
+func TestTokensAreCountedForAModelTackKnows(t *testing.T) {
+	f := newToolFake(t)
+	f.output = func(string) ([]byte, error) { return []byte("Some output with a few words."), nil }
+	c := f.open()
+	id := f.askForTools(c, callA)
+	settings, _ := c.Conversation(id)
+	if settings.Budget.NextTokens != 0 {
+		t.Errorf("counted for a model it doesn't know: %d", settings.Budget.NextTokens)
+	}
+	if countRequest("deepseek/deepseek-v4.1-flash-1017", []byte(`{"messages":[{"role":"user","content":"Hi"}]}`)) == 0 {
+		t.Error("it can't count for the model it should")
+	}
+	if countOutput("deepseek/deepseek-v4.1-flash-1017", "Hi there") != 2 {
+		t.Errorf("output = %d", countOutput("deepseek/deepseek-v4.1-flash-1017", "Hi there"))
+	}
+	if countOutput("some/other-model", "Hi there") != 0 {
+		t.Error("it counted for an unknown model")
+	}
+}

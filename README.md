@@ -210,6 +210,14 @@ While something is running:
 - **Cancel reply** closes the connection, which is how OpenRouter says to cancel. Hosts that
   support it stop processing and billing. Others finish and charge in full.
 
+## Token counting
+
+`internal/tokens` counts tokens exactly for the models listed in it, with no network, and it's
+keyed on the exact model, so other models need their own entry. For DeepSeek V4.1 it uses DeepSeek's
+own `tokenizer.json` and a port of its prompt encoder. `tack-show -tokens` compares its counts with
+what hosts reported for every call in the record. The page shows the count for the next call, and
+for output waiting to be sent.
+
 ## Notes
 
 `scratch` keeps text for the model to read back, with a closed panel on the page so that nothing in it is hidden from you. `note` writes to a panel on the conversation's page, labelled as coming from the model. It

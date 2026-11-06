@@ -24,6 +24,7 @@ import (
 	"github.com/betawaffle/tack/internal/config"
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/tokens"
 )
 
 func main() {
@@ -37,6 +38,7 @@ func main() {
 	full := flag.Bool("full", false, "don't shorten long text")
 	sent := flag.Bool("sent", false, "also show what each model call sent")
 	events := flag.Bool("events", false, "also show the conversation's raw events")
+	counts := flag.Bool("tokens", false, "compare counted tokens with what hosts reported, for every call in the record")
 	flag.Parse()
 
 	dir := *dataDir
@@ -58,6 +60,12 @@ func main() {
 	limit := 1500
 	if *full {
 		limit = 0
+	}
+	if *counts {
+		if err := compareTokens(os.Stdout, st); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if err := run(os.Stdout, st, c, strings.Join(flag.Args(), " "), limit, *sent, *events); err != nil {
 		log.Fatal(err)
@@ -321,4 +329,49 @@ func showEvents(w io.Writer, st *store.Store, id string) error {
 		fmt.Fprintln(w, string(line))
 		return nil
 	}, nil)
+}
+
+// compareTokens shows how close counting comes to what hosts reported.
+func compareTokens(w io.Writer, st *store.Store) error {
+	type started struct {
+		model string
+		body  store.Ref
+	}
+	calls := map[string]started{}
+	exact, total := 0, 0
+	err := st.Replay(func(ev *store.Event) error {
+		switch ev.Type {
+		case store.CallStarted:
+			calls[ev.Call] = started{ev.Model, ev.Request}
+		case store.CallFinished:
+			call, ok := calls[ev.Call]
+			counter, known := tokens.For(call.model)
+			if !ok || !known || len(ev.Usage) == 0 {
+				return nil
+			}
+			var usage struct {
+				PromptTokens int `json:"prompt_tokens"`
+			}
+			if err := json.Unmarshal(ev.Usage, &usage); err != nil || usage.PromptTokens == 0 {
+				return nil
+			}
+			body, err := st.Get(call.body)
+			if err != nil {
+				return err
+			}
+			counted, err := counter.Request(body)
+			if err != nil {
+				fmt.Fprintf(w, "%s %s: %v\n", ev.Conversation, ev.Call, err)
+				return nil
+			}
+			total++
+			if counted == usage.PromptTokens {
+				exact++
+			}
+			fmt.Fprintf(w, "%s %s %s counted %d, reported %d, off by %d\n", ev.Conversation, ev.Call, call.model, counted, usage.PromptTokens, counted-usage.PromptTokens)
+		}
+		return nil
+	}, func(string, int) {})
+	fmt.Fprintf(w, "%d of %d exact\n", exact, total)
+	return err
 }

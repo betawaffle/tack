@@ -795,7 +795,8 @@ function renderToolCall(call, decision) {
     const body = el("div");
     const row = el("div", "view-row");
     row.append(viewed(`output-${call.id}`, text, ["raw", "markdown", "json"], body, "tool-text"));
-    output.append(el("summary", "", `Output, ${count(new TextEncoder().encode(text).length)} bytes`), row, fold(`output-${call.id}`, text, body));
+    const size = `Output, ${count(new TextEncoder().encode(text).length)} bytes${call.output_tokens ? `, ${count(call.output_tokens)} tokens` : ""}`;
+    output.append(el("summary", "", size), row, fold(`output-${call.id}`, text, body));
     if (call.error) output.append(el("div", "tool-invalid", `The tool reported an error: ${call.error}`));
     if (call.state === "sent" && !call.result_edited && (call.result || "").includes("[... the user left out ")) {
       output.append(el("div", "hint", "The model got only the start and end of this."));
@@ -1540,7 +1541,7 @@ function refreshSpend() {
   let text = "";
   if (spendInfo.budget) {
     const estimate = estimateNext(spendInfo.budget);
-    text = estimate === null ? "No estimate yet for the next call. " : `Next call about ${tackMoney.rough(estimate)}. `;
+    text = estimate === null ? "No estimate yet for the next call. " : `Next call about ${tackMoney.rough(estimate)}${spendInfo.budget.next_tokens ? `, with ${count(spendInfo.budget.next_tokens)} tokens so far` : ""}. `;
   }
   if (spendEditing) {
     line.querySelector(".spend-estimate").textContent = text;

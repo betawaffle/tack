@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/tokens"
 )
 
 // Summary describes a conversation in a list.
@@ -97,6 +98,10 @@ type ToolCallView struct {
 	Network       bool     `json:"network,omitzero"`
 	// Compact says it's only bookkeeping, like a note, which doesn't need a full card.
 	Compact bool `json:"compact,omitzero"`
+
+	// OutputTokens is what the output would add to the next call, while it's waiting on someone
+	// deciding whether to send it. Zero means it can't be counted.
+	OutputTokens int `json:"output_tokens,omitzero"`
 	// Someone changed what the model was given, or has a change held.
 	ResultEdited bool         `json:"result_edited,omitzero"`
 	Pending      *PendingEdit `json:"pending,omitzero"`
@@ -119,6 +124,9 @@ type BudgetView struct {
 	RecentCost Pico `json:"recent_cost_pico"`
 	LastBytes  int  `json:"last_bytes"`
 	NextBytes  int  `json:"next_bytes"`
+	// NextTokens is the input tokens of the next call if nothing's added, for a model tack
+	// can count for. Zero means it can't.
+	NextTokens int  `json:"next_tokens,omitzero"`
 	Allowance  Pico `json:"allowance_pico"`
 }
 
@@ -258,6 +266,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if definitions, err := c.definitions(conv.tools); err == nil {
 		if body, err := c.renderRequest(conv, conv.context(), definitions, effective); err == nil {
 			out.Budget.NextBytes = len(body)
+			out.Budget.NextTokens = countRequest(effective.Model, body)
 		}
 	}
 	if conv.budgetStopped {
@@ -418,4 +427,35 @@ func statsFrom(ev *store.Event) *Stats {
 		TTFTMillis:       ev.TTFTMillis,
 		DurationMillis:   ev.DurationMillis,
 	}
+}
+
+// These are the most that gets counted to show on the page. Counting is quick, but redrawing
+// a page shouldn't wait on an enormous request or output.
+const (
+	countRequestBytes = 1 << 20
+	countOutputBytes  = 4 << 20
+)
+
+func countRequest(model string, body []byte) int {
+	counter, ok := tokens.For(model)
+	if !ok || len(body) > countRequestBytes {
+		return 0
+	}
+	n, err := counter.Request(body)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func countOutput(model, text string) int {
+	counter, ok := tokens.For(model)
+	if !ok || len(text) > countOutputBytes {
+		return 0
+	}
+	n, err := counter.Text(text)
+	if err != nil {
+		return 0
+	}
+	return n
 }

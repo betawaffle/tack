@@ -1,0 +1,1318 @@
+[
+{
+"text": "",
+"count": 0
+},
+{
+"text": " ",
+"count": 1
+},
+{
+"text": "  ",
+"count": 1
+},
+{
+"text": "\n",
+"count": 1
+},
+{
+"text": "\n\n",
+"count": 1
+},
+{
+"text": " \n ",
+"count": 2
+},
+{
+"text": "a",
+"count": 1
+},
+{
+"text": "hello world",
+"count": 2
+},
+{
+"text": "Hello,  world!\n\nNext   line \t tab\t\n",
+"count": 11
+},
+{
+"text": "12345678 1,000.50 ٣٤٥ ½",
+"count": 17
+},
+{
+"text": "中文测试 and 日本語のテキスト、カタカナ。한국어",
+"count": 18
+},
+{
+"text": "def f(x):\n    return x + 1  # comment\n\n\nprint(f(2))\n",
+"count": 19
+},
+{
+"text": "{\"a\": [1, 2.5, null], \"b\": \"c\\n\"}",
+"count": 20
+},
+{
+"text": "<｜User｜>hi<｜Assistant｜><think>x</think>｜DSML｜ <dsml: </dsml:",
+"count": 11
+},
+{
+"text": "<｜not a token｜> <think",
+"count": 9
+},
+{
+"text": "é naïve café ​ x　y zw",
+"count": 15
+},
+{
+"text": "emoji 😀👍🏽 flags 🇯🇵",
+"count": 12
+},
+{
+"text": "--flag -x .5 a.b.c @foo #bar $baz",
+"count": 16
+},
+{
+"text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+"count": 27
+},
+{
+"text": "  leading and trailing  ",
+"count": 5
+},
+{
+"text": "tabs\t\t\tthen\n\t\n\tlines  \n  \n",
+"count": 9
+},
+{
+"text": "\u0000\u0001 control",
+"count": 4
+},
+{
+"text": "http://example.com/a?b=c&d=e#f",
+"count": 13
+},
+{
+"text": "CamelCaseWord snake_case_word kebab-case-word",
+"count": 11
+},
+{
+"text": "don't can't it's 'quoted' \"double\"",
+"count": 13
+},
+{
+"text": "x)=  \na1b2—\t(<think>   123  \n中中\n4567\n—",
+"count": 22
+},
+{
+"text": "  a1b2<think>\t4567==<think>  <think><think>)  4567  —ـx,中x—\t<think>,—a1b2😀",
+"count": 35
+},
+{
+"text": "\t<think><think>=123(\t—ab\n<think>  ",
+"count": 12
+},
+{
+"text": "123é😀—中\r\n!?文字<think>文字(,4567'sWordab\r\n4567\n<think>, é́!? \n文字,_\n\t 中Word\r\n!?xé中  ",
+"count": 48
+},
+{
+"text": "\r\n—<think>'ś",
+"count": 6
+},
+{
+"text": "!?ab(_é<think>'s文字\na1b2\n.éab😀\n   \nab,=",
+"count": 24
+},
+{
+"text": "😀a1b2文字,ab)́😀(the 文字(Word_\té  123\r\n,x \n4567))ـé\nWord文字)—.́xa1b2中",
+"count": 44
+},
+{
+"text": ".ab中(😀́)4567x\nWordx4567😀4567the éa1b2<think>Word.,the x中—(_<think>!?xabـ _=",
+"count": 42
+},
+{
+"text": "文字́ـ\r\n",
+"count": 5
+},
+{
+"text": "))))\té=)  123\n123文字Word\t!?_  \tthe <think>x—\t(_the \nـ123_)x=.(",
+"count": 31
+},
+{
+"text": "(é\t\tـé文字éé,\nx\t \n!? \n.éa1b2abWord the 123 (xab—the \r\n ,=ـ\nabـ.",
+"count": 44
+},
+{
+"text": "(Word(\r\n4567——\r\n !?=4567_'s's\r\nـ123's4567a1b2) \n's4567123 é( \nthe the 's.",
+"count": 45
+},
+{
+"text": ".123ab_(文字's \n((\n4567\t4567é123!?123é_́_a1b2the é=('s=\na1b2",
+"count": 36
+},
+{
+"text": ")'sab\r\n123é́Word",
+"count": 9
+},
+{
+"text": "'s=!?\n's \n)文字) \n\n \nWordWordxthe x<think>́文字's=x_a1b2_é😀",
+"count": 29
+},
+{
+"text": "x——xthe the 's \n=\t  \nx中ـ123a1b2ـ123the .123,",
+"count": 26
+},
+{
+"text": "4567\r\n<think>!?.—中a1b2x   \n(́文字😀<think>a1b2́ 中a1b2́ x—x  the ـ文字\r\nWord",
+"count": 45
+},
+{
+"text": "the \r\n'sxWordxé_ \n\t—  !?😀  —é's\r\n\t́—  4567123.  \r\n\t 文字—the \r\ń\n文字!?",
+"count": 49
+},
+{
+"text": " _ 123ab.文字 —'sé 4567ab ́́.—́123a1b2文字x中\t)文字!?\n😀4567中\n123😀,'s\t́",
+"count": 47
+},
+{
+"text": "ab=😀(x.́x文字4567",
+"count": 12
+},
+{
+"text": ")́éWord😀a1b24567",
+"count": 11
+},
+{
+"text": "ab中 )!?中123(!?\n \n",
+"count": 10
+},
+{
+"text": "the !?—文字文字abthe )!? _, \n\t's4567́\t\n..  ́",
+"count": 24
+},
+{
+"text": ".\r\nxa1b2中ـ😀a1b2.)x—",
+"count": 18
+},
+{
+"text": "<think>éab!?\n.  'sabWord中́\n.the =\n's.\n_ـ4567\n.ـ\t文字the !?—中.",
+"count": 33
+},
+{
+"text": "x   ab4567\tWord.  Word123,=, \r\n123,文字 😀Word.('sthe .  the the  \n —123 é4567文字\t😀",
+"count": 44
+},
+{
+"text": "😀é—a1b2́) ,ab1234567!?123a1b2́ab \n=x)(  a1b2xthe \n= \n",
+"count": 38
+},
+{
+"text": "中Word  \n😀a1b2)ـ 😀,_4567ab,  文字",
+"count": 21
+},
+{
+"text": "Word.文字the .(!?—!?4567  ́",
+"count": 15
+},
+{
+"text": "123(Wordthe !?)\né. =1234567 \r\nthe \n.a1b2\n",
+"count": 23
+},
+{
+"text": ")<think>  )the ,,=4567\n",
+"count": 11
+},
+{
+"text": " ـ\r\nx😀́ab'ś_)\r\n!? \néx, \n_=x  a1b2a1b2ab́ =中 \nab's x \r\n <think>",
+"count": 48
+},
+{
+"text": "a1b2😀",
+"count": 6
+},
+{
+"text": "'śab😀ab=4567\nthe   x=(\t)a1b2文字—  =the =—😀4567é.the 文字's\n \n ́—\n😀 ",
+"count": 42
+},
+{
+"text": " \n \né.'s",
+"count": 4
+},
+{
+"text": "ـ.4567 \n\r\n",
+"count": 7
+},
+{
+"text": "4567 \n=文字éـ)\né😀,\r\n  _",
+"count": 16
+},
+{
+"text": "\n_x!?.= \nab,_<think>xthe ",
+"count": 12
+},
+{
+"text": "  é.😀\tab123😀é,ab ,文字文字文字\r\n\t́—123,\néthe ,文字\na1b2 文字",
+"count": 36
+},
+{
+"text": ")123123\n<think>\nx \n .(x_a1b2= .́",
+"count": 19
+},
+{
+"text": "ab(4567é́́é)",
+"count": 9
+},
+{
+"text": "Wordthe ",
+"count": 3
+},
+{
+"text": "😀文字), \nx中()!?\ta1b2!?the !?\r\n!?a1b2)\t123abthe ́ \n,.(\n))ـ",
+"count": 39
+},
+{
+"text": "\n(中\r\n.ـ  .\t  a1b2😀,=x4567.中 !?123\r\n('s中́the 's\r\n=)́——123 \n\n  ",
+"count": 45
+},
+{
+"text": "文字_\r\nx=ـ,é  —xWordé中!?,,. \n \n=.)=4567,é",
+"count": 27
+},
+{
+"text": "😀)\tWord=Word\n123 ́'sé—4567文字!?\r\n文字中x—1234567\nWord!?—\n!?4567(.'s<think>123́",
+"count": 43
+},
+{
+"text": " \nـ",
+"count": 2
+},
+{
+"text": ")中 \n 123).!?\r\n  é.<think>(x😀  ='sــ123\n.́4567",
+"count": 28
+},
+{
+"text": ")=文字中,ـa1b2ـthe x  中ab\r\ń'sé<think>éthe \n)a1b2 ـ",
+"count": 30
+},
+{
+"text": "文字4567's\t4567xx 😀\ta1b2 \nab=ـ\r\ń文字\n—\r\n  the 'sx4567<think>  =ab",
+"count": 38
+},
+{
+"text": "x=. =中ab\r\n\t\t\n, <think>123).4567's_",
+"count": 18
+},
+{
+"text": "the ",
+"count": 2
+},
+{
+"text": ",文字.!?=a1b2́4567é 4567—4567the 中ab=,  the 123é́😀=中\n.4567😀中(4567é  ",
+"count": 47
+},
+{
+"text": "ab中(😀)123the 's, \nـ \n123é123,\r\na1b21234567文字",
+"count": 27
+},
+{
+"text": ".\r\ń,\t_é_Word́4567é中😀  ",
+"count": 18
+},
+{
+"text": "x)  123the _x中  ab  Word)文字́ab́!? \n\t\nWord!?123Word=  \n文字  ,😀 \n)a1b2(!?文字Word",
+"count": 43
+},
+{
+"text": "the \n.\n(中́",
+"count": 6
+},
+{
+"text": "—\r\n123)(\r\na1b2,",
+"count": 12
+},
+{
+"text": "\n  abé123(—文字123!?( \ńéthe =中4567's=\r\n)  )  文字\n's",
+"count": 30
+},
+{
+"text": ".123 \n\n",
+"count": 3
+},
+{
+"text": "!?(.!?_  . \nabab!?.,the  \n\r\n_'s=\nthe a1b24567\téab文字\r\n)'s.中a1b2éxéWordthe 's",
+"count": 46
+},
+{
+"text": "a1b2ab\r\nx_4567!?ـ!?文字('s's_\n 123)\r\nWord",
+"count": 27
+},
+{
+"text": "中\n=  é——!?Word中́\t\n._\n",
+"count": 13
+},
+{
+"text": "\t中éab文字Word4567x中文字_́😀4567",
+"count": 17
+},
+{
+"text": "ـ\r\n😀\r\n\t\r\na1b2,,.<think>.(. \n.123文字4567Word45674567x,́<think>123!?\n).4567  4567",
+"count": 42
+},
+{
+"text": "=文字  \tthe é́",
+"count": 7
+},
+{
+"text": "a1b2文字(  ́,4567\t  123_a1b2<think>123\n",
+"count": 21
+},
+{
+"text": " ـWord文字_.\r\n\r\n😀the \t=_ab_(123  (!?x  123.",
+"count": 25
+},
+{
+"text": "_ \n=",
+"count": 3
+},
+{
+"text": "a1b2the a1b2!?中😀(Word_,\n123  's",
+"count": 22
+},
+{
+"text": "—é\n中\t's)😀—x=—\n=Word)ab.中,😀,中  , \n<think>́(中中the ",
+"count": 34
+},
+{
+"text": "=123) \n)123the 中́Word中\ta1b2\n)<think>́(文字\r\nWordxthe   ",
+"count": 28
+},
+{
+"text": "x='s)\n<think>_( \n Wordx(,Word Word\n\t)é\r\n's's's123,xa1b2  é!?  _=)",
+"count": 38
+},
+{
+"text": "́ab_aba1b2́",
+"count": 8
+},
+{
+"text": "='sـ4567_)_ـ123a1b2é",
+"count": 14
+},
+{
+"text": "<think>123  ) Word)(\tx4567 \n",
+"count": 11
+},
+{
+"text": "  ́—a1b2\r\n😀  😀a1b2!?\t)_",
+"count": 23
+},
+{
+"text": "—ـ=\r\n,=中,<think>4567中)😀(文字 文字Wordthe the _é文字4567文字\r\n_\r\na1b2文字",
+"count": 39
+},
+{
+"text": "'sé)\t\nx(中(\n's文字",
+"count": 10
+},
+{
+"text": " 😀    =x\n \n!?\r\n \n \n  \r\n ́)='sxthe ـ\n_ \naba1b2\t123x́é",
+"count": 36
+},
+{
+"text": "'s'sWord😀's \n4567\na1b2(_\r\n.Word!?́_.́",
+"count": 25
+},
+{
+"text": "x. é123<think>._ 4567!?(  123Word)Word=.😀!?́)Word's's.\t\r\n ",
+"count": 32
+},
+{
+"text": "=ـ(ـ",
+"count": 4
+},
+{
+"text": "— <think>ab́́\t.—=ـ) \n's(.)(<think>x(!?\r\n\n文字4567Word_ \n",
+"count": 28
+},
+{
+"text": ",a1b2 .",
+"count": 6
+},
+{
+"text": "=ـ<think>😀́!? \nthe  \n  4567x,_=中中 (́",
+"count": 22
+},
+{
+"text": "xé4567_",
+"count": 5
+},
+{
+"text": "the   the ",
+"count": 4
+},
+{
+"text": "(,\t (—4567中<think>,<think>x123(_a1b2éWordxthe 's4567abx文字\t\n=xـ😀's.)'s.the ",
+"count": 42
+},
+{
+"text": "=a1b2—́",
+"count": 6
+},
+{
+"text": "_=<think>文字_  \né4567Word́the     —the )Word4567Word  \r\n\t",
+"count": 25
+},
+{
+"text": "_",
+"count": 1
+},
+{
+"text": "😀123x中123 _= ==中a1b2_Word ,\n,=  ́ \n'séab—the )ـ中 \n文字\n \n=",
+"count": 38
+},
+{
+"text": "Word4567\t.4567=  \t!?́ \nabـ.ab  .=—😀中😀's .,=́123",
+"count": 32
+},
+{
+"text": "́ the Word.́",
+"count": 6
+},
+{
+"text": "a1b2 \n123Word \n!?123́)!?_4567)ـ=ab",
+"count": 20
+},
+{
+"text": "ééa1b2 abthe ـthe 中 \n4567<think>́,'s123)_<think>\n<think>Wordx  the \t\t_Word(xabthe the   ",
+"count": 38
+},
+{
+"text": "ab==  ab\n \n  \n",
+"count": 6
+},
+{
+"text": "\r\n(123a1b2a1b2—́😀\ńـ\r\nab)\t4567123123\t    ـ's\r\n=\na1b2\r\n==,é\tx\t's\r\n=",
+"count": 49
+},
+{
+"text": ",!?!?中.the (.,  ab\r\n(!?",
+"count": 13
+},
+{
+"text": " éـ,_ \nthe 's中the 中 \r\n\t(éab  —<think>123abـa1b2\n<think>a1b2,Word中the  123,\r\n\r\n  the (",
+"count": 49
+},
+{
+"text": "\téab'sa1b2Wordé<think>(a1b2 .<think>Word,a1b2123ab4567éWord\t=\r\n\né'sab—'s\t=",
+"count": 41
+},
+{
+"text": "(\t))́́ \n\n中́=the (123,.中́— Word",
+"count": 18
+},
+{
+"text": "́=4567文字x—_\r\nab\r\n_=  (<think>!? xـa1b2文字😀— \n!?",
+"count": 33
+},
+{
+"text": "文字文字ab\r\n.<think>4567x!?文字=",
+"count": 14
+},
+{
+"text": " 123.,\r\naba1b2a1b2_x \nx4567 \n!?_",
+"count": 21
+},
+{
+"text": "(Word4567!?123. \n\tWord😀\t123)xx's, \n,中.123\t=\t.123́)文字  the )ـ",
+"count": 36
+},
+{
+"text": "ab4567 =,文字the x._ \n)the  \n4567ـ中ab<think><think> \n=中ـ4567😀 \n=",
+"count": 30
+},
+{
+"text": "ـ4567😀Word=\t文字中!?.=ab\t́中4567's)abab=Word.ـ中é文字the _ـ中 😀😀ـWord́=",
+"count": 43
+},
+{
+"text": "\r\nthe )a1b2é\t  .—123Wordab's123 (\tـ<think>文字—",
+"count": 24
+},
+{
+"text": "abé the ='sa1b2( !?中 \n文字123",
+"count": 18
+},
+{
+"text": ") \r\n\t \n_(=  ..)",
+"count": 11
+},
+{
+"text": "  the \n中中=ab😀(<think>.\t4567, \n) 4567's)文字123Wordx\r\n\n",
+"count": 29
+},
+{
+"text": "é=— \n4567a1b2x(😀=a1b2a1b2's",
+"count": 24
+},
+{
+"text": "文字,\r\n—=x\r\na1b2é('sـ4567.ab)😀.中😀Wordéthe 's \n's.",
+"count": 35
+},
+{
+"text": "4567=,!?éé中_=\n😀́(x,ـ)  \na1b2<think>́!?",
+"count": 26
+},
+{
+"text": " a1b2(=<think>the 😀the 123",
+"count": 13
+},
+{
+"text": "=,._\t",
+"count": 4
+},
+{
+"text": "xـ4567Word\r\n文字('sx123́)'s—Word_́ab_'s\n😀́́—'s=a1b2,123éab123 \n \na1b2文字",
+"count": 46
+},
+{
+"text": "—\t.中4567a1b2xé",
+"count": 12
+},
+{
+"text": "—  é文字́xabé4567éWord—_ـ \nthe Worda1b2!?文字ab<think>é😀,a1b2文字(中中😀\n",
+"count": 41
+},
+{
+"text": "=(==the the _  😀 \n!?'s",
+"count": 12
+},
+{
+"text": " éé\r\ńx  ",
+"count": 8
+},
+{
+"text": "ab中=x!?\tـ😀(!?é\r\n —",
+"count": 16
+},
+{
+"text": ",中!?中.—  a1b2,,(a1b2é)",
+"count": 19
+},
+{
+"text": " .ـ (123=é's\t!?123!?ab,x<think>=\n's  )",
+"count": 22
+},
+{
+"text": "́)—<think>  ),\tthe   123a1b2é_\r\n😀  's —_)_x=😀abab_́😀\n123  😀=",
+"count": 41
+},
+{
+"text": "=\r\nWord\t😀Wordـ  中\r\n\t=the (ـa1b2x's,—ab.ـ,Word中  !?the 中",
+"count": 37
+},
+{
+"text": "=<think>  é<think>   a1b2\t\r\n's中<think>ab)文字\nthe 😀)_<think>😀xé\r\n中—\t\n=é123́x=the ",
+"count": 42
+},
+{
+"text": "the the 😀😀\tـ\n123ـ\txéthe . \n<think>4567文字 \n \nWord  (\r\n \nababـ",
+"count": 30
+},
+{
+"text": " \n\r\n\n,=—abé文字😀",
+"count": 11
+},
+{
+"text": "  ab  the   the ́=😀a1b2_\n),, \n_",
+"count": 20
+},
+{
+"text": "ـa1b2é_  !?(<think> \n文字é",
+"count": 14
+},
+{
+"text": "x's\t(=Word='s中é)",
+"count": 10
+},
+{
+"text": ".'s\r\n<think>!?,.  _=ab'sa1b2_!?ـ_ \nthe a1b2x_a1b2,<think>中́4567)",
+"count": 40
+},
+{
+"text": "😀)_\r\ń4567's文字,abthe !?..中Word<think>a1b2\r\ń's  ,a1b2x",
+"count": 34
+},
+{
+"text": "x.ـ's's—😀\r\né(—\n——é's)123's\r\n \n4567,_  😀)文字ab123.<think>\r\nthe 's)文字",
+"count": 40
+},
+{
+"text": "\n—'s(\r\n\n4567)<think> ́.́a1b2 !?é <think>123123123123\nWord'sab,(<think><think>()\r\n ",
+"count": 40
+},
+{
+"text": "4567  é(ـ\t(=文字's",
+"count": 10
+},
+{
+"text": "x!?_the (.",
+"count": 5
+},
+{
+"text": "_the \t  123ــ<think>é<think><think>123.\r\n.中\t文字\r\n<think>a1b2_x.a1b2  !?123Word)\nthe     ",
+"count": 37
+},
+{
+"text": "(ـab文字éـ́\nـ_=)\tab\n.!?<think>4567=\n😀 )Word文字ـWord(4567 \n4567Word  .(",
+"count": 39
+},
+{
+"text": "́—́the ",
+"count": 5
+},
+{
+"text": ".'s ab",
+"count": 4
+},
+{
+"text": "  \tx!?\r\nthe 123😀 \n,<think><think>文字\r\n=\té!?(.)\t(é)Word文字4567'sx😀",
+"count": 36
+},
+{
+"text": "文字",
+"count": 1
+},
+{
+"text": "'s  Worda1b24567\n_ـ(́ \nx\r\n",
+"count": 17
+},
+{
+"text": "\t)a1b2the =\n文字!?!?a1b24567é\t=(x!?4567 \n  Wordab文字—́x文字ـx",
+"count": 35
+},
+{
+"text": "中中4567xthe .<think>a1b2,!?'sWord.é\t!?文字́",
+"count": 23
+},
+{
+"text": "\tx   =́'s😀123—éa1b2,\t.\r\n123(中.45674567\t),中́Word  a1b2 \n",
+"count": 37
+},
+{
+"text": "x=the 文字's !? x文字the 'sa1b2 ,Word(中  ",
+"count": 24
+},
+{
+"text": "123.<think>Wordxa1b2Word \r\n4567abWord123_\na1b2\ń_ \né\r\n.Word123x_",
+"count": 34
+},
+{
+"text": "<think>,123the \nab \n 中a1b2 \n   ",
+"count": 16
+},
+{
+"text": "!?,a1b2=ـé\nthe 中\r\néxـ😀.4567Word<think>a1b2(  Wordab",
+"count": 33
+},
+{
+"text": "<think>_ـthe ( 文字 \n\t(ab4567a1b2a1b2ـ!?\r\nabـ)<think>\r\ń",
+"count": 33
+},
+{
+"text": ",ـ\t \n",
+"count": 4
+},
+{
+"text": "文字 the  's—xthe 4567\n4567_WordWord\t,.—a1b2the the \tab \n123.the a1b2_=<think>文字",
+"count": 41
+},
+{
+"text": "4567ab文字\t(ـ\tabWord  .\t文字é<think> \r\n.\t\t\t)́x—<think>4567ـ4567x😀<think>文字 \n",
+"count": 38
+},
+{
+"text": "Worda1b2the =)ab中_a1b2_   )  \r\n(!?)4567a1b2!?ab中a1b2<think>'s",
+"count": 38
+},
+{
+"text": "a1b2)ـ—  !? x😀(4567ـ中😀=the (\t Word\n",
+"count": 28
+},
+{
+"text": "中123 😀the 4567x中)\r\n文字=  'ś́    ـ=_",
+"count": 24
+},
+{
+"text": "😀_.=—'s  _\t.\t the 中4567  ,\t",
+"count": 21
+},
+{
+"text": "(=Word\t  _ ́.\n文字<think>—x文字\t x́,",
+"count": 17
+},
+{
+"text": "<think>,.4567 \n\n \n—,a1b2文字_ab<think>4567=)123—ab(文字́—,_é",
+"count": 29
+},
+{
+"text": "a1b2,the 4567!?4567123 —)<think>)the (Wordـ4567!?—!?é.,́123,  \r\nthe Word—",
+"count": 39
+},
+{
+"text": "_ـ(文字😀",
+"count": 6
+},
+{
+"text": " )a1b2文字",
+"count": 6
+},
+{
+"text": " \n\r\n\t 4567😀 \nx中!?😀(x😀123__ـ.a1b2a1b2 \t",
+"count": 33
+},
+{
+"text": ".'s=ab=abx中ـ\tthe 中\r\n—<think>\té)<think>x中ـ's.ـ__\t)ـ文字",
+"count": 32
+},
+{
+"text": ", \n(,() —_)=!?the 's \nـé)文字,Word—,'sx中<think>)<think>4567",
+"count": 30
+},
+{
+"text": "a1b2!?!?a1b2_a1b2",
+"count": 15
+},
+{
+"text": "!?123中́the the   .<think>́é,—\r\n,—",
+"count": 16
+},
+{
+"text": "中 a1b2  \n😀中)文字(  _😀(文字the 😀\n 4567\t中( )=—<think>x́123中é)文字\r\n_́<think>!?",
+"count": 48
+},
+{
+"text": " \na1b2\nWord(!?(\na1b2, Word\t=́,ab!?a1b2 ́中=Word ,a1b2 123 ́123中Word",
+"count": 45
+},
+{
+"text": "=<think>_\t",
+"count": 4
+},
+{
+"text": "<think>== \n  ab中the 'sthe ,abab—the ,)a1b2\t<think>the 😀the ",
+"count": 27
+},
+{
+"text": "Wordé\r\n—<think>.ـ=́— x<think>",
+"count": 14
+},
+{
+"text": "中_\txWord \r\n \tthe \t\nWord",
+"count": 13
+},
+{
+"text": "éa1b2文字_中's's  =the 😀\r\n<think>!?xab4567(.Word  .=\tـ́<think>\n(123文字_)the ",
+"count": 39
+},
+{
+"text": "4567́)<think>",
+"count": 5
+},
+{
+"text": "文字  _",
+"count": 3
+},
+{
+"text": "45674567  Word<think>ـWord!?the ́ـa1b2文字,中_",
+"count": 22
+},
+{
+"text": "́é\n4567😀)😀ab<think>4567中,)́abéthe ",
+"count": 21
+},
+{
+"text": "\nWordWord()Wordthe ́,)—(\t!?—ـ",
+"count": 16
+},
+{
+"text": "!?)=\n\t中a1b2(—4567)123文字,(4567中  .😀the !?'sx4567",
+"count": 32
+},
+{
+"text": "\n123.—a1b2'sx—文字",
+"count": 11
+},
+{
+"text": "a1b2's's4567Word((123 \n))=<think>123,é 1234567ـ文字😀xab._́文字<think>(",
+"count": 32
+},
+{
+"text": "4567)_ 123xـ\r\n\t😀 \n—ـ. \n\r\n\r\n)the 😀ab<think>x,the )ab\nabWord\r\nـ4567!?",
+"count": 40
+},
+{
+"text": "😀́\t\n—('s \r\n,123\nab",
+"count": 14
+},
+{
+"text": "\n4567,xa1b2ab),()ـ文字\r\n=́=ــx.",
+"count": 21
+},
+{
+"text": "the (😀's😀ab(́中the 😀ab",
+"count": 16
+},
+{
+"text": "4567ـ)(́=\tWord,\t._ \n4567ab😀  )  _Word中123\r\n,x) \n  —",
+"count": 31
+},
+{
+"text": "==Word<think>a1b24567<think>éab .中😀😀<think>(the \ta1b2\r\n",
+"count": 27
+},
+{
+"text": "́  ́ـ<think>_ab  4567😀\t  's!?123\r\n( \n\n",
+"count": 23
+},
+{
+"text": "ab \n) \n_a1b24567. \n(中文字!?ab  \naba1b2a1b2==文字   😀ab",
+"count": 33
+},
+{
+"text": "中😀 ـ\r\nxé\r\n123  aba1b2's—",
+"count": 19
+},
+{
+"text": "Word—Word\r\n=4567—.4567  Word((中\n123=",
+"count": 19
+},
+{
+"text": "xx😀abé😀é4567ab4567the  ab文字x=(ab,x",
+"count": 22
+},
+{
+"text": "<think><think>4567!?=a1b2\t—中\r\n",
+"count": 16
+},
+{
+"text": "😀😀x_文字a1b2\r\n)a1b2123\t",
+"count": 19
+},
+{
+"text": "the (é123    ́.,123\tab,文字\tWord!?文字文字",
+"count": 19
+},
+{
+"text": "(,Word—\n  the 文字\r\né\n \nab!? \n<think>.\t=é中é123's—!?the (\n=,=_ \n=ab.",
+"count": 37
+},
+{
+"text": "\nx \nthe the \r\n)a1b2x,(Word= ـ́",
+"count": 19
+},
+{
+"text": "\t's \na1b2, \n_!?)Word=",
+"count": 14
+},
+{
+"text": "!?4567(x—(a1b2a1b2.4567    \t<think>'s=a1b2ab)́  123é",
+"count": 31
+},
+{
+"text": "é \nWord,_<think>=\nxab4567Wordx文字=)\n  ـ文字é123123 \n(the   a1b2",
+"count": 28
+},
+{
+"text": "ـa1b2's 中x,\n😀   ab中́!?\n文字the 😀a1b2Word́ \nWord),the 文字's<think>😀(<think>123é\n—!? 文字",
+"count": 49
+},
+{
+"text": "—=ـx)__\n's's   \n😀!?_😀,<think><think>中(é😀=x,ـ!?",
+"count": 29
+},
+{
+"text": "́=the ـ1234567😀 \n文字ab\nx😀<think>(—<think>中( 4567<think>文字).\t4567Word́123— \n\t4567",
+"count": 39
+},
+{
+"text": "=\t123 😀.abé4567—文字4567—<think>ab\t \n",
+"count": 20
+},
+{
+"text": "<think><think>\nـ中😀\n's文字xـ — aba1b2\r\n\t= \n \t文字a1b2😀)—Word123<think>é\r\n\n",
+"count": 40
+},
+{
+"text": "(\r\n_  )4567  (  ",
+"count": 11
+},
+{
+"text": "ab",
+"count": 1
+},
+{
+"text": "123文字,\tabx中́\n_ـ123<think>\t \nـ(Word( \na1b2!?'s\r\n \n😀the a1b2.\t4567(  \n ( \né  ",
+"count": 48
+},
+{
+"text": "(\t(—!?'s_\t  😀4567.(123ab文字the a1b2<think>文字\t'sthe é\t\n's.Wordx—,ـ😀😀)a1b2x<think>",
+"count": 47
+},
+{
+"text": "—ab\r\n's.文字the the !?xé éـ  'sa1b2",
+"count": 22
+},
+{
+"text": "\nWord_",
+"count": 3
+},
+{
+"text": ")a1b2éWordabـ文字)4567ـ_ \n(!? 123,́x<think>_  123Worda1b2( \n文字!?<think>文字)(!?the !?<think>é",
+"count": 46
+},
+{
+"text": "4567the 4567文字́_  =x \n😀x.).\n .(<think><think> ",
+"count": 22
+},
+{
+"text": "xab  —́\r\n\tـ123\r\n中=<think>=\t('s,'s's4567ـ'sx😀\n,\r\n!? \n( ـ=4567(ـ—",
+"count": 45
+},
+{
+"text": "!?  ab!?😀!?́'sé (́4567's4567(xx123the ́ـ😀文字)文字",
+"count": 33
+},
+{
+"text": "<think>\r\n,Word<think>\nx, \n,. \n<think>—😀!?\n123<think>\n<think>Word,<think>(文字",
+"count": 27
+},
+{
+"text": "\r\nab中 \nـ\na1b2é!?́Word.́.—the \r\nWord=.4567abthe ",
+"count": 30
+},
+{
+"text": "  )文字123́_,ـ =\t1234567 \n",
+"count": 14
+},
+{
+"text": "x_  \n",
+"count": 3
+},
+{
+"text": "'sa1b2́<think>!?",
+"count": 9
+},
+{
+"text": "the 123.—=́the =!?",
+"count": 10
+},
+{
+"text": "123!?",
+"count": 3
+},
+{
+"text": "ـ \nthe =é)_😀's!?Word  ـ中's  \n=_!?\r\n",
+"count": 23
+},
+{
+"text": "_).文字ـthe the !?<think>=!?  中_ab \na1b2!?Word\nthe x123x \r\na1b2\n(a1b2(中",
+"count": 42
+},
+{
+"text": "—😀<think>ـ—x😀_<think>!?4567 \n_.a1b2abé\r\n  \r\n=,=",
+"count": 31
+},
+{
+"text": "ab文字—.(  .x.the —é\t='s\r\n(x=4567)\r\n\nthe _x\t  — 123—\r\nWord.",
+"count": 34
+},
+{
+"text": "( \nx́Wordـ \nـ\r\nWord the (\r\nab4567文字ـé123=(́'s)文字123!?'śthe \t😀 \nthe \n's=)",
+"count": 44
+},
+{
+"text": "  4567<think>)中)😀=ـ4567the .the .ab中45674567(123!?\r\n中",
+"count": 29
+},
+{
+"text": ",́é123<think>'sWordéــ\r\n.\r\nxa1b2,,\n",
+"count": 20
+},
+{
+"text": "the éـ́4567Word!?😀__文字123<think>  ́'s123ـ́ \n(  ",
+"count": 25
+},
+{
+"text": "Word中ـx,😀the 's\txthe x,x  \n(\t\r\nWord文字😀)\n中!?=😀ab",
+"count": 33
+},
+{
+"text": "́!?́  <think>4567123's=abthe   x _4567<think>中ab\t \nthe   ́!?\n",
+"count": 30
+},
+{
+"text": "\téx 中the Word4567",
+"count": 9
+},
+{
+"text": "x= \n— \t (a1b2é\n(123ـ́4567 \n\n.abWordthe ..\n  123   中's—(.the ",
+"count": 34
+},
+{
+"text": "ab  =文字—,—!?ab中ـ \nab.)中!?—中)x",
+"count": 20
+},
+{
+"text": "\r\n)́中'sx́=the 4567_ .ab_ \n)4567a1b2123😀\t\na1b2_",
+"count": 34
+},
+{
+"text": "ab  )",
+"count": 3
+},
+{
+"text": "!?😀=文字—😀!?文字<think>the é \n=ـé !?<think>—)4567a1b2='s \nـ)(ab\n) ._😀😀",
+"count": 45
+},
+{
+"text": "\n='s—😀4567_\r\n..a1b2éـ \n( <think>é<think>4567x",
+"count": 27
+},
+{
+"text": "\r\n ( 123",
+"count": 6
+},
+{
+"text": "Worda1b2(4567😀Wordxa1b2😀文字Word=a1b2ـ́=ـ  !?)(a1b2ـa1b2中\t中xab.)\t((",
+"count": 48
+},
+{
+"text": " ,文字😀\n.),文字ab\t文字=é \n'sWord\r\n xthe 😀x(é 😀4567_( !?'s)",
+"count": 37
+},
+{
+"text": "the —123the <think>.  <think>Word,ab—.!?.4567.",
+"count": 18
+},
+{
+"text": "\n =éـ\n123x中's,_\r\n(  ab文字)(  ab\r\n,中中=_'s.",
+"count": 29
+},
+{
+"text": "4567)ـ<think>x_123ـab<think>(\n😀123!?ـ\n\n\r\n文字)) ",
+"count": 24
+},
+{
+"text": "é́=\r\n'sthe \t<think><think>文字文字aba1b2中中éWord́\n文字)éx \r\na1b2the ",
+"count": 35
+},
+{
+"text": " \n123)—  😀,—!?\r\n)\r\n文字\t\n",
+"count": 16
+},
+{
+"text": "ـ\n<think>a1b2the \té\nـ\r\n123<think>文字  a1b2",
+"count": 23
+},
+{
+"text": "ab!?éـ  —ab \n中a1b2<think>x中",
+"count": 17
+},
+{
+"text": "ـ=x!?",
+"count": 4
+},
+{
+"text": "123 the Word—. .\n!?).😀ـ,—) ́中😀  ",
+"count": 21
+},
+{
+"text": ",4567ـ)'s中ـ—.,123x  123—=(文字😀é",
+"count": 20
+},
+{
+"text": "x('s!?123文字ab—😀   \n!?the —\n中<think>a1b2!?  .4567's文字,123ab123's<think>_文字) \n文字123́123",
+"count": 44
+},
+{
+"text": "Word中ـ=",
+"count": 4
+},
+{
+"text": "  xـ́\na1b2_é",
+"count": 11
+},
+{
+"text": "the  \n— \n'sWordé4567😀 \n😀 \n",
+"count": 15
+},
+{
+"text": "'s123—a1b2Wordx\r\nab123 \t文字\t123's\n  中4567",
+"count": 24
+},
+{
+"text": "ab́文字😀中xـ  abx  Worda1b2文字,\r\n4567",
+"count": 23
+},
+{
+"text": "'s!?ab— \nx,.!?—a1b2123x's😀4567)  !?)x=,4567=—ab\n123文字x \nWord中!?😀)\t",
+"count": 47
+},
+{
+"text": "a1b2(\t",
+"count": 6
+},
+{
+"text": "=  \n,é(the \r\n'sé́\n123",
+"count": 14
+},
+{
+"text": ".ـ,_<think>—\r\n\n123xé.\r\ń\r\nـ́4567<think>,  <think>_\tthe (123x😀,  Word",
+"count": 35
+},
+{
+"text": "(文字é4567!? \n(Word\t'sa1b2,'s\n \n—文字\t \n—\t's",
+"count": 26
+},
+{
+"text": "_)文字       <think>\t中=",
+"count": 8
+},
+{
+"text": "中<think>a1b2(\n( \n😀 \n",
+"count": 12
+},
+{
+"text": "(Word😀\n!?the a1b2=ـa1b2é",
+"count": 19
+},
+{
+"text": "x.\t\t́4567\txé.——\t!?文字4567Word<think>—  ",
+"count": 21
+},
+{
+"text": ".(123,)—123x4567 \nـ— 4567́\tthe \t  é's'sab<think>123ab \n4567\n\r\nWordxa1b2",
+"count": 37
+},
+{
+"text": "the 中)_ \t,<think>́\t\n😀<think>12345674567_",
+"count": 18
+},
+{
+"text": "aba1b2  a1b24567\n_!?\t  123_\r\nabWorda1b2,!?\n's\r\n文字<think>Wordthe !?中's中  \n's4567",
+"count": 43
+},
+{
+"text": " \n 😀Wordx's(\r\nx123",
+"count": 12
+},
+{
+"text": "4567😀!?ab\nthe 'śé  é \r\n",
+"count": 18
+},
+{
+"text": "\n\r\n_=\n123ـ=  ـ('s中\n=ab(<think>Word'sé😀",
+"count": 23
+},
+{
+"text": "x.a1b2ab,́   \n文字a1b2's's😀<think>Word中)a1b2='sـ , \n<think>—==\t\n's's",
+"count": 37
+},
+{
+"text": "\r\na1b2ـ45674567123<think>文字—4567́é<think>😀́ab  ",
+"count": 24
+},
+{
+"text": "😀's)'s=😀\r\n!?a1b2))\n4567=😀a1b2's!?😀_́a1b2中's,the ",
+"count": 42
+},
+{
+"text": "é_the \t́'sé中中_,文字x!?—123\n()ـ",
+"count": 19
+},
+{
+"text": "_  ,!?\n.Wordab́文字中😀—'s4567\t123😀=  )a1b2́Word).!?x(Word",
+"count": 37
+},
+{
+"text": "(́a1b2_́́),é!?́ 's_123",
+"count": 18
+},
+{
+"text": ") the the ـWord\t4567文字<think>'s",
+"count": 12
+},
+{
+"text": " \n(😀\t— \nـ\r\n 😀)x\r\ń.😀中",
+"count": 22
+},
+{
+"text": " _!?文字.",
+"count": 6
+},
+{
+"text": "(,😀ab=😀) 's😀  =éé(abthe   ́",
+"count": 23
+},
+{
+"text": "—)文字,\r\n ́x",
+"count": 9
+},
+{
+"text": " \n文字  !?éxthe ́.x123<think><think>   )Word \n<think>=.=\r\n4567,\r\n—the 中—中=\n's😀=)éab",
+"count": 42
+},
+{
+"text": "ab́.!?Worda1b2<think>éa1b2  's—(́x123 'ś  Word, \n ",
+"count": 31
+},
+{
+"text": "😀,  <think>,)\r\n(abWord.",
+"count": 12
+},
+{
+"text": "́é123_!?文字)\t😀.()!?)'sé.\t123_",
+"count": 22
+},
+{
+"text": " a1b2中=Word\r\ń!?  x.\r\n—é😀—ـ😀中\r\n\n.)(ab) 's,",
+"count": 36
+},
+{
+"text": ".文字\r\nthe   —a1b2ab",
+"count": 12
+},
+{
+"text": ",(_(.4567́\ń—\t\r\n_😀a1b2中a1b2'sab\t,Word=Word \n= \nab\t\r\n))a1b2's \na1b2!?",
+"count": 51
+},
+{
+"text": ")é's!?(ـWordabـx— \n 中😀́,x123!?😀\n中\n the ",
+"count": 29
+},
+{
+"text": "😀4567<think>中)123<think> \n.'sـ😀'sـa1b2xx4567😀ـ\r\n4567 \t́,́   \na1b2=)́,x=ab",
+"count": 48
+},
+{
+"text": "_́.ab\n\r\n__a1b2 ._123́4567,\t(😀<think>́'s\n(the ",
+"count": 28
+},
+{
+"text": "// Package core holds tack's state. All of it is derived from recorded events:\n// every change is written to the store first, then applied through the same\n// function that rebuilds the state at startup.\npackage core\n\nimport (\n\t\"context\"\n\t\"encoding/json/jsontext\"\n\t\"encoding/json/v2\"\n\t\"errors\"\n\t\"fmt\"\n\t\"log\"\n\t\"strings\"\n\t\"sync\"\n\t\"time\"\n\n\t\"github.com/betawaffle/tack/internal/openrouter\"\n\t\"github.com/betawaffle/tack/internal/store\"\n)\n\n// Errors a caller can act on.\nvar (\n\tErrNotFound       = errors.New(\"no such conversation\")\n\tErrNoMessage      = errors.New(\"no such system message\")\n\tErrNoEdit         = errors.New(\"no such unused edit\")\n\tErrBusy           = errors.New(\"a reply is already in progress\")\n\tErrNothingToSend  = errors.New(\"the model has already replied to everything in this conversation\")\n\tErrAwaiting       = errors.New(\"tool calls in this conversation are waiting for a decision\")\n\tErrNoDecision     = errors.New(\"no such open decision\")\n\tErrBadChoice      = errors.New(\"that choice isn't possible for this decision\")\n\tErrBadSettings    = errors.New(\"those settings can't work\")\n\tErrBadTools       = errors.New(\"those tools can't work\")\n\tErrBadFork        = errors.New(\"that isn't a place to fork from\")\n\tErrNothingRunning = errors.New(\"that isn't running\")\n)\n\n// Config is what a Core needs.\ntype Config struct {\n\tStore   *store.Store\n\tClient  *openrouter.Client\n\tModel   string\n\tRouting openrouter.Routing\n\tTools   []Tool // offered to new conversations\n\t// Settings are what new conversations start with. Model and Routing fill in for\n\t// a Settings without them.\n\tSettings store.Settings\n}\n\n// Core runs conversations.\ntype Core struct {\n\tcfg Config\n\n\tmu       sync.Mutex\n\tsettings store.Settings\n\tconvs    map[string]*conversation\n\torder    []string\n\n\t// The last start and any restart asked for since, derived from the record.\n\tlastVersion string\n\tlastStarted time.Time\n\tnextChanges []string\n\t// What models have shown they accept or don't, also from the record.\n\tcapabilities map[capabilityKey]capability\n\t// This run, which isn't.\n\tstatus        Status\n\trestarting    bool\n\tclosedDrained bool\n\tdrained       chan struct{}\n}\n\ntype conversation struct {\n\tid      string\n\tcreated time.Time\n\titems   []*item\n\tbusy    bool\n\t// revision counts the events that have changed it, so a page can say which state of\n\t// it an action was based on.\n\trevision int\n\n\ttools    store.Ref       // the exact definitions it sends, if it has any\n\tworkdir  string          // where its tools' relative paths start\n\tsettings *store.Settings // what it uses. Older conversations have none\n\t// lastModel and lastHost stand in for older conversations, from their last call.\n\tlastModel, lastHost string\n\tpendingSettings     *pendingSettings\n\n\t// Spending, derived from the record.\n\tspent, budgetAdded Pico\n\tspentByPeriod      map[string]Pico\n\trecentCosts        []Pico\n\tlastRequestBytes   int\n\tbudgetStopped      bool\n\tstoppedEstimate    Pico\n\t// The allowance from the last time a person set things going, which applies from\n\t// allowanceBase on. Older conversations have none until then, and use budgetAdded.\n\tallowanceSet             bool\n\tallowanceBase, allowance Pico\n\t// freshAllowance says no call has used it yet. That call goes whatever it's expected\n\t// to cost, because someone just asked for it.\n\tfreshAllowance bool\n\t// chainStarts is how many items there were when each allowance started.\n\tchainStarts []int\n\n\tpaused bool // don't call the model until a message or Continue\n\tnotes  []*noteItem\n\t// noteHistory is every note in order, with how many items there were at the time,\n\t// so that a fork can keep only those from before its point.\n\tnoteHistory    []noteAt\n\tscratch        []*scratchItem\n\tscratchHistory []scratchAt\n\n\tforkedFrom string\n\tforkItems  int\n\tsession    string // the session ID it shares with what it forked from, if it did\n\n\t// What's running now, so it can be stopped. These aren't derived from the record,\n\t// because nothing survives a restart to be stopped.\n\tcancelReply func(error)\n\tstopTools   map[string]func(error)\n\tdecision    *decision // what's waiting on a person, if anything\n}\n\n// item is a message or a model call, in the order they were recorded. Its role\n// is \"user\" or \"system\" for a message and empty for a call.\ntype item struct {\n\trole string\n\ttime time.Time\n\n\t// Messages. Parts are empty if an edit removed the message.\n\tparts []store.Part\n\tname  string\n\n\t// Written messages of other roles.\n\treasoning    store.Ref\n\twrittenCalls []store.ToolCall\n\ttoolCallID   string\n\n\t// System messages.\n\tmessageID string\n\tsent      bool  // a call has included the current parts\n\tedited    bool  // an applied edit changed the parts\n\tpending   *edit // held until it's applied or discarded\n\n\t// Calls.\n\tcallID       string\n\tmodel, host  string\n\tfeatures     []string // the unusual things in its request\n\toverride     *edit    // what someone changed its reply to\n\trequestBytes int\n\tcost         Pico // what it counted as\n\tfinished     *store.Event\n\tcalls        []*toolCall // what a usable reply asked for\n}\n\ntype edit struct {\n\tid    string\n\tparts []store.Part\n\n\tname      string\n\treasoning store.Ref\n\tcalls     []store.ToolCall\n}\n\n// New rebuilds state from the record.\nfunc New(cfg Config) (*Core, error) {\n\tsettings := cfg.Settings\n\tif settings.Model == \"\" {\n\t\tsettings.Model = cfg.Model\n\t}\n\tif settings.Host == \"\" && len(cfg.Routing.Order) > 0 {\n\t\tsettings.Host = cfg.Routing.Order[0]\n\t}\n\tfor _, tool := range cfg.Tools {\n\t\tnames, err := definedNames(append(append([]byte{'['}, tool.define(settings)...), ']'))\n\t\tif err != nil {\n\t\t\treturn nil, fmt.Errorf(\"tool %s: %w\", tool.Name, err)\n\t\t}\n\t\tif names[0] != tool.Name {\n\t\t\treturn nil, fmt.Errorf(\"tool %s is defined with the name %q\", tool.Name, names[0])\n\t\t}\n\t}\n\tc := &Core{cfg: cfg, convs: map[string]*conversation{}, settings: settings, drained: make(chan struct{}), capabilities: map[capabilityKey]capability{}}\n\terr := cfg.Store.Replay(func(ev *store.Event) error {\n\t\tif !store.Known(ev.Type) {\n\t\t\treturn fmt.Errorf(\"unknown event type %q: a newer build wrote this record, so run that build or a later one\", ev.Type)\n\t\t}\n\t\tc.apply(ev)\n\t\treturn nil\n\t}, func(file string, line int) {\n\t\tlog.Printf(\"skipping torn event at %s line %d\", file, line)\n\t})\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn c, nil\n}\n\n// Recover deals with whatever a stop left behind. It can fall anywhere in a tool\n// turn, and anything unfinished has to go through a person. It's separate from New\n// so that reading the record writes nothing, and a build that can't read it leaves\n// no trace.\nfunc (c *Core) Recover() error {\n\tfor _, id := range c.order {\n\t\tif _, err := c.ensureDecision(c.convs[id]); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\treturn nil\n}\n\n// record writes an event and applies it. The lock covers both, so live state\n// sees events in the order the record has them, and a rebuild can't differ.\nfunc (c *Core) record(ev *store.Event) error {\n\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n\tif err := c.cfg.Store.Append(ev); err != nil {\n\t\treturn err\n\t}\n\tc.apply(ev)\n\treturn nil\n}\n\n// apply updates state from an event. The caller holds mu, or is New.\nfunc (c *Core) apply(ev *store.Event) {\n\tswitch ev.Type {\n\tcase store.TackStarted:\n\t\tc.lastVersion, c.lastStarted, c.nextChanges = ev.Version, ev.Time, nil\n\t\treturn\n\tcase store.RestartRequested:\n\t\tc.nextChanges = ev.Changes\n\t\treturn\n\tcase store.CapabilityForgotten:\n\t\tdelete(c.capabilities, capabilityKey{ev.Model, ev.Host, ev.Feature})\n\t\treturn\n\t}\n\tif ev.Type == store.ConversationAdded {\n\t\tc.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir, settings: ev.Settings}\n\t\tc.order = append(c.order, ev.Conversation)\n\t\treturn\n\t}\n\tif ev.Type == store.ConversationForked {\n\t\t// Events are in order, so the parent is exactly as it was when this happened.\n\t\tif parent := c.convs[ev.ForkedFrom]; parent != nil {\n\t\t\tc.convs[ev.Conversation] = parent.fork(ev)\n\t\t\tc.order = append(c.order, ev.Conversation)\n\t\t}\n\t\treturn\n\t}\n\tconv := c.convs[ev.Conversation]\n\tif conv == nil {\n\t\treturn\n\t}\n\tconv.revision++\n\tswitch ev.Type {\n\tcase store.UserMessage:\n\t\tconv.paused = false\n\t\tconv.items = append(conv.items, &item{role: \"user\", parts: ev.Parts, time: ev.Time, name: ev.Name})\n\tcase store.SystemMessage:\n\t\tconv.items = append(conv.items, &item{role: \"system\", parts: ev.Parts, messageID: ev.Message, time: ev.Time, name: ev.Name})\n\tcase store.MessageAdded, store.MessageEditProposed, store.MessageEditApplied, store.MessageEditDiscarded:\n\t\tconv.applyMessage(ev)\n\tcase store.CallStarted:\n\t\tfor _, it := range conv.items {\n\t\t\tit.sent = true\n\t\t}\n\t\tconv.lastModel = ev.Model\n\t\tconv.lastRequestBytes = ev.RequestBytes\n\t\tconv.budgetStopped = false\n\t\tconv.freshAllowance = false\n\t\thost := \"\"\n\t\tvar routing openrouter.Routing\n\t\tif json.Unmarshal(ev.Routing, &routing) == nil && len(routing.Order) > 0 {\n\t\t\tconv.lastHost = routing.Order[0]\n\t\t\thost = routing.Order[0]\n\t\t}\n\t\tconv.items = append(conv.items, &item{callID: ev.Call, requestBytes: ev.RequestBytes, time: ev.Time, model: ev.Model, host: host, features: ev.Features})\n\tcase store.CallFinished:\n\t\tfor _, it := range conv.items {\n\t\t\tif it.callID == ev.Call {\n\t\t\t\tit.finished = ev\n\t\t\t\tit.cost = conv.addCost(ev)\n\t\t\t\tc.learn(it, ev)\n\t\t\t\tif usable(ev) {\n\t\t\t\t\tfor _, call := range ev.ToolCalls {\n\t\t\t\t\t\tit.calls = append(it.calls, &toolCall{ToolCall: call})\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\tcase store.EditProposed:\n\t\t// A newer edit replaces an older unused one. The record keeps both.\n\t\tif it := conv.message(ev.Message); it != nil {\n\t\t\tit.pending = &edit{id: ev.Edit, parts: ev.Parts}\n\t\t}\n\tcase store.EditApplied:\n\t\tif it := conv.editing(ev.Edit); it != nil {\n\t\t\tit.parts = it.pending.parts\n\t\t\tit.pending = nil\n\t\t\tit.edited = true\n\t\t\tit.sent = false\n\t\t}\n\tcase store.EditDiscarded:\n\t\tif it := conv.editing(ev.Edit); it != nil {\n\t\t\tit.pending = nil\n\t\t}\n\tdefault:\n\t\tconv.applyTool(ev)\n\t}\n}\n\nfunc (conv *conversation) message(id string) *item {\n\tfor _, it := range conv.items {\n\t\tif it.role == \"system\" && it.messageID == id {\n\t\t\treturn it\n\t\t}\n\t}\n\treturn nil\n}\n\nfunc (conv *conversation) editing(editID string) *item {\n\tfor _, it := range conv.items {\n\t\tif it.role == \"system\" && it.pending != nil && it.pending.id == editID {\n\t\t\treturn it\n\t\t}\n\t}\n\treturn nil\n}\n\n// usable reports whether a finished call's reply belongs in the next context.\nfunc usable(ev *store.Event) bool {\n\treturn ev != nil && ev.Error == \"\" && (ev.Text != \"\" || len(ev.ToolCalls) > 0)\n}\n\n// context returns what the next call sends. The caller holds mu. Unused edits\n// aren't part of it, and neither are failed calls. A tool call with no result yet\n// is left unanswered here, and call refuses to send that.\nfunc (conv *conversation) context() []store.Entry {\n\tvar out []store.Entry\n\tfor _, it := range conv.items {\n\t\tswitch {\n\t\tcase it.role != \"\":\n\t\t\tif len(it.parts) > 0 || len(it.writtenCalls) > 0 {\n\t\t\t\tentry := store.Entry{Role: it.role, Parts: it.parts, Name: it.name, ToolCalls: it.writtenCalls, Reasoning: it.reasoning, ToolCall: it.toolCallID}\n\t\t\t\tout = append(out, entry)\n\t\t\t}\n\t\tcase usable(it.finished):\n\t\t\tentry := store.Entry{Role: \"assistant\"}\n\t\t\tif change := it.override; change != nil {\n\t\t\t\t// Emptied with nothing else in it, it stops being sent.\n\t\t\t\tif len(change.parts) == 0 && len(it.calls) == 0 {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tentry.Parts, entry.Name, entry.Reasoning = change.parts, change.name, change.reasoning\n\t\t\t} else if it.finished.Text != \"\" {\n\t\t\t\tentry.Parts = []store.Part{{Block: it.finished.Text}}\n\t\t\t}\n\t\t\tif len(it.calls) > 0 {\n\t\t\t\tentry.ToolCalls = it.finished.ToolCalls\n\t\t\t\tif it.override == nil {\n\t\t\t\t\tentry.Reasoning = it.finished.Reasoning\n\t\t\t\t}\n\t\t\t}\n\t\t\tout = append(out, entry)\n\t\t\tfor _, call := range it.calls {\n\t\t\t\tif call.resolved() {\n\t\t\t\t\tout = append(out, store.Entry{Role: \"tool\", ToolCall: call.ID, Parts: call.result})\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\treturn out\n}\n\n// canReply reports whether there's anything for the model to respond to. The\n// caller holds mu.\nfunc (conv *conversation) canReply() bool {\n\tif conv.decision != nil {\n\t\treturn false\n\t}\n\tif conv.unanswered() {\n\t\treturn true // the rest of an interrupted tool turn\n\t}\n\tif len(conv.openWritten()) > 0 {\n\t\treturn false\n\t}\n\tentries := conv.context()\n\treturn len(entries) > 0 && entries[len(entries)-1].Role != \"assistant\"\n}\n\n// Options describe a new conversation.\ntype Options struct {\n\t// System is the system prompt. Empty means the conversation starts without one.\n\tSystem string\n\t// Blocks, if they join to exactly System, are stored as separate blocks.\n\tBlocks []string\n\t// Tools says whether to offer the configured tools.\n\tTools   bool\n\tWorkdir string\n\t// LeaveOut names tools not to offer.\n\tLeaveOut []string\n\t// Definitions replace those of the named tools. Only descriptions can differ.\n\tDefinitions map[string]jsontext.Value\n\t// Settings replace what the config says a conversation starts with.\n\tSettings *store.Settings\n}\n\n// NewConversation records a new conversation offering every configured tool.\nfunc (c *Core) NewConversation(systemPrompt string) (string, error) {\n\treturn c.NewConversationWith(Options{System: systemPrompt, Tools: true})\n}\n\n// NewConversationWith records a new conversation.\nfunc (c *Core) NewConversationWith(opts Options) (string, error) {\n\tsettings := c.currentSettings()\n\tif opts.Settings != nil {\n\t\tsettings = opts.Settings.WithDefaults()\n\t\tif err := settings.Validate(); err != nil {\n\t\t\treturn \"\", fmt.Errorf(\"%w: %v\", ErrBadSettings, err)\n\t\t}\n\t}\n\tvar tools store.Ref\n\tif opts.Tools {\n\t\tvar err error\n\t\tif tools, err = c.storeDefinitions(settings, opts); err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t}\n\tid := store.NewID()\n\tevent := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools, Settings: &settings}\n\tif tools != \"\" {\n\t\tevent.Workdir = opts.Workdir\n\t}\n\tif err := c.record(event); err != nil {\n\t\treturn \"\", err\n\t}\n\tif strings.TrimSpace(opts.System) == \"\" {\n\t\treturn id, nil\n\t}\n\tvar parts []store.Part\n\tif strings.Join(opts.Blocks, \"\") == opts.System {\n\t\tfor _, block := range opts.Blocks {\n\t\t\tpiece, err := c.parts(block)\n\t\t\tif err != nil {\n\t\t\t\treturn \"\", err\n\t\t\t}\n\t\t\tparts = append(parts, piece...)\n\t\t}\n\t} else {\n\t\tvar err error\n\t\tif parts, err = c.parts(opts.System); err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t}\n\treturn id, c.record(&store.Event{Type: store.SystemMessage, Conversation: id, Message: store.NewID(), Parts: parts})\n}\n\n// Fork starts a new conversation with the first items of this one, the same tools\n// and its current settings, which then goes its own way. The items it keeps have to\n// be settled: a tool call still waiting can't be answered in two places. Nothing is\n// undone, so files that later tool calls changed stay changed.\nfunc (c *Core) Fork(convID string, items int) (string, error) {\n\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n\tconv := c.convs[convID]\n\tif conv == nil {\n\t\treturn \"\", ErrNotFound\n\t}\n\tif items < 0 || items > len(conv.items) {\n\t\treturn \"\", fmt.Errorf(\"%w: it has %d items\", ErrBadFork, len(conv.items))\n\t}\n\tfor _, it := range conv.items[:items] {\n\t\tif it.role == \"\" && it.finished == nil && conv.busy {\n\t\t\treturn \"\", ErrBusy\n\t\t}\n\t\tfor _, call := range it.calls {\n\t\t\tif !call.resolved() {\n\t\t\t\treturn \"\", ErrAwaiting\n\t\t\t}\n\t\t}\n\t}\n\tsettings := conv.effectiveSettings(c.settings)\n\tev := &store.Event{Type: store.ConversationForked, Conversation: store.NewID(), ForkedFrom: convID, ForkItems: items, Settings: &settings}\n\tif err := c.cfg.Store.Append(ev); err != nil {\n\t\treturn \"\", err\n\t}\n\tc.apply(ev)\n\treturn ev.Conversation, nil\n}\n\n// sessionID is what calls tell the host. Forks keep the original's, so that a host\n// that routes by session can send them where the cache is.\nfunc (conv *conversation) sessionID() string {\n\tif conv.session != \"\" {\n\t\treturn conv.session\n\t}\n\treturn conv.id\n}\n\n// fork copies what a forked conversation keeps. Its budget starts again, because it\n// hasn't spent anything itself, but what those calls cost still informs its estimates.\nfunc (conv *conversation) fork(ev *store.Event) *conversation {\n\tout := &conversation{\n\t\tid: ev.Conversation, created: ev.Time, tools: conv.tools, workdir: conv.workdir, settings: ev.Settings,\n\t\tlastModel: conv.lastModel, lastHost: conv.lastHost, forkedFrom: ev.ForkedFrom, forkItems: ev.ForkItems, session: conv.sessionID(),\n\t}\n\tfor _, it := range conv.items[:ev.ForkItems] {\n\t\tkept := *it\n\t\tkept.pending = nil\n\t\tkept.calls = nil\n\t\tfor _, call := range it.calls {\n\t\t\tcopied := *call\n\t\t\tcopied.pending = nil\n\t\t\tkept.calls = append(kept.calls, &copied)\n\t\t}\n\t\tif it.finished != nil {\n\t\t\tout.addCost(it.finished)\n\t\t}\n\t\tif it.requestBytes > 0 {\n\t\t\tout.lastRequestBytes = it.requestBytes\n\t\t}\n\t\tout.items = append(out.items, &kept)\n\t}\n\tout.spent, out.spentByPeriod = 0, nil\n\tfor _, start := range conv.chainStarts {\n\t\tif start < ev.ForkItems {\n\t\t\tout.chainStarts = append(out.chainStarts, start)\n\t\t}\n\t}\n\tfor _, entry := range conv.scratchHistory {\n\t\tif entry.items <= ev.ForkItems {\n\t\t\tout.scratchHistory = append(out.scratchHistory, entry)\n\t\t\tout.applyScratch(entry.change)\n\t\t}\n\t}\n\tfor _, entry := range conv.noteHistory {\n\t\tif entry.items <= ev.ForkItems {\n\t\t\tout.noteHistory = append(out.noteHistory, entry)\n\t\t\tout.addNote(entry.note)\n\t\t}\n\t}\n\treturn out\n}\n\nfunc (c *Core) parts(text string) ([]store.Part, error) {\n\tblock, err := c.cfg.Store.Put([]byte(text))\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn []store.Part{{Block: block}}, nil\n}\n\nfunc (c *Core) exists(convID string) error {\n\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n\tif c.convs[convID] == nil {\n\t\treturn ErrNotFound\n\t}\n\treturn nil\n}\n\n// AddSystemMessage adds a system message at the end of the conversation. It\n// goes to the model with the next call, whichever call that is.\nfunc (c *Core) AddSystemMessage(convID, text string) (string, error) {\n\tif err := c.exists(convID); err != nil {\n\t\treturn \"\", err\n\t}\n\tparts, err := c.parts(text)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\tid := store.NewID()\n\treturn id, c.record(&store.Event{Type: store.SystemMessage, Conversation: convID, Message: id, Parts: parts})\n}\n\n// ProposeEdit holds new text for a system message. Nothing changes until the\n// edit is applied. Empty text proposes removing the message.\nfunc (c *Core) ProposeEdit(convID, messageID, text string) (string, error) {\n\tc.mu.Lock()\n\tconv := c.convs[convID]\n\tif conv == nil {\n\t\tc.mu.Unlock()\n\t\treturn \"\", ErrNotFound\n\t}\n\tfound := conv.message(messageID) != nil\n\tc.mu.Unlock()\n\tif !found {\n\t\treturn \"\", ErrNoMessage\n\t}\n\tvar parts []store.Part\n\tif strings.TrimSpace(text) != \"\" {\n\t\tvar err error\n\t\tif parts, err = c.parts(text); err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t}\n\tid := store.NewID()\n\treturn id, c.record(&store.Event{Type: store.EditProposed, Conversation: convID, Message: messageID, Edit: id, Parts: parts})\n}\n\n// ApplyEdit makes a held edit part of the context for later calls.\nfunc (c *Core) ApplyEdit(convID, editID string) error {\n\treturn c.resolveEdit(convID, editID, store.EditApplied)\n}\n\n// DiscardEdit drops a held edit.\nfunc (c *Core) DiscardEdit(convID, editID string) error {\n\treturn c.resolveEdit(convID, editID, store.EditDiscarded)\n}\n\nfunc (c *Core) resolveEdit(convID, editID, eventType string) error {\n\tc.mu.Lock()\n\tconv := c.convs[convID]\n\tif conv == nil {\n\t\tc.mu.Unlock()\n\t\treturn ErrNotFound\n\t}\n\tfound := conv.editing(editID) != nil\n\tc.mu.Unlock()\n\tif !found {\n\t\treturn ErrNoEdit\n\t}\n\treturn c.record(&store.Event{Type: eventType, Conversation: convID, Edit: editID})\n}\n\n// Update is a step in a reply. The kinds are \"call\", \"tool\", \"tool_done\", \"reasoning\"\n// and \"content\" while it streams, then one \"done\" or \"error\" at the end.\ntype Update struct {\n\tKind string `json:\"kind\"`\n\tText string `json:\"text,omitzero\"`\n\tID   string `json:\"id,omitzero\"`\n}\n\n// updateBuffer is how far a slow reader can fall behind before it misses deltas.\n// Deltas are only a preview: the record has the whole reply either way.\nconst updateBuffer = 4096\n\n// reserve claims a conversation for one call at a time. If check is given, it\n// runs with mu held and can refuse.\nfunc (c *Core) reserve(convID string, check func(*conversation) error) (*conversation, error) {\n\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n\tconv := c.convs[convID]\n\tif conv == nil {\n\t\treturn nil, ErrNotFound\n\t}\n\tif conv.busy {\n\t\treturn nil, ErrBusy\n\t}\n\tif c.restarting {\n\t\treturn nil, ErrRestarting\n\t}\n\tif check != nil {\n\t\tif err := check(conv); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n\tconv.busy = true\n\treturn conv, nil\n}\n\nfunc (c *Core) release(conv *conversation) {\n\tc.mu.Lock()\n\tconv.busy = false\n\tc.checkDrained()\n\tc.mu.Unlock()\n}\n\n// Reply asks the model to respond to the conversation as it stands, without a\n// new user message. That retries a call that failed, and it lets the model speak\n// out of turn after a system message.\nfunc (c *Core) Reply(convID string) (<-chan Update, error) {\n\tconv, err := c.reserve(convID, func(conv *conversation) error {\n\t\tif conv.decision != nil {\n\t\t\treturn ErrAwaiting\n\t\t}\n\t\tif err := conv.checkComplete(nil); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !conv.canReply() {\n\t\t\treturn ErrNothingToSend\n\t\t}\n\t\treturn nil\n\t})\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif err := c.clearPause(conv); err != nil {\n\t\tc.release(conv)\n\t\treturn nil, err\n\t}\n\treturn c.start(conv), nil\n}\n\n// start moves a reserved conversation along. The channel closes once everything\n// has been recorded.\nfunc (c *Core) start(conv *conversation) <-chan Update {\n\tupdates := make(chan Update, updateBuffer)\n\tsend := func(u Update) {\n\t\tselect {\n\t\tcase updates <- u:\n\t\tdefault:\n\t\t}\n\t}\n\tfinal := func(u Update) {\n\t\t// Make room so the last update can't be the one that gets dropped.\n\t\tselect {\n\t\tcase <-updates:\n\t\tdefault:\n\t\t}\n\t\tsend(u)\n\t}\n\tgo func() {\n\t\tdefer close(updates)\n\t\tdefer c.release(conv)\n\t\terr := c.startAllowance(conv)\n\t\tif err == nil {\n\t\t\terr = c.advance(conv, send)\n\t\t}\n\t\tif err != nil {\n\t\t\tlog.Printf(\"call in conversation %s: %v\", conv.id, err)\n\t\t\tfinal(Update{Kind: \"error\", Text: err.Error()})\n\t\t\treturn\n\t\t}\n\t\tfinal(Update{Kind: \"done\"})\n\t}()\n\treturn updates\n}\n\nfunc routingFor(host string) openrouter.Routing {\n\tif host == \"\" {\n\t\treturn openrouter.Routing{}\n\t}\n\treturn openrouter.Routing{Order: []string{host}}\n}\n\n// call makes one model call from the conversation's current context. The order\n// matters: the request and the intent are durable before anything is sent, so\n// a crash leaves a started call with no finish, plus whatever had arrived.\nfunc (c *Core) call(conv *conversation, send func(Update)) error {\n\tc.mu.Lock()\n\tentries := conv.context()\n\tfeatures := conv.features(entries)\n\tunanswered := conv.unanswered()\n\ttools := conv.tools\n\tworkdir := conv.workdir\n\tsettings := conv.effectiveSettings(c.settings)\n\tc.mu.Unlock()\n\tmodel := settings.Model\n\troutingChoice := routingFor(settings.Host)\n\tif unanswered {\n\t\t// Hosts may accept this silently, but the model would be told nothing.\n\t\treturn errors.New(\"refusing to send a tool call with no result\")\n\t}\n\n\tdefinitions, err := c.definitions(tools)\n\tif err != nil {\n\t\treturn err\n\t}\n\tbody, err := c.renderRequest(conv, entries, definitions, settings)\n\tif err != nil {\n\t\treturn err\n\t}\n\t// The budget is soft: this only decides whether to start the call.\n\tc.mu.Lock()\n\tlimit := conv.budgetLimit(settings)\n\tspent, estimate := conv.spent, conv.estimate(len(body))\n\tasked := conv.freshAllowance\n\tc.mu.Unlock()\n\tif !asked && (spent >= limit || spent+estimate > limit) {\n\t\terr := c.record(&store.Event{Type: store.BudgetStopped, Conversation: conv.id, SpentUSD: spent.USD(), EstimateUSD: estimate.USD(), LimitUSD: limit.USD()})\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\treturn errBudgetStop\n\t}\n\tsend(Update{Kind: \"call\"})\n\trequest, err := c.cfg.Store.Put(body)\n\tif err != nil {\n\t\treturn err\n\t}\n\trouting, err := json.Marshal(routingChoice, json.Deterministic(true))\n\tif err != nil {\n\t\treturn err\n\t}\n\tcallID := store.NewID()\n\terr = c.record(&store.Event{\n\t\tType:           store.CallStarted,\n\t\tConversation:   conv.id,\n\t\tCall:           callID,\n\t\tContext:        entries,\n\t\tFeatures:       features,\n\t\tModel:          model,\n\t\tRouting:        routing,\n\t\tURL:            c.cfg.Client.URL,\n\t\tRequest:        request,\n\t\tRequestBytes:   len(body),\n\t\tRequestHeaders: openrouter.Headers(),\n\t})\n\tif err != nil {\n\t\treturn err\n\t}\n\n\tpartial, err := c.cfg.Store.NewPartial(\"call-\" + callID)\n\tif err != nil {\n\t\treturn err\n\t}\n\t// Closing the connection is how OpenRouter says to cancel. For hosts that support\n\t// it, that stops processing and billing. Others finish and charge in full.\n\tctx, cancel := context.WithCancelCause(context.Background())\n\tdefer cancel(nil)\n\tc.mu.Lock()\n\tconv.cancelReply = cancel\n\tc.mu.Unlock()\n\tdefer func() {\n\t\tc.mu.Lock()\n\t\tconv.cancelReply = nil\n\t\tc.mu.Unlock()\n\t}()\n\tres, doErr := c.cfg.Client.Do(ctx, body, partial, func(d openrouter.Delta) {\n\t\tif d.Reasoning != \"\" {\n\t\t\tsend(Update{Kind: \"reasoning\", Text: d.Reasoning})\n\t\t}\n\t\tif d.Content != \"\" {\n\t\t\tsend(Update{Kind: \"content\", Text: d.Content})\n\t\t}\n\t})\n\n\tfinished := &store.Event{\n\t\tType:            store.CallFinished,\n\t\tConversation:    conv.id,\n\t\tCall:            callID,\n\t\tStatus:          res.Status,\n\t\tResponseHeaders: res.ResponseHeaders,\n\t\tHost:            res.Host,\n\t\tGenerationID:    res.GenerationID,\n\t\tFinishReason:    res.FinishReason,\n\t\tUsage:           res.Usage,\n\t\tTTFTMillis:      res.TTFT.Milliseconds(),\n\t\tDurationMillis:  res.Duration.Milliseconds(),\n\t\tParseErrors:     res.ParseErrors,\n\t\tError:           res.Error,\n\t}\n\tif finished.Error == \"\" && doErr != nil {\n\t\tfinished.Error = doErr.Error()\n\t}\n\tif errors.Is(context.Cause(ctx), errReplyCancelled) {\n\t\tfinished.Cancelled = true\n\t\tfinished.Error = errReplyCancelled.Error()\n\t}\n\tif finished.Error == \"\" {\n\t\tfinished.Error = malformedCalls(res)\n\t}\n\tif partial.Size() == 0 {\n\t\tpartial.Abort()\n\t} else if finished.Response, err = partial.Commit(); err != nil {\n\t\treturn err\n\t}\n\tif res.Text != \"\" {\n\t\tif finished.Text, err = c.cfg.Store.Put([]byte(res.Text)); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\tif res.Reasoning != \"\" {\n\t\tif finished.Reasoning, err = c.cfg.Store.Put([]byte(res.Reasoning)); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\tif finished.Error == \"\" {\n\t\tif finished.ToolCalls, err = c.storeCalls(definitions, workdir, settings, res.ToolCalls); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\tif err := c.record(finished); err != nil {\n\t\treturn err\n\t}\n\tif finished.Error != \"\" {\n\t\treturn errors.New(finished.Error)\n\t}\n\tif finished.Text == \"\" && len(finished.ToolCalls) == 0 {\n\t\treturn fmt.Errorf(\"the model returned no text (finish reason %q)\", finished.FinishReason)\n\t}\n\treturn nil\n}\n\n// definitions reads a conversation's tool definitions, if it has any.\nfunc (c *Core) definitions(tools store.Ref) ([]byte, error) {\n\tif tools == \"\" {\n\t\treturn nil, nil\n\t}\n\treturn c.cfg.Store.Get(tools)\n}\n\n// renderRequest makes the bytes a call would send.\nfunc (c *Core) renderRequest(conv *conversation, entries []store.Entry, definitions []byte, settings store.Settings) ([]byte, error) {\n\tmessages, err := c.renderMessages(entries)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn openrouter.Render(openrouter.Request{\n\t\tModel:     settings.Model,\n\t\tRouting:   routingFor(settings.Host),\n\t\tMessages:  messages,\n\t\tSessionID: conv.sessionID(),\n\t\tTools:     definitions,\n\t})\n}\n\nfunc (c *Core) renderMessages(entries []store.Entry) ([]openrouter.Message, error) {\n\tout := make([]openrouter.Message, 0, len(entries))\n\tfor _, e := range entries {\n\t\tcontent, err := c.joined(e.Parts)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tmessage := openrouter.Message{Role: e.Role, Content: content, Name: e.Name, ToolCallID: e.ToolCall}\n\t\tif e.Reasoning != \"\" {\n\t\t\treasoning, err := c.cfg.Store.Get(e.Reasoning)\n\t\t\tif err != nil {\n\t\t\t\treturn nil, err\n\t\t\t}\n\t\t\tmessage.Reasoning = string(reasoning)\n\t\t}\n\t\tfor _, call := range e.ToolCalls {\n\t\t\targuments, err := c.cfg.Store.Get(call.Arguments)\n\t\t\tif err != nil {\n\t\t\t\treturn nil, err\n\t\t\t}\n\t\t\tmessage.ToolCalls = append(message.ToolCalls, openrouter.ToolCall{\n\t\t\t\tID:       call.ID,\n\t\t\t\tType:     \"function\",\n\t\t\t\tFunction: openrouter.FunctionCall{Name: call.Name, Arguments: string(arguments)},\n\t\t\t})\n\t\t}\n\t\tout = append(out, message)\n\t}\n\treturn out, nil\n}\n\nfunc (c *Core) joined(parts []store.Part) (string, error) {\n\tvar content strings.Builder\n\tfor _, p := range parts {\n\t\tdata, err := c.cfg.Store.Get(p.Block)\n\t\tif err != nil {\n\t\t\treturn \"\", err\n\t\t}\n\t\tcontent.Write(data)\n\t}\n\treturn content.String(), nil\n}\n",
+"count": 8154
+},
+{
+"text": "// A small Markdown parser for model output. It produces a plain tree, never\n// HTML, and app.js builds DOM nodes from that tree with textContent. Raw HTML in\n// the input therefore stays visible as text, which is the point: model output is\n// inert. It's deliberately forgiving, because replies are parsed again and again\n// while they're still arriving, half-finished.\n\"use strict\";\n\nconst tackMarkdown = (() => {\n  const FENCE = /^( {0,3})(`{3,}|~{3,})\\s*([^\\s`]*)[^`]*$/;\n  const HEADING = /^ {0,3}(#{1,6})(?:\\s+(.*?))?\\s*#*\\s*$/;\n  const RULE = /^ {0,3}([-*_])\\s*(?:\\1\\s*){2,}$/;\n  const QUOTE = /^ {0,3}>\\s?(.*)$/;\n  const ITEM = /^(\\s*)([-*+]|\\d{1,9}[.)])(\\s+)(.*)$/;\n  const DELIMITER = /^\\s*\\|?\\s*:?-+:?\\s*(?:\\|\\s*:?-+:?\\s*)*\\|?\\s*$/;\n\n  const blank = (line) => line.trim() === \"\";\n  const indentOf = (line) => line.match(/^\\s*/)[0].replace(/\\t/g, \"    \").length;\n\n  // stripIndent removes up to n columns of leading whitespace, leaving the rest\n  // of the line alone. Tabs in code have to survive.\n  function stripIndent(line, n) {\n    let col = 0;\n    let i = 0;\n    while (i < line.length && col < n && (line[i] === \" \" || line[i] === \"\\t\")) {\n      col += line[i] === \"\\t\" ? 4 : 1;\n      i++;\n    }\n    return line.slice(i);\n  }\n\n  function parse(source) {\n    return blocks(source.replace(/\\r\\n?/g, \"\\n\").split(\"\\n\"));\n  }\n\n  function startsBlock(lines, i) {\n    const line = lines[i];\n    if (FENCE.test(line) || RULE.test(line) || QUOTE.test(line)) return true;\n    if (/^ {0,3}#{1,6}\\s/.test(line)) return true;\n    const item = line.match(ITEM);\n    if (item && item[4] !== \"\" && (!/\\d/.test(item[2]) || parseInt(item[2], 10) === 1)) return true;\n    return isTable(lines, i);\n  }\n\n  function isTable(lines, i) {\n    return i + 1 < lines.length && lines[i].includes(\"|\") &&\n      lines[i + 1].includes(\"-\") && DELIMITER.test(lines[i + 1]) &&\n      lines[i + 1].includes(\"|\") &&\n      cells(lines[i]).length === cells(lines[i + 1]).length;\n  }\n\n  // cells splits a table row on pipes, leaving escaped ones and code spans alone.\n  function cells(row) {\n    const out = [];\n    let cell = \"\";\n    let ticks = 0;\n    const text = row.trim().replace(/^\\|/, \"\").replace(/(^|[^\\\\])\\|$/, \"$1\");\n    for (let i = 0; i < text.length; i++) {\n      const ch = text[i];\n      if (ch === \"\\\\\" && text[i + 1] === \"|\") {\n        cell += \"|\";\n        i++;\n      } else if (ch === \"`\") {\n        ticks ^= 1;\n        cell += ch;\n      } else if (ch === \"|\" && !ticks) {\n        out.push(cell.trim());\n        cell = \"\";\n      } else {\n        cell += ch;\n      }\n    }\n    out.push(cell.trim());\n    return out;\n  }\n\n  function alignments(row) {\n    return cells(row).map((c) => {\n      const left = c.startsWith(\":\");\n      const right = c.endsWith(\":\");\n      if (left && right) return \"center\";\n      if (right) return \"right\";\n      return left ? \"left\" : \"\";\n    });\n  }\n\n  function blocks(lines) {\n    const out = [];\n    let i = 0;\n    while (i < lines.length) {\n      const line = lines[i];\n      if (blank(line)) {\n        i++;\n        continue;\n      }\n      const fence = line.match(FENCE);\n      if (fence) {\n        i = codeBlock(lines, i, fence, out);\n        continue;\n      }\n      const heading = line.match(HEADING);\n      if (heading && /^ {0,3}#{1,6}(\\s|$)/.test(line)) {\n        out.push({ type: \"heading\", level: heading[1].length, children: inline(heading[2] || \"\") });\n        i++;\n        continue;\n      }\n      if (RULE.test(line)) {\n        out.push({ type: \"rule\" });\n        i++;\n        continue;\n      }\n      if (QUOTE.test(line)) {\n        const inner = [];\n        while (i < lines.length && QUOTE.test(lines[i])) inner.push(lines[i++].match(QUOTE)[1]);\n        out.push({ type: \"quote\", children: blocks(inner) });\n        continue;\n      }\n      if (isTable(lines, i)) {\n        i = table(lines, i, out);\n        continue;\n      }\n      if (ITEM.test(line) && !blank(line.match(ITEM)[4] || \" \")) {\n        i = list(lines, i, out);\n        continue;\n      }\n      const para = [line.trim()];\n      i++;\n      while (i < lines.length && !blank(lines[i]) && !startsBlock(lines, i)) para.push(lines[i++].trim());\n      out.push({ type: \"paragraph\", children: inline(para.join(\"\\n\")) });\n    }\n    return out;\n  }\n\n  function codeBlock(lines, start, fence, out) {\n    const marker = fence[2];\n    const indent = fence[1].length;\n    const close = new RegExp(\"^ {0,3}\" + marker[0] + \"{\" + marker.length + \",}\\\\s*$\");\n    const text = [];\n    let i = start + 1;\n    while (i < lines.length && !close.test(lines[i])) {\n      text.push(stripIndent(lines[i], indent));\n      i++;\n    }\n    out.push({ type: \"code\", lang: fence[3] || \"\", text: text.join(\"\\n\") });\n    return i + 1;\n  }\n\n  function table(lines, start, out) {\n    const head = cells(lines[start]);\n    const align = alignments(lines[start + 1]);\n    const rows = [];\n    let i = start + 2;\n    while (i < lines.length && !blank(lines[i]) && lines[i].includes(\"|\") && !FENCE.test(lines[i])) {\n      const row = cells(lines[i++]);\n      while (row.length < head.length) row.push(\"\");\n      rows.push(row.slice(0, head.length).map(inline));\n    }\n    out.push({ type: \"table\", head: head.map(inline), align, rows });\n    return i;\n  }\n\n  function list(lines, start, out) {\n    const first = lines[start].match(ITEM);\n    const ordered = /\\d/.test(first[2]);\n    const marker = first[2].slice(-1);\n    const baseIndent = indentOf(first[1]);\n    const items = [];\n    let loose = false;\n    let i = start;\n\n    while (i < lines.length) {\n      const m = lines[i].match(ITEM);\n      if (!m || indentOf(m[1]) > baseIndent + 1 || indentOf(m[1]) < baseIndent) break;\n      if (/\\d/.test(m[2]) !== ordered || (!ordered && m[2] !== marker && m[2].slice(-1) !== marker)) break;\n\n      const contentIndent = indentOf(m[1]) + m[2].length + Math.min(m[3].length, 4);\n      const body = [m[4]];\n      let sawBlank = false;\n      i++;\n      while (i < lines.length) {\n        const line = lines[i];\n        if (blank(line)) {\n          let next = i + 1;\n          while (next < lines.length && blank(lines[next])) next++;\n          if (next >= lines.length) {\n            i = next;\n            break;\n          }\n          if (indentOf(lines[next]) >= contentIndent || (ITEM.test(lines[next]) && indentOf(lines[next]) > baseIndent)) {\n            body.push(\"\");\n            i = next;\n            continue;\n          }\n          sawBlank = true;\n          i = next;\n          break;\n        }\n        const indent = indentOf(line);\n        if (indent >= contentIndent) {\n          body.push(stripIndent(line, contentIndent));\n        } else if (ITEM.test(line) && indent > baseIndent) {\n          // Models often nest with fewer spaces than the marker is wide.\n          body.push(stripIndent(line, indent));\n        } else if (!ITEM.test(line) && !startsBlock(lines, i)) {\n          body.push(line.trim());\n        } else {\n          break;\n        }\n        i++;\n      }\n      items.push(listItem(body));\n      if (sawBlank) {\n        const next = i < lines.length ? lines[i].match(ITEM) : null;\n        if (next && indentOf(next[1]) <= baseIndent + 1 && indentOf(next[1]) >= baseIndent) loose = true;\n        else break;\n      }\n    }\n    if (items.some((item) => item.blocks.filter((b) => b.type === \"paragraph\").length > 1)) loose = true;\n    out.push({\n      type: \"list\",\n      ordered,\n      start: ordered ? parseInt(first[2], 10) : 1,\n      loose,\n      items,\n    });\n    return i;\n  }\n\n  function listItem(body) {\n    let task = null;\n    const check = body[0].match(/^\\[([ xX])\\]\\s+(.*)$/);\n    if (check) {\n      task = check[1] !== \" \";\n      body[0] = check[2];\n    }\n    return { task, blocks: blocks(body) };\n  }\n\n  const PUNCT = /[!-/:-@[-`{-~]/;\n  const isSpace = (ch) => ch === undefined || /\\s/.test(ch);\n  const isWord = (ch) => ch !== undefined && /[\\p{L}\\p{N}_]/u.test(ch);\n\n  // codeSpanEnd returns the index just past the code span opening at i, or -1.\n  function codeSpanEnd(text, i) {\n    let n = 0;\n    while (text[i + n] === \"`\") n++;\n    let j = i + n;\n    while (j < text.length) {\n      const next = text.indexOf(\"`\", j);\n      if (next < 0) return -1;\n      let run = 0;\n      while (text[next + run] === \"`\") run++;\n      if (run === n) return next + run;\n      j = next + run;\n    }\n    return -1;\n  }\n\n  // closer finds where a delimiter opened before start closes, or -1.\n  function closer(text, start, delim) {\n    const ch = delim[0];\n    for (let i = start; i < text.length; i++) {\n      const c = text[i];\n      if (c === \"\\\\\") {\n        i++;\n      } else if (c === \"`\") {\n        const end = codeSpanEnd(text, i);\n        if (end > 0) i = end - 1;\n      } else if (c === ch && text.startsWith(delim, i)) {\n        let run = 0;\n        while (text[i + run] === ch) run++;\n        // A single delimiter skips over doubled ones, which belong to something\n        // nested inside it.\n        if (delim.length === 1 && run === 2) {\n          const inner = closer(text, i + 2, ch + ch);\n          if (inner > 0) {\n            i = inner + 1;\n            continue;\n          }\n          i += 1;\n          continue;\n        }\n        const close = delim.length === 2 && run === 3 ? i + 1 : i;\n        if (!isSpace(text[close - 1]) && close > start) {\n          if (ch !== \"_\" || !isWord(text[close + delim.length])) return close;\n        }\n        i += run - 1;\n      }\n    }\n    return -1;\n  }\n\n  function safeURL(url) {\n    return /^(https?:\\/\\/|mailto:)/i.test(url.trim()) ? url.trim() : null;\n  }\n\n  // linkAt parses \"[text](url)\" with the opening bracket at i.\n  function linkAt(text, i) {\n    let depth = 0;\n    let j = i;\n    for (; j < text.length; j++) {\n      const c = text[j];\n      if (c === \"\\\\\") {\n        j++;\n      } else if (c === \"`\") {\n        const end = codeSpanEnd(text, j);\n        if (end > 0) j = end - 1;\n      } else if (c === \"[\") {\n        depth++;\n      } else if (c === \"]\" && --depth === 0) {\n        break;\n      }\n    }\n    if (j >= text.length || text[j + 1] !== \"(\") return null;\n    let parens = 1;\n    let k = j + 2;\n    for (; k < text.length && parens > 0; k++) {\n      if (text[k] === \"(\") parens++;\n      else if (text[k] === \")\") parens--;\n      else if (text[k] === \"\\n\") return null;\n    }\n    if (parens > 0) return null;\n    const dest = text.slice(j + 2, k - 1).trim();\n    const m = dest.match(/^<?([^\\s>]*)>?(?:\\s+[\"'(].*[\"')])?$/);\n    if (!m) return null;\n    return { label: text.slice(i + 1, j), url: m[1], end: k };\n  }\n\n  function inline(text) {\n    const out = [];\n    let buffer = \"\";\n    const flush = () => {\n      if (buffer) out.push({ type: \"text\", text: buffer });\n      buffer = \"\";\n    };\n    const push = (node) => {\n      flush();\n      out.push(node);\n    };\n\n    let i = 0;\n    while (i < text.length) {\n      const c = text[i];\n\n      if (c === \"\\\\\" && PUNCT.test(text[i + 1] || \"\")) {\n        buffer += text[i + 1];\n        i += 2;\n        continue;\n      }\n      if (c === \"\\n\") {\n        push({ type: \"break\" });\n        i++;\n        continue;\n      }\n      if (c === \"`\") {\n        const end = codeSpanEnd(text, i);\n        if (end > 0) {\n          let n = 0;\n          while (text[i + n] === \"`\") n++;\n          let code = text.slice(i + n, end - n).replace(/\\n/g, \" \");\n          if (code.length > 2 && code.startsWith(\" \") && code.endsWith(\" \") && code.trim()) code = code.slice(1, -1);\n          push({ type: \"code\", text: code });\n          i = end;\n          continue;\n        }\n        while (text[i] === \"`\") buffer += text[i++];\n        continue;\n      }\n      if (c === \"!\" && text[i + 1] === \"[\") {\n        const image = linkAt(text, i + 1);\n        if (image) {\n          // Images are never fetched. They show as a link, and only if it's safe.\n          const url = safeURL(image.url);\n          push(url\n            ? { type: \"link\", url, image: true, children: [{ type: \"text\", text: image.label || \"image\" }] }\n            : { type: \"text\", text: text.slice(i, image.end) });\n          i = image.end;\n          continue;\n        }\n      }\n      if (c === \"[\") {\n        const link = linkAt(text, i);\n        if (link) {\n          const url = safeURL(link.url);\n          if (url) push({ type: \"link\", url, children: inline(link.label) });\n          else buffer += text.slice(i, link.end);\n          i = link.end;\n          continue;\n        }\n      }\n      if (c === \"<\") {\n        const auto = text.slice(i).match(/^<((?:https?:\\/\\/|mailto:)[^\\s<>]+)>/i);\n        if (auto) {\n          push({ type: \"link\", url: auto[1], children: [{ type: \"text\", text: auto[1] }] });\n          i += auto[0].length;\n          continue;\n        }\n        const br = text.slice(i).match(/^<br\\s*\\/?>/i);\n        if (br) {\n          push({ type: \"break\" });\n          i += br[0].length;\n          continue;\n        }\n      }\n      if ((c === \"h\" || c === \"H\") && !isWord(text[i - 1])) {\n        const bare = text.slice(i).match(/^https?:\\/\\/[^\\s<>]+/i);\n        if (bare) {\n          let url = bare[0];\n          while (/[.,;:!?'\"*_~]$/.test(url) || (url.endsWith(\")\") && !url.includes(\"(\"))) url = url.slice(0, -1);\n          push({ type: \"link\", url, children: [{ type: \"text\", text: url }] });\n          i += url.length;\n          continue;\n        }\n      }\n      if (c === \"*\" || c === \"_\" || c === \"~\") {\n        const span = emphasisAt(text, i);\n        if (span) {\n          push(span.node);\n          i = span.end;\n          continue;\n        }\n        while (text[i] === c) buffer += text[i++];\n        continue;\n      }\n      buffer += c;\n      i++;\n    }\n    flush();\n    return out;\n  }\n\n  function emphasisAt(text, i) {\n    const c = text[i];\n    let run = 0;\n    while (text[i + run] === c) run++;\n    if (isSpace(text[i + run])) return null;\n    if (c === \"_\" && isWord(text[i - 1])) return null;\n    if (c === \"~\") {\n      if (run !== 2) return null;\n      const close = closer(text, i + 2, \"~~\");\n      if (close < 0) return null;\n      return { node: { type: \"del\", children: inline(text.slice(i + 2, close)) }, end: close + 2 };\n    }\n    if (run >= 3) {\n      const close = closer(text, i + 3, c + c);\n      if (close > 0 && text[close + 2] === c) {\n        return {\n          node: { type: \"strong\", children: [{ type: \"em\", children: inline(text.slice(i + 3, close)) }] },\n          end: close + 3,\n        };\n      }\n    }\n    if (run >= 2) {\n      const close = closer(text, i + 2, c + c);\n      if (close > 0) return { node: { type: \"strong\", children: inline(text.slice(i + 2, close)) }, end: close + 2 };\n    }\n    if (run === 1) {\n      const close = closer(text, i + 1, c);\n      if (close > 0) return { node: { type: \"em\", children: inline(text.slice(i + 1, close)) }, end: close + 1 };\n    }\n    return null;\n  }\n\n  return { parse, inline };\n})();\n\nif (typeof module !== \"undefined\") module.exports = tackMarkdown;\n",
+"count": 4461
+},
+{
+"text": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 75 (range 1-100, the higher the value, the more thorough the reasoning)\n\nYou are a helpful assistant.\n\n## Tools\n\nYou have access to a set of tools to help answer the user's question. You can invoke tools by writing a \"<｜DSML｜ calls>\" block like the following:\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"$TOOL_NAME\">\n<｜DSML｜ parameter name=\"$PARAMETER_NAME\" string=\"true|false\">$PARAMETER_VALUE</｜DSML｜ parameter>\n...\n</｜DSML｜ invoke>\n<｜DSML｜ invoke name=\"$TOOL_NAME2\">\n...\n</｜DSML｜ invoke>\n</｜DSML｜ calls>\n\nString parameters should be specified as is and set `string=\"true\"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string=\"false\"`.\n\nIf thinking_mode is enabled (triggered by <think>), you MUST output your complete reasoning inside <think>...</think> BEFORE any tool calls or final response.\n\nOtherwise, output directly after </think> with tool calls or final response.\n\n### Available Tool Schemas\n\n{\"name\": \"get_weather\", \"description\": \"Get the weather for a specific location\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"The city name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"], \"description\": \"Temperature unit\"}}, \"required\": [\"location\"]}}\n{\"name\": \"search\", \"description\": \"Search the web for information\", \"parameters\": {\"type\": \"object\", \"properties\": {\"query\": {\"type\": \"string\", \"description\": \"Search query\"}, \"num_results\": {\"type\": \"integer\", \"description\": \"Number of results to return\"}}, \"required\": [\"query\"]}}\n\nYou MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.\n<｜User｜>What's the weather like in Beijing?<｜Assistant｜><think>The user wants the weather in Beijing. I should call get_weather.</think>\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"get_weather\">\n<｜DSML｜ parameter name=\"location\" string=\"true\">Beijing</｜DSML｜ parameter>\n<｜DSML｜ parameter name=\"unit\" string=\"true\">celsius</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n</｜DSML｜ calls><｜end▁of▁sentence｜><｜User｜><tool_result>{\"temperature\": 22, \"condition\": \"sunny\", \"humidity\": 45}</tool_result><｜Assistant｜><think>Got the weather data. Let me format a nice response.</think>The weather in Beijing is currently sunny with a temperature of 22°C and 45% humidity.<｜end▁of▁sentence｜>",
+"count": 548
+},
+{
+"text": "<｜begin▁of▁sentence｜><｜System｜>You are a helpful assistant.<｜User｜>Hello<｜Assistant｜></think>Hi there! How can I help you?<｜end▁of▁sentence｜><｜User｜>What is the capital of France?<｜Assistant｜></think>The capital of France is Paris.<｜end▁of▁sentence｜>",
+"count": 40
+}
+]

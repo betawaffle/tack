@@ -1145,6 +1145,7 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		view.State = "interrupted"
 	case call.finished:
 		view.State = "finished"
+		view.OutputTokens = countOutput(conv.effectiveSettings(c.settings).Model, view.Output)
 	case call.started:
 		view.State = "running"
 	case call.allowed:
