@@ -779,6 +779,7 @@ function renderToolCall(call, decision) {
   head.append(el("span", "tag", STATE_LABELS[call.state] || call.state));
   for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
   if (call.network) head.append(el("span", "tag unused tool-flag", "Network allowed"));
+  if (call.ran_automatically) head.append(el("span", "tag", "Ran without asking"));
   head.append(el("span", "tool-preview", callPreview(call)), el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
   node.append(head);
   if (call.invalid) node.append(el("div", "tool-invalid", `Can't run: ${call.invalid}`));
@@ -867,9 +868,9 @@ function decisionCard(conv) {
   label.append(area);
   const ticked = () => [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice);
   card.dataset.decision = decision.id;
-  const answer = async (allow, shorten) => {
+  const answer = async (allow, shorten, autoRun) => {
     const network = [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network).filter((id) => allow.includes(id));
-    await call(conv.id, undefined, { id: decision.id, allow, network, shorten, denial_text: area.value });
+    await call(conv.id, undefined, { id: decision.id, allow, network, shorten, autoRun, denial_text: area.value });
   };
   const go = button("", "mini spends", () => answer(ticked()));
   go.id = "decide";
@@ -884,6 +885,11 @@ function decisionCard(conv) {
   relabel();
   card.addEventListener("refresh", relabel);
   row.append(el("span", "spacer"), go);
+  if (conv.items.flatMap((item) => item.tool_calls || []).some((c) => c.can_auto_run)) {
+    const always = button("Run, and stop asking about code here", "mini spends quiet", () => answer(ticked(), undefined, true));
+    always.id = "always-run";
+    row.append(always);
+  }
   if (decision.kind === "tool_output") {
     const large = conv.items.flatMap((item) => item.tool_calls || []).filter((c) => decision.calls.includes(c.id) && new TextEncoder().encode(c.output || "").length > SHORTEN_ABOVE);
     if (large.length) {
@@ -1323,6 +1329,22 @@ function settingsPanel(conv) {
     }),
   );
   node.append(area, el("div", "hint", "Changes are held until you apply them."), row);
+  if (conv.tools) {
+    // This one applies straight away: it only changes whether to ask next time.
+    const label = el("label", "check");
+    const auto = el("input");
+    auto.type = "checkbox";
+    auto.id = "conv-auto-run";
+    auto.checked = Boolean(conv.settings.auto_run_code);
+    auto.disabled = Boolean(conv.pending_settings);
+    auto.addEventListener("change", async () => {
+      const proposal = await postJSON(`/api/conversations/${conv.id}/settings`, { ...conv.settings, auto_run_code: auto.checked });
+      await postJSON(`/api/conversations/${conv.id}/settings/${(await proposal.json()).proposal}/apply`);
+      await show(conv.id);
+    });
+    label.append(auto, "Run code without asking");
+    node.append(label);
+  }
   if (conv.tools) node.append(definitionsPanel(conv));
   const again = el("div", "row");
   again.append(button("Start another like this", "mini net", () => startLike(conv)));
@@ -1783,6 +1805,18 @@ function setupStart(defaults) {
     box.id = "offer-tools";
     box.checked = true;
     offer.append(box, "Offer tools");
+    const autoRun = el("label", "check");
+    const autoRunBox = el("input");
+    autoRunBox.type = "checkbox";
+    autoRunBox.id = "start-auto-run";
+    autoRun.append(autoRunBox, "Run code without asking");
+    autoRunBox.addEventListener("change", () => {
+      const text = $("start-settings");
+      const parsed = JSON.parse(text.value);
+      if (autoRunBox.checked) parsed.auto_run_code = true;
+      else delete parsed.auto_run_code;
+      text.value = JSON.stringify(parsed, null, 2);
+    });
     const where = el("input");
     where.id = "workdir";
     where.type = "text";
@@ -1806,7 +1840,7 @@ function setupStart(defaults) {
       if (!edited) refreshPrompt();
       else markEdited();
     });
-    row.append(offer, where);
+    row.append(offer, autoRun, where);
     options.append(row);
   }
   const row = el("div", "prompt-row");
@@ -1856,6 +1890,9 @@ function setupStartDetails() {
   text.value = JSON.stringify(start.defaults.settings, null, 2);
   settings.append(text);
   area.append(settings);
+  // A box for the one setting worth having to hand. The settings text stays what counts.
+  text.addEventListener("input", syncAutoRunBox);
+  queueMicrotask(syncAutoRunBox);
 }
 
 function toolEditor(tool) {
@@ -1953,6 +1990,7 @@ async function startLike(conv) {
     }
   }
   $("start-settings").value = JSON.stringify(conv.settings, null, 2);
+  $("start-settings").dispatchEvent(new Event("input"));
   $("system-prompt").value = first && first.role === "system" ? first.text : "";
   markEdited();
 }
@@ -2133,7 +2171,7 @@ async function call(id, message, decision) {
     pinToTop(shownUser ?? reply.node);
     let res;
     if (decision) {
-      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, shorten: decision.shorten, denial_text: decision.denial_text }, expected);
+      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, shorten: decision.shorten, auto_run_code: decision.autoRun, denial_text: decision.denial_text }, expected);
     } else if (message !== undefined) {
       res = await postJSON(`/api/conversations/${id}/messages`, message, expected);
     } else {
@@ -2764,6 +2802,16 @@ function restoreConversation(staged) {
   if ($("budget-amount") && staged.budget) $("budget-amount").restore(staged.budget.value, staged.budget.unit);
 }
 
+function syncAutoRunBox() {
+  const box = $("start-auto-run");
+  if (!box) return;
+  try {
+    box.checked = Boolean(JSON.parse($("start-settings").value).auto_run_code);
+  } catch {
+    // It's being edited, and the box can catch up.
+  }
+}
+
 function captureStart() {
   const tools = {};
   for (const [name, editor] of start.editors) {
@@ -2797,6 +2845,7 @@ function restoreStart(saved) {
     for (const [parameter, area] of editor.parameters) area.value = tool.parameters[parameter] ?? area.value;
   }
   $("start-settings").value = saved.settings;
+  $("start-settings").dispatchEvent(new Event("input"));
   $("system-prompt").value = saved.system;
   markEdited();
 }

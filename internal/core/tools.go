@@ -41,6 +41,10 @@ type Tool struct {
 	// outside the conversation's own record.
 	NoApproval bool
 
+	// AutoRun runs the tool without asking when it says so for a conversation's settings. It's
+	// for tools that can't reach anything of a person's, and only ever because they opted in.
+	AutoRun func(store.Settings) bool
+
 	// TackWritten says a successful output is tack's own message, not anything read
 	// from the system, so there's nothing for a person to vet before the model sees it.
 	TackWritten bool
@@ -193,6 +197,7 @@ type toolCall struct {
 	workspace store.Ref    // the files this call left
 	result    []store.Part // what the model sees; set once it's final
 	released  bool         // the result is the tool's output, not a denial
+	automatic bool         // nobody was asked before it ran
 	edited    bool         // someone changed what the model sees
 	pending   *edit        // a change to that, held until it's applied or discarded
 }
@@ -287,6 +292,9 @@ func (conv *conversation) applyTool(ev *store.Event) {
 			}
 			call.allowed = choice.Allow
 			call.network = choice.Network
+			if choice.Parts == nil {
+				call.automatic = ev.By == "tack"
+			}
 			if choice.Parts != nil {
 				call.result = choice.Parts
 				call.released = choice.Allow
@@ -689,9 +697,13 @@ func (c *Core) approveAutomatic(conv *conversation) error {
 	c.mu.Lock()
 	var choices []store.Choice
 	if conv.decision == nil {
+		settings := conv.effectiveSettings(c.settings)
 		for _, call := range conv.openCalls() {
 			tool := c.findTool(call.Name)
-			if tool != nil && tool.NoApproval && call.Invalid == "" && !call.allowed {
+			if tool == nil || call.Invalid != "" || call.allowed {
+				continue
+			}
+			if tool.NoApproval || (tool.AutoRun != nil && tool.AutoRun(settings)) {
 				choices = append(choices, store.Choice{ToolCall: call.ID, Allow: true})
 			}
 		}
@@ -907,9 +919,10 @@ func (c *Core) isCompact(name string) bool {
 	return tool != nil && tool.NoApproval
 }
 
-func onlyBudgetDiffers(a, b store.Settings) bool {
+func nothingWaitingDiffers(a, b store.Settings) bool {
 	a, b = a.WithDefaults(), b.WithDefaults()
 	a.BudgetUSD, a.BudgetTopUpUSD = b.BudgetUSD, b.BudgetTopUpUSD
+	a.AutoRunCode = b.AutoRunCode
 	return reflect.DeepEqual(a, b)
 }
 
@@ -924,8 +937,8 @@ func (c *Core) ApplySettings(convID, id string) error {
 		}
 		pending = conv.pendingSettings.settings
 		before, current = conv.effectiveSettings(c.settings), conv.tools
-		// A budget has nothing to do with whatever's waiting.
-		if (conv.decision != nil || conv.unanswered()) && !onlyBudgetDiffers(before, pending) {
+		// A budget, or whether to ask next time, has nothing to do with whatever's waiting.
+		if (conv.decision != nil || conv.unanswered()) && !nothingWaitingDiffers(before, pending) {
 			return ErrAwaiting
 		}
 		return nil
@@ -972,10 +985,12 @@ func (c *Core) DecideWithNetwork(convID, decisionID string, allow, network []str
 }
 
 // Decision is an answer to what a conversation is waiting on. Shorten sends only the start
-// and end of those calls' output, for ones that are allowed.
+// and end of those calls' output, for ones that are allowed. AutoRunCode also stops asking
+// about code in this conversation from here on.
 type Decision struct {
 	Allow, Network, Shorten []string
 	Text                    string
+	AutoRunCode             bool
 }
 
 // DecideWith answers a decision.
@@ -1007,12 +1022,19 @@ func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update,
 				return ErrBadChoice
 			}
 		}
+		// It would replace a change someone's holding.
+		if d.AutoRunCode && conv.pendingSettings != nil {
+			return ErrBadChoice
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	choices, err := c.choices(conv, &open, d)
+	if err == nil && d.AutoRunCode {
+		err = c.stopAskingAboutCode(conv)
+	}
 	if err == nil {
 		err = c.record(&store.Event{Type: store.DecisionMade, Conversation: convID, Decision: decisionID, Choices: choices, By: "user"})
 	}
@@ -1021,6 +1043,18 @@ func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update,
 		return nil, err
 	}
 	return c.start(conv), nil
+}
+
+func (c *Core) stopAskingAboutCode(conv *conversation) error {
+	c.mu.Lock()
+	settings := conv.effectiveSettings(c.settings).WithDefaults()
+	c.mu.Unlock()
+	settings.AutoRunCode = true
+	id := store.NewID()
+	if err := c.record(&store.Event{Type: store.SettingsProposed, Conversation: conv.id, Edit: id, Settings: &settings}); err != nil {
+		return err
+	}
+	return c.record(&store.Event{Type: store.SettingsApplied, Conversation: conv.id, Edit: id})
 }
 
 func (c *Core) choices(conv *conversation, open *decision, d Decision) ([]store.Choice, error) {
@@ -1130,6 +1164,10 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		view.Result = c.text(call.result)
 	}
 	view.Network = call.network
+	if tool := c.findTool(call.Name); tool != nil && tool.AutoRun != nil {
+		view.RanAutomatically = call.automatic
+		view.CanAutoRun = view.Decidable && conv.decision.kind == store.DecideCalls && conv.pendingSettings == nil
+	}
 	if tool := c.findTool(call.Name); tool != nil && tool.NetworkOption && view.Decidable && conv.decision.kind != store.DecideOutput {
 		view.NetworkOption = true
 	}

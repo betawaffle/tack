@@ -142,7 +142,9 @@ between calls in a conversation, up to 16 MB, as an archive in the record that's
 inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.
 Notes and scratch can be read from `/conversation`. Output up to 8 KB goes to the model without
 a second approval, because it can't contain anything the model didn't already have, and larger output
-waits, with the choice of sending only the first and last 2 KB
+waits, with the choice of sending only the first and last 2 KB. A conversation can opt in to running
+code without asking, from the start panel, its settings or the approval card, and forks and
+"Start another like this" keep that choice. Its budget and pausing still apply, and every other tool still asks
 
 Commands run under [bubblewrap](https://github.com/containers/bubblewrap), which is
 required. They see only read-only system paths, a writable working directory and an

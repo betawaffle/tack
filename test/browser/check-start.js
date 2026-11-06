@@ -647,6 +647,31 @@ let page;
   ok(codeOutput.includes("4") && codeOutput.includes("no such file"), "it runs, and can't see outside its sandbox: " + codeOutput.slice(0, 120));
   ok((await p.locator("input[data-network]").count()) === 0, "and has no network option");
 
+  // Opting in on the start panel, so code runs with nobody asked.
+  await fresh();
+  await p.fill("#workdir", "");
+  await reset();
+  await p.locator("#start-auto-run").check();
+  ok(JSON.parse(await p.inputValue("#start-settings")).auto_run_code === true, "the box changes the settings");
+  await send("tools code");
+  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  ok((await p.locator(".tool .tag", { hasText: "Ran without asking" }).count()) === 1, "code ran without asking, and says so");
+
+  // Opting in from the card.
+  await fresh();
+  await p.fill("#workdir", "");
+  await reset();
+  await send("tools code");
+  await card();
+  await p.click("#always-run");
+  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  await idle();
+  await p.locator(".conv-settings summary").first().click();
+  ok(await p.locator("#conv-auto-run").isChecked(), "stopping asking from the card changes the conversation's setting");
+  await p.locator("#conv-auto-run").uncheck();
+  await p.waitForFunction(() => document.getElementById("conv-auto-run") && !document.getElementById("conv-auto-run").checked);
+  await idle();
+
   // A reply coming in leaves the page alone, and only draws whole blocks.
   await p.setViewportSize({ width: 1280, height: 500 });
   await fresh();

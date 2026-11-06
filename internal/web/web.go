@@ -522,6 +522,7 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 		Allow      []string `json:"allow"`
 		Network    []string `json:"network"`
 		Shorten    []string `json:"shorten"`
+		AutoRun    bool     `json:"auto_run_code"`
 		DenialText string   `json:"denial_text"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
@@ -529,7 +530,7 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	updates, err := s.core.DecideWith(r.PathValue("id"), r.PathValue("decision"), core.Decision{Allow: body.Allow, Network: body.Network, Shorten: body.Shorten, Text: body.DenialText})
+	updates, err := s.core.DecideWith(r.PathValue("id"), r.PathValue("decision"), core.Decision{Allow: body.Allow, Network: body.Network, Shorten: body.Shorten, Text: body.DenialText, AutoRunCode: body.AutoRun})
 	if err != nil {
 		fail(w, err)
 		return

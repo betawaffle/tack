@@ -2190,3 +2190,73 @@ func TestTokensAreCountedForAModelTackKnows(t *testing.T) {
 		t.Error("it counted for an unknown model")
 	}
 }
+
+func TestCodeOnlyRunsWithoutAskingAfterOptingIn(t *testing.T) {
+	f := newToolFake(t)
+	var saw []string
+	auto := keptTool(&saw, "ran", nil)
+	auto.AutoRun = func(s store.Settings) bool { return s.AutoRunCode }
+	f.tools = append(f.tools, auto)
+	c := f.open()
+
+	// By default it asks.
+	id := f.askForTools(c, wireCall{"k1", "kept", `{}`})
+	if len(saw) != 0 {
+		t.Fatal("it ran without asking")
+	}
+	calls := f.calls(c, id)
+	if !calls[0].CanAutoRun || calls[0].RanAutomatically {
+		t.Errorf("view = %+v", calls[0])
+	}
+	// Opting in while answering runs this one and stops asking about the next.
+	decision := f.decision(c, id, store.DecideCalls)
+	f.replyWith(toolStream(wireCall{"k2", "kept", `{}`}, wireCall{"e1", "echo", `{"text":"still asks"}`}))
+	updates, err := c.DecideWith(id, decision.ID, Decision{Allow: []string{"k1"}, AutoRunCode: true})
+	mustFinish(t, updates, err)
+	if len(saw) != 2 {
+		t.Fatalf("saw = %q", saw)
+	}
+	calls = f.calls(c, id)
+	var k1, k2, e1 ToolCallView
+	for _, call := range calls {
+		switch call.ID {
+		case "k1":
+			k1 = call
+		case "k2":
+			k2 = call
+		case "e1":
+			e1 = call
+		}
+	}
+	if k1.RanAutomatically || !k2.RanAutomatically {
+		t.Errorf("k1 = %+v, k2 = %+v", k1, k2)
+	}
+	// Another tool in the same reply still needs a person.
+	if e1.State != "waiting" || len(f.runs) != 0 {
+		t.Errorf("echo = %+v, runs = %q", e1, f.runs)
+	}
+	// It survives a restart, and turning it off goes back to asking.
+	c = f.open()
+	view, _ := c.Conversation(id)
+	if !view.Settings.AutoRunCode {
+		t.Error("the setting didn't survive")
+	}
+	f.decide(c, id, store.DecideCalls, "", "e1")
+	f.replyWith(replyStream)
+	f.decide(c, id, store.DecideOutput, "", "e1")
+	f.replyWith(toolStream(wireCall{"k3", "kept", `{}`}))
+	settings := view.Settings
+	settings.AutoRunCode = false
+	proposal, err := c.ProposeSettings(id, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplySettings(id, proposal); err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Send(id, "Again.")
+	mustFinish(t, updates, err)
+	if len(saw) != 2 {
+		t.Errorf("it ran after opting out: %q", saw)
+	}
+}

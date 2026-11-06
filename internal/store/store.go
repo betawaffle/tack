@@ -167,6 +167,9 @@ type Settings struct {
 	MaxMatches            int `json:"max_matches,omitzero"`
 	MaxSearchFileBytes    int `json:"max_search_file_bytes,omitzero"`
 	MaxLineShown          int `json:"max_line_shown,omitzero"`
+
+	// AutoRunCode runs code in its sandbox without asking. Large output still waits.
+	AutoRunCode bool `json:"auto_run_code,omitzero"`
 }
 
 // DefaultSandboxReadOnly is what a sandboxed command can read, unless the config says

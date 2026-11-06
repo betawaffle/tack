@@ -40,7 +40,8 @@ const (
 // a candidate for approving automatically.
 const FlagCommand = "Runs any command"
 
-// FlagCode is on every run_code, for the same reason.
+// FlagCode is on every run_code. Unlike a command, it can run without asking, but only in a
+// conversation someone has opted in, because its sandbox has nothing of theirs in it.
 const FlagCode = "Runs code"
 
 // Options configure the tools.
@@ -113,6 +114,7 @@ func All(opts Options) []core.Tool {
 			Name:          "run_code",
 			Definition:    definition("run_code", codeDescription, `{"language":{"type":"string","enum":["python"],"description":"The language it's written in."},"code":{"type":"string","description":"The code to run."}}`, `["language","code"]`),
 			AutoSendBytes: codeAutoSendBytes,
+			AutoRun:       func(settings store.Settings) bool { return settings.AutoRunCode },
 			Inspect:       inspectCode,
 			Run:           r.runCode,
 			Timeout: func(settings store.Settings) time.Duration {

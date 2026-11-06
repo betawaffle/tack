@@ -102,6 +102,11 @@ type ToolCallView struct {
 	// OutputTokens is what the output would add to the next call, while it's waiting on someone
 	// deciding whether to send it. Zero means it can't be counted.
 	OutputTokens int `json:"output_tokens,omitzero"`
+
+	// RanAutomatically says nobody was asked, because the conversation opted in. CanAutoRun says
+	// someone answering this call could opt in now.
+	RanAutomatically bool `json:"ran_automatically,omitzero"`
+	CanAutoRun       bool `json:"can_auto_run,omitzero"`
 	// Someone changed what the model was given, or has a change held.
 	ResultEdited bool         `json:"result_edited,omitzero"`
 	Pending      *PendingEdit `json:"pending,omitzero"`
