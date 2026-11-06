@@ -2,12 +2,15 @@
 package web
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -32,7 +35,7 @@ const maxMessageBytes = 8 << 20
 // this server, so that it has to be reloaded. Any other change to the page's files only
 // offers a reload. Pages send it with every request, and it's checked there too, since
 // they might not have heard yet.
-const pageRequired = 2
+const pageRequired = 3
 
 const pageRequiredHeader = "X-Tack-Page-Required"
 
@@ -98,10 +101,13 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations/{id}/messages", s.current(s.send))
 	mux.HandleFunc("POST /api/conversations/{id}/held", s.current(s.hold))
 	mux.HandleFunc("POST /api/conversations/{id}/reply", s.current(s.reply))
-	mux.HandleFunc("POST /api/conversations/{id}/system", s.current(s.addSystem))
 	mux.HandleFunc("POST /api/conversations/{id}/system/{message}/edits", s.current(s.proposeEdit))
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.current(s.applyEdit))
 	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.current(s.discardEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/message-edits", s.current(s.proposeMessageEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/message-edits/{edit}/apply", s.current(s.applyMessageEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/message-edits/{edit}/discard", s.current(s.discardMessageEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/refusals/forget", s.current(s.forgetRefusal))
 	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.current(s.decide))
 	mux.HandleFunc("POST /api/conversations/{id}/budget", s.current(s.addBudget))
 	mux.HandleFunc("POST /api/conversations/{id}/pause", s.pause)
@@ -169,8 +175,21 @@ func security(next http.Handler) http.Handler {
 // current refuses an action that says which revision of the conversation it was based
 // on, if that isn't the current one. Stopping what's running doesn't go through this: it
 // has to work while the revision moves, and it names what it stops anyway.
+//
+// Actions take turns, so nothing can change between the check and the action. The body is
+// read first, so a slow client can't hold everyone else up, and a call that streams lets
+// go once it's started.
 func (s *server) current(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxMessageBytes))
+		if err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		s.actions.Lock()
+		release := sync.OnceFunc(s.actions.Unlock)
+		defer release()
 		if text := r.Header.Get("X-Tack-Revision"); text != "" {
 			revision, err := strconv.Atoi(text)
 			if err != nil {
@@ -182,11 +201,15 @@ func (s *server) current(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), actionKey{}, release)))
 	}
 }
 
+// actionKey finds the function that ends an action's turn.
+type actionKey struct{}
+
 type server struct {
+	actions  sync.Mutex
 	core     *core.Core
 	defaults func() Defaults
 	reload   func() (Reload, error)
@@ -296,16 +319,22 @@ func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, defaults)
 }
 
+func readMessage(w http.ResponseWriter, r *http.Request) (core.Message, bool) {
+	var message core.Message
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &message); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return message, false
+	}
+	return message, true
+}
+
 func (s *server) send(w http.ResponseWriter, r *http.Request) {
-	text, ok := readText(w, r, "text")
+	message, ok := readMessage(w, r)
 	if !ok {
 		return
 	}
-	if strings.TrimSpace(text) == "" {
-		http.Error(w, "empty message", http.StatusBadRequest)
-		return
-	}
-	updates, err := s.core.Send(r.PathValue("id"), text)
+	updates, err := s.core.SendMessage(r.PathValue("id"), message)
 	if err != nil {
 		fail(w, err)
 		return
@@ -314,15 +343,54 @@ func (s *server) send(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) hold(w http.ResponseWriter, r *http.Request) {
-	text, ok := readText(w, r, "text")
+	message, ok := readMessage(w, r)
 	if !ok {
 		return
 	}
-	if strings.TrimSpace(text) == "" {
-		http.Error(w, "empty message", http.StatusBadRequest)
+	if err := s.core.AddMessage(r.PathValue("id"), message); err != nil {
+		fail(w, err)
 		return
 	}
-	if err := s.core.HoldMessage(r.PathValue("id"), text); err != nil {
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) proposeMessageEdit(w http.ResponseWriter, r *http.Request) {
+	var body core.MessageEdit
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := s.core.ProposeMessageEdit(r.PathValue("id"), body)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"edit": id})
+}
+
+func (s *server) applyMessageEdit(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.ApplyMessageEdit(r.PathValue("id"), r.PathValue("edit")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) discardMessageEdit(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.DiscardMessageEdit(r.PathValue("id"), r.PathValue("edit")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) forgetRefusal(w http.ResponseWriter, r *http.Request) {
+	feature, ok := readText(w, r, "feature")
+	if !ok {
+		return
+	}
+	if err := s.core.ForgetRefusal(r.PathValue("id"), feature); err != nil {
 		fail(w, err)
 		return
 	}
@@ -336,23 +404,6 @@ func (s *server) reply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stream(w, r, updates)
-}
-
-func (s *server) addSystem(w http.ResponseWriter, r *http.Request) {
-	text, ok := readText(w, r, "text")
-	if !ok {
-		return
-	}
-	if strings.TrimSpace(text) == "" {
-		http.Error(w, "empty message", http.StatusBadRequest)
-		return
-	}
-	id, err := s.core.AddSystemMessage(r.PathValue("id"), text)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, map[string]string{"message": id})
 }
 
 func (s *server) proposeEdit(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +539,9 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 // stream sends updates as one JSON object per line. If the browser goes away
 // the call carries on: it belongs to the core, not to this request.
 func stream(w http.ResponseWriter, r *http.Request, updates <-chan core.Update) {
+	if release, ok := r.Context().Value(actionKey{}).(func()); ok {
+		release()
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-store")
 	rc := http.NewResponseController(w)
@@ -526,7 +580,7 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork):
+	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork), errors.Is(err, core.ErrBadMessage):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, core.ErrStale):
 		w.Header().Set("X-Tack-Stale", "1")

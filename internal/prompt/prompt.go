@@ -37,7 +37,7 @@ func builtin() []Section {
 		{Name: "tools", For: "tools", Text: "Every tool call needs approval from the user, which can take a while, so ask for what you actually need. " +
 			"A denial isn't an error: read the reason and change your approach rather than repeating the call. " +
 			"You only see a tool's output if the user releases it."},
-		{Name: "notes", For: "notes", Text: "Use the note tool to keep the user's page up to date, such as your plan, and to say when you wish you had a tool. Notes aren't sent back to you. A reply with only notes carries on, so you can write more. A reply with notes and text ends your turn, and their results reach you with the user's next message."},
+		{Name: "notes", For: "notes", Text: "Use the note tool to keep the user's page up to date, such as your plan, and to say when you wish you had a tool. Notes aren't sent back to you. Notes don't end your turn: you're called again with their results. Your turn ends when you reply without any tool calls."},
 		{Name: "workdir", For: "workdir", Text: "Relative paths and commands start from the working directory, " + WorkdirVariable + "."},
 	}
 }

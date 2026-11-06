@@ -35,6 +35,10 @@ type Stats struct {
 type PendingEdit struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
+
+	Name      string        `json:"name,omitzero"`
+	Reasoning string        `json:"reasoning,omitzero"`
+	ToolCalls []MessageCall `json:"tool_calls,omitzero"`
 }
 
 // Item is something to show in a conversation. Text holds the message, or for
@@ -47,10 +51,20 @@ type Item struct {
 	Reasoning string `json:"reasoning,omitzero"`
 	Stats     *Stats `json:"stats,omitzero"`
 
+	// A message's name field.
+	Name string `json:"name,omitzero"`
+	// Written says someone wrote this as a message of its role. ToolCallID says which
+	// call a written tool message answers, and WrittenCalls are ones it asks for.
+	Written      bool          `json:"written,omitzero"`
+	ToolCallID   string        `json:"tool_call_id,omitzero"`
+	WrittenCalls []MessageCall `json:"written_calls,omitzero"`
+	// Call identifies a reply from the model, for changing it.
+	Call string `json:"call,omitzero"`
+
 	// User and system messages: no call has included this text yet.
 	Queued bool `json:"queued,omitzero"`
 
-	// System messages only.
+	// System and written messages, and Edited and Pending for replies too.
 	Message string       `json:"message,omitzero"`
 	Edited  bool         `json:"edited,omitzero"`
 	Removed bool         `json:"removed,omitzero"`
@@ -83,6 +97,9 @@ type ToolCallView struct {
 	Network       bool     `json:"network,omitzero"`
 	// Compact says it's only bookkeeping, like a note, which doesn't need a full card.
 	Compact bool `json:"compact,omitzero"`
+	// Someone changed what the model was given, or has a change held.
+	ResultEdited bool         `json:"result_edited,omitzero"`
+	Pending      *PendingEdit `json:"pending,omitzero"`
 }
 
 // BudgetView is a conversation's spending. Stopped says a call wasn't started because
@@ -155,6 +172,11 @@ type Conversation struct {
 	Items           []Item           `json:"items"`
 
 	Decision *DecisionView `json:"decision,omitzero"`
+
+	// WaitingToolCalls are written tool calls that only a tool message can answer.
+	WaitingToolCalls []string `json:"waiting_tool_calls,omitzero"`
+	// Refused is what the current model and host won't accept, as far as is known.
+	Refused []RefusedFeature `json:"refused,omitzero"`
 
 	// Where it was forked from, and how many of its items came from there.
 	ForkedFrom string `json:"forked_from,omitzero"`
@@ -241,6 +263,8 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		out.Budget.Estimate = conv.stoppedEstimate
 	}
 	out.Paused = conv.paused
+	out.WaitingToolCalls = conv.openWritten()
+	out.Refused = c.refused(effective.Model, effective.Host)
 	out.Running.Reply = conv.cancelReply != nil
 	for id := range conv.stopTools {
 		out.Running.Tool = id
@@ -267,9 +291,11 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		shown := len(out.Items)
 		switch {
 		case it.role == "user":
-			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.parts), Queued: !it.sent})
+			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.parts), Queued: !it.sent, Name: it.name})
 		case it.role == "system":
 			out.Items = append(out.Items, c.systemItem(it))
+		case it.written():
+			out.Items = append(out.Items, c.writtenItem(it))
 		case it.finished == nil:
 			// Only the newest call of a busy conversation can still be running.
 			if !conv.busy || i != lastCall {
@@ -281,6 +307,15 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 			out.Items = append(out.Items, Item{Role: "notice", Text: "The model returned no text."})
 		default:
 			reply := c.reply(it.finished)
+			reply.Call, reply.Edited = it.callID, it.edited
+			if change := it.override; change != nil {
+				reply.Text, reply.Name, reply.Reasoning = c.text(change.parts), change.name, ""
+				if change.reasoning != "" {
+					reply.Reasoning = c.text([]store.Part{{Block: change.reasoning}})
+				}
+				reply.Removed = len(change.parts) == 0 && len(it.calls) == 0
+			}
+			reply.Pending = c.pendingView(it.pending)
 			for _, call := range it.calls {
 				reply.ToolCalls = append(reply.ToolCalls, c.toolCallView(conv, call))
 			}
@@ -302,9 +337,41 @@ func (c *Core) systemItem(it *item) Item {
 		Queued:  !it.sent && len(it.parts) > 0,
 		Edited:  it.edited,
 		Removed: len(it.parts) == 0,
+		Name:    it.name,
 	}
 	if it.pending != nil {
 		out.Pending = &PendingEdit{ID: it.pending.id, Text: c.text(it.pending.parts)}
+	}
+	return out
+}
+
+func (c *Core) writtenItem(it *item) Item {
+	out := Item{
+		Role: it.role, Written: true, Text: c.text(it.parts), Message: it.messageID, Name: it.name, ToolCallID: it.toolCallID,
+		WrittenCalls: c.writtenCalls(it.writtenCalls), Queued: !it.sent, Edited: it.edited,
+		Removed: len(it.parts) == 0 && len(it.writtenCalls) == 0, Pending: c.pendingView(it.pending),
+	}
+	if it.reasoning != "" {
+		out.Reasoning = c.text([]store.Part{{Block: it.reasoning}})
+	}
+	return out
+}
+
+func (c *Core) writtenCalls(calls []store.ToolCall) []MessageCall {
+	var out []MessageCall
+	for _, call := range calls {
+		out = append(out, MessageCall{ID: call.ID, Name: call.Name, Arguments: c.text([]store.Part{{Block: call.Arguments}})})
+	}
+	return out
+}
+
+func (c *Core) pendingView(pending *edit) *PendingEdit {
+	if pending == nil {
+		return nil
+	}
+	out := &PendingEdit{ID: pending.id, Text: c.text(pending.parts), Name: pending.name, ToolCalls: c.writtenCalls(pending.calls)}
+	if pending.reasoning != "" {
+		out.Reasoning = c.text([]store.Part{{Block: pending.reasoning}})
 	}
 	return out
 }

@@ -77,6 +77,11 @@ http
       bodies.push(data);
       const b = JSON.parse(data);
       const last = b.messages[b.messages.length - 1].content;
+      if (/^refuse/.test(last)) {
+        res.statusCode = 400;
+        res.end('{"error":{"message":"not allowed here"}}');
+        return;
+      }
       if (/^fail/.test(last) && bodies.filter((x) => x === data).length === 1) {
         res.statusCode = 502;
         res.end('{"error":{"message":"upstream exploded"}}');

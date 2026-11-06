@@ -46,6 +46,9 @@ type Entry struct {
 	Role  string `json:"role"`
 	Parts []Part `json:"parts"`
 
+	// A message's name field.
+	Name string `json:"name,omitzero"`
+
 	// An assistant message that made tool calls. Its reasoning has to be sent back
 	// exactly, or the host's cache misses from that point.
 	ToolCalls []ToolCall `json:"tool_calls,omitzero"`
@@ -92,28 +95,33 @@ const (
 	// ConversationForked starts a conversation from the state of another one at that
 	// moment. It's its own type so that a build that can't work out the history
 	// refuses the record, rather than showing an empty conversation.
-	ConversationForked = "conversation_forked"
-	UserMessage        = "user_message"
-	SystemMessage      = "system_message"
-	EditProposed       = "system_edit_proposed"
-	EditApplied        = "system_edit_applied"
-	EditDiscarded      = "system_edit_discarded"
-	CallStarted        = "model_call_started"
-	CallFinished       = "model_call_finished"
-	DecisionRequested  = "decision_requested"
-	DecisionMade       = "decision_made"
-	ToolStarted        = "tool_started"
-	ToolFinished       = "tool_finished"
-	ConfigLoaded       = "config_loaded"
-	SettingsProposed   = "settings_proposed"
-	SettingsApplied    = "settings_applied"
-	SettingsDiscarded  = "settings_discarded"
-	BudgetAdded        = "budget_added"
-	AllowanceStarted   = "allowance_started"
-	BudgetStopped      = "budget_stopped"
-	PauseRequested     = "pause_requested"
-	PauseCleared       = "pause_cleared"
-	NoteAdded          = "note_added"
+	ConversationForked   = "conversation_forked"
+	UserMessage          = "user_message"
+	MessageAdded         = "message_added"
+	MessageEditProposed  = "message_edit_proposed"
+	MessageEditApplied   = "message_edit_applied"
+	MessageEditDiscarded = "message_edit_discarded"
+	CapabilityForgotten  = "capability_forgotten"
+	SystemMessage        = "system_message"
+	EditProposed         = "system_edit_proposed"
+	EditApplied          = "system_edit_applied"
+	EditDiscarded        = "system_edit_discarded"
+	CallStarted          = "model_call_started"
+	CallFinished         = "model_call_finished"
+	DecisionRequested    = "decision_requested"
+	DecisionMade         = "decision_made"
+	ToolStarted          = "tool_started"
+	ToolFinished         = "tool_finished"
+	ConfigLoaded         = "config_loaded"
+	SettingsProposed     = "settings_proposed"
+	SettingsApplied      = "settings_applied"
+	SettingsDiscarded    = "settings_discarded"
+	BudgetAdded          = "budget_added"
+	AllowanceStarted     = "allowance_started"
+	BudgetStopped        = "budget_stopped"
+	PauseRequested       = "pause_requested"
+	PauseCleared         = "pause_cleared"
+	NoteAdded            = "note_added"
 )
 
 // Note is an item on a conversation's page. The text is a block, like other content.
@@ -251,7 +259,8 @@ type Artifact struct {
 // getting history wrong, such as not knowing a tool call was already decided.
 func Known(eventType string) bool {
 	switch eventType {
-	case TackStarted, RestartRequested, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
+	case MessageAdded, MessageEditProposed, MessageEditApplied, MessageEditDiscarded, CapabilityForgotten,
+		TackStarted, RestartRequested, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
@@ -268,6 +277,19 @@ type Event struct {
 	// tack_started
 	Version string `json:"version,omitzero"`
 	PID     int    `json:"pid,omitzero"`
+
+	// message_added: a message of any role but user or system, which keep their own
+	// events. A custom role is whatever someone wrote. It uses parts, message, reasoning,
+	// tool_calls (ones a person wrote) and tool_call. Absent role never happens here.
+	Role string `json:"role,omitzero"`
+	// A message's name field, on message_added, user_message and system_message.
+	Name string `json:"name,omitzero"`
+
+	// model_call_started: the unusual things in its request, which is how tack learns
+	// what a model accepts. Absent means none.
+	Features []string `json:"features,omitzero"`
+	// capability_forgotten: a model and host can be asked about this again.
+	Feature string `json:"feature,omitzero"`
 
 	// restart_requested: what the build it's restarting into changes, if that's known.
 	Changes []string `json:"changes,omitzero"`

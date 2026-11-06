@@ -86,17 +86,23 @@ func TestSystemPromptFlow(t *testing.T) {
 	}
 	post(t, base+"/reply", `{}`, http.StatusConflict)
 
-	message := field(t, post(t, base+"/system", `{"text":"Rule."}`, 200), "message")
+	post(t, base+"/held", `{"role":"system","text":"Rule."}`, 200)
 	if out := post(t, base+"/reply", `{}`, 200); !strings.Contains(out, `"kind":"done"`) {
 		t.Errorf("stream = %s", out)
 	}
+	var view core.Conversation
+	if err := json.Unmarshal([]byte(get(t, base)), &view); err != nil {
+		t.Fatal(err)
+	}
+	message := view.Items[len(view.Items)-2].Message
 
 	editID := field(t, post(t, base+"/system/"+message+"/edits", `{"text":"Better rule."}`, 200), "edit")
 	post(t, base+"/edits/"+editID+"/discard", ``, 200)
 	post(t, base+"/edits/"+editID+"/apply", ``, http.StatusNotFound)
 
 	post(t, base+"/messages", `{"text":"  "}`, http.StatusBadRequest)
-	post(t, base+"/system", `{"text":""}`, http.StatusBadRequest)
+	post(t, base+"/held", `{"role":"system","text":""}`, http.StatusBadRequest)
+	post(t, base+"/held", `{"role":"tool","text":"x","tool_call_id":"nope"}`, http.StatusBadRequest)
 	post(t, conv+"/nope/reply", ``, http.StatusNotFound)
 }
 

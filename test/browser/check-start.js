@@ -250,7 +250,7 @@ let page;
   await p.click("#hold");
   await p.waitForSelector(".user.is-waiting");
   ok((await bodies()).length === 0 && !(await p.isVisible("#start")), "holding a first message starts the conversation without a call");
-  ok(!(await p.isDisabled("#add-system")), "and a system message can follow it");
+  ok((await p.locator("#role option[value=system]").count()) === 1, "and a system message can follow it");
 
   // Notes.
   await fresh();
@@ -546,6 +546,95 @@ let page;
   await p.waitForSelector(".notes");
   ok(!(await p.locator(".notes").evaluate((n) => n.open)), "and stays collapsed");
   await p.locator(".notes summary").click();
+
+  // A message of any role, with each field in its own box.
+  await fresh();
+  ok((await p.locator("#add-system").count()) === 0, "there's no separate button for system messages");
+  ok(await p.locator("#role option[value=tool]").evaluate((o) => o.disabled), "a tool message isn't offered with nothing to answer");
+  await reset();
+  await p.selectOption("#role", "assistant");
+  ok(await p.locator("#calls-row").isVisible() || (await p.locator("#more-fields").count()) === 1, "an assistant message has more fields");
+  await p.locator("#more-fields summary").click();
+  await p.fill("#input", "Let me look.");
+  await p.fill("#message-reasoning", "I should check.");
+  await p.click("#add-call");
+  await p.fill("#message-calls [data-call=name]", "read_file");
+  await p.fill("#message-calls [data-call=arguments]", "not json");
+  await p.click("#hold");
+  await p.waitForSelector(".notice:has-text('JSON object')");
+  ok((await p.inputValue("#input")) === "Let me look.", "arguments that aren't JSON are refused, and the text stays");
+  await p.fill("#message-calls [data-call=arguments]", '{"path":"hello.txt"}');
+  await p.click("#hold");
+  await p.waitForSelector(".written");
+  ok((await bodies()).length === 0, "holding it calls nothing");
+  ok((await p.locator(".written").innerText()).includes("Written by you"), "it says you wrote it");
+  await p.waitForFunction(() => document.getElementById("role").value === "tool", null, { timeout: 2000 });
+  ok(true, "and only its answer can come next");
+  ok(await p.locator("#role option[value=user]").evaluate((o) => o.disabled), "a user message can't");
+  await p.screenshot({ path: "shots/written.png" });
+  await p.fill("#input", "hello from the test file");
+  await p.click("#send");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  const written = (await bodies())[0].messages;
+  const forgedAssistant = written.find((m) => m.role === "assistant");
+  ok(forgedAssistant.reasoning === "I should check." && forgedAssistant.tool_calls[0].function.name === "read_file", "they go out as separate fields");
+  ok(written.at(-1).role === "tool" && written.at(-1).tool_call_id === forgedAssistant.tool_calls[0].id, "with the answer tied to its call");
+  ok((await p.locator(".decision-card").count()) === 0, "and nothing asks to run it");
+  ok((await p.locator("#role").inputValue()) === "user", "the role goes back to user");
+
+  // Changing a reply from the model.
+  await reset();
+  const repliesBefore = await p.locator(".assistant").count();
+  await p.locator(".assistant .fork-row button", { hasText: "Edit" }).last().click();
+  await p.locator(".assistant .editor textarea").first().fill("A changed reply.");
+  await p.locator(".assistant .editor button", { hasText: "Hold edit" }).click();
+  await p.waitForSelector(".assistant .pending");
+  ok((await p.locator(".assistant .tag.unused").innerText()) === "Unused edit", "a change to a reply is held");
+  await p.locator(".assistant .pending button", { hasText: "Apply" }).click();
+  await p.waitForFunction(() => document.querySelector(".assistant .tag")?.innerText === "Edited" && !document.querySelector(".assistant .pending"), null, { timeout: 5000 });
+  await send("short after a change");
+  await p.waitForFunction((n) => document.querySelectorAll(".assistant").length > n, repliesBefore, { timeout: 15000 });
+  await idle();
+  ok((await bodies())[0].messages.some((m) => m.role === "assistant" && m.content === "A changed reply."), "and goes out once applied");
+
+  // Changing one in a fork, surviving a reload, before anything's recorded.
+  await reset();
+  await p.locator(".user-actions button", { hasText: "Edit" }).last().click();
+  await p.waitForSelector(".fork-banner");
+  await p.locator(".assistant .fork-row button", { hasText: "Edit" }).last().click();
+  await p.locator(".assistant .editor textarea").first().fill("Only in the fork.");
+  await p.reload();
+  await p.waitForSelector(".fork-banner");
+  ok((await p.locator(".assistant .editor textarea").first().inputValue()) === "Only in the fork.", "a reply's editor survives a reload");
+  await p.press("#input", "Enter");
+  await p.waitForSelector(".fork-mark", { timeout: 15000 });
+  await p.waitForFunction(() => !document.getElementById("send").disabled && document.querySelector(".assistant"), null, { timeout: 15000 });
+  await idle();
+  ok((await bodies())[0].messages.some((m) => m.content === "Only in the fork."), "and goes into the fork");
+
+  // A custom role, and a refusal learned from the response.
+  await fresh();
+  await reset();
+  await p.selectOption("#role", "custom");
+  await p.fill("#custom-role", "developer");
+  await p.fill("#input", "short from a developer");
+  await p.click("#send");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  ok((await bodies())[0].messages.at(-1).role === "developer", "a custom role goes out as written");
+  await fresh();
+  await p.locator("#more-fields summary").click();
+  await p.fill("#message-name", "andy");
+  await p.fill("#input", "refuse this");
+  await p.press("#input", "Enter");
+  await p.waitForFunction(() => document.getElementById("refused-row").textContent.includes("message names"), null, { timeout: 15000 });
+  await p.locator("#more-fields summary").click();
+  ok(await p.locator("#name-row").isHidden(), "a field the model refused isn't offered");
+  await p.screenshot({ path: "shots/refused.png" });
+  await p.locator("#refused-row button", { hasText: "Try again" }).click();
+  await p.waitForFunction(() => !document.getElementById("refused-row").textContent.includes("message names"), null, { timeout: 5000 });
+  ok(await p.locator("#name-row").isVisible(), "and it can be asked again");
 
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
 

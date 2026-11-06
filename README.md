@@ -175,7 +175,7 @@ before asking for a reply. A held message can't be edited or removed yet.
 
 ## Budgets and stopping
 
-A budget says how much the model can spend without you getting involved. Brass buttons call the
+A budget says how much the model can spend without you getting involved. Violet buttons call the
 model, and each time you press one, `budget_usd` starts again from there. That first call
 always goes, and the line under the message box says what it looks likely to cost as you type.
 Click the amount on that line to change it for this conversation. Amounts are in cents unless you
@@ -202,10 +202,34 @@ While something is running:
 ## Notes
 
 `note` writes to a panel on the conversation's page, labelled as coming from the model. It
-doesn't need approval, and nothing reads it back. A reply with only notes carries on by itself
-unless you've paused the conversation, so only text ends the turn. A reply with notes and text
-ends it, and the results go out with your next message. These are offered even with no working
-directory. `keep_going` is retired: older conversations still have it, and it still works there.
+doesn't need approval, and nothing reads it back. A reply with notes carries on by itself unless
+you've paused the conversation, so only a reply with no tool calls ends the turn. Notes are
+offered even with no working directory.
+
+A conversation keeps sending the tool definitions it started with, so a model can call a tool
+tack no longer has. That call gets a failed result by itself, saying the tool is no longer
+available, so a tool can be removed without leaving anything behind.
+
+## Messages of any role
+
+The selector beside the message box says who a message is from: user, system, assistant, tool,
+or a role of your own. **Send** adds it and calls the model, and **Hold** adds it for the next
+call. Every field the API has for a message gets its own box under **More fields**, and nothing is
+worked out from the text.
+
+What the API could never accept is refused before it's sent. An assistant message needs text or a
+tool call, and arguments have to be a JSON object. Tool calls you write are never run: they're
+history for the model, and only a tool message can come next, until each is answered.
+
+**Edit** on a reply from the model, on a message you wrote, or on what a tool gave the model holds
+a change, which **Apply** makes part of the context for later calls. The record keeps the original.
+The tool calls of a reply from the model can't be changed.
+
+tack learns what a model and host accept from how its calls end. Each request records what's
+unusual about it. If it works, those are fine. If the host refuses it with a 400 or 422 and only
+one of them is unproven, that one gets the blame, and tack stops offering it for that model and
+host, with a way to try again in case it blamed the wrong thing. It also knows ahead of time that
+Anthropic won't accept reasoning someone else wrote.
 
 ## Forking
 

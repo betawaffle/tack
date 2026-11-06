@@ -1421,15 +1421,6 @@ func (f *toolFake) noteTools() {
 	f.tools = append(f.tools, NoteTools()...)
 }
 
-// olderNoteTools offers keep_going to new conversations, as it used to be, because
-// older conversations still send its definition.
-func (f *toolFake) olderNoteTools() {
-	f.noteTools()
-	for i := range f.tools {
-		f.tools[i].Retired = false
-	}
-}
-
 // noteWithText replies with a note and some text, which ends the turn.
 func noteWithText() string {
 	return strings.Replace(toolStream(noteCall), `data: {"id":"gen-1","choices":[{"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
@@ -1498,24 +1489,24 @@ func TestNotesDontNeedApprovalAndCarryOn(t *testing.T) {
 	}
 }
 
-func TestNotesWithTextEndTheTurn(t *testing.T) {
+func TestNotesWithTextCarryOnToo(t *testing.T) {
 	f := newToolFake(t)
 	f.noteTools()
 	c := f.open()
 	id, _ := c.NewConversation("Be brief.")
-	f.handler = func(w http.ResponseWriter) { io.WriteString(w, noteWithText()) }
+	replies := 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies == 1 {
+			io.WriteString(w, noteWithText())
+			return
+		}
+		io.WriteString(w, replyStream)
+	}
 	updates, err := c.Send(id, "Use your tools.")
 	mustFinish(t, updates, err)
-	if n := len(f.bodies); n != 1 {
+	if n := len(f.bodies); n != 2 {
 		t.Fatalf("%d calls", n)
-	}
-	// The result goes out with the next message.
-	f.replyWith(replyStream)
-	updates, err = c.Send(id, "Thanks.")
-	mustFinish(t, updates, err)
-	m := f.messagesIn(1)
-	if len(m) < 2 || m[len(m)-2].Role != "tool" || m[len(m)-1].Content != "Thanks." {
-		t.Errorf("messages = %+v", m)
 	}
 }
 
@@ -1546,25 +1537,6 @@ func TestPauseStopsNotesFromCarryingOn(t *testing.T) {
 	}
 	if conv, _ := c.Conversation(id); !conv.Paused || !conv.CanReply {
 		t.Errorf("view = %+v", conv)
-	}
-}
-
-func TestKeepGoingIsRetired(t *testing.T) {
-	f := newToolFake(t)
-	f.noteTools()
-	c := f.open()
-	for _, tool := range c.ToolInfo() {
-		if tool.Name == "keep_going" {
-			t.Error("offered in the start panel")
-		}
-	}
-	id, _ := c.NewConversation("Be brief.")
-	data, err := c.Definitions(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "keep_going") {
-		t.Errorf("offered to a new conversation: %s", data)
 	}
 }
 
@@ -1643,36 +1615,12 @@ func TestMoneyAddsUpExactly(t *testing.T) {
 	}
 }
 
-func TestKeepGoingContinuesAfterNotes(t *testing.T) {
-	f := newToolFake(t)
-	f.olderNoteTools()
-	c := f.open()
-	id, _ := c.NewConversation("Be brief.")
-	replies := 0
-	f.handler = func(w http.ResponseWriter) {
-		replies++
-		if replies == 1 {
-			io.WriteString(w, toolStream(noteCall, goCall))
-			return
-		}
-		io.WriteString(w, replyStream)
-	}
-	updates, err := c.Send(id, "Use your tools.")
-	mustFinish(t, updates, err)
-	if n := len(f.bodies); n != 2 {
-		t.Fatalf("%d calls", n)
-	}
-	if conv, _ := c.Conversation(id); conv.Items[len(conv.Items)-1].Text != "Hello there" {
-		t.Errorf("view = %+v", conv.Items)
-	}
-}
-
 func TestToolDefinitionsCanBeEditedAndLeftOut(t *testing.T) {
 	f := newToolFake(t)
-	f.olderNoteTools()
+	f.noteTools()
 	c := f.open()
-	edited := jsontext.Value(`{"type":"function","function":{"name":"keep_going","description":"Changed.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}`)
-	id, err := c.NewConversationWith(Options{Tools: true, Definitions: map[string]jsontext.Value{"keep_going": edited}, LeaveOut: []string{"note"}})
+	edited := jsontext.Value(`{"type":"function","function":{"name":"echo","description":"Changed.","parameters":{"type":"object","properties":{"text":{"type":"string"}}}}}`)
+	id, err := c.NewConversationWith(Options{Tools: true, Definitions: map[string]jsontext.Value{"echo": edited}, LeaveOut: []string{"note"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1697,8 +1645,8 @@ func TestToolDefinitionsCanBeEditedAndLeftOut(t *testing.T) {
 	}
 
 	for name, opts := range map[string]Options{
-		"schema": {Tools: true, Definitions: map[string]jsontext.Value{"keep_going": jsontext.Value(`{"type":"function","function":{"name":"keep_going","parameters":{"type":"object","properties":{"x":{"type":"string"}},"additionalProperties":false}}}`)}},
-		"rename": {Tools: true, Definitions: map[string]jsontext.Value{"keep_going": jsontext.Value(`{"type":"function","function":{"name":"other","parameters":{"type":"object","properties":{},"additionalProperties":false}}}`)}},
+		"schema": {Tools: true, Definitions: map[string]jsontext.Value{"echo": jsontext.Value(`{"type":"function","function":{"name":"echo","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}`)}},
+		"rename": {Tools: true, Definitions: map[string]jsontext.Value{"echo": jsontext.Value(`{"type":"function","function":{"name":"other","parameters":{"type":"object","properties":{"text":{"type":"string"}}}}}`)}},
 		"tool":   {Tools: true, Definitions: map[string]jsontext.Value{"nope": edited}},
 		"out":    {Tools: true, LeaveOut: []string{"nope"}},
 	} {
@@ -1720,7 +1668,7 @@ func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
 	f.handler = func(w http.ResponseWriter) {
 		replies++
 		if replies == 1 {
-			io.WriteString(w, noteWithText())
+			io.WriteString(w, toolStream(noteCall))
 			return
 		}
 		io.WriteString(w, replyStream)
@@ -1729,17 +1677,17 @@ func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
 	mustFinish(t, updates, err)
 	updates, err = c.Send(id, "Second")
 	mustFinish(t, updates, err)
-	second := f.bodies[1]
+	second := f.bodies[2]
 
-	// Keep the system message, the first message and the reply with the note.
-	fork, err := c.Fork(id, 3)
+	// Keep the system message, the first message, the note and the reply after it.
+	fork, err := c.Fork(id, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	updates, err = c.Send(fork, "Second")
 	mustFinish(t, updates, err)
-	if !bytes.Equal(f.bodies[2], second) {
-		t.Errorf("the same point should send the same bytes:\n got %s\nwant %s", f.bodies[2], second)
+	if !bytes.Equal(f.bodies[3], second) {
+		t.Errorf("the same point should send the same bytes:\n got %s\nwant %s", f.bodies[3], second)
 	}
 
 	// An edited first message: nothing after the system message comes along.
@@ -1749,12 +1697,12 @@ func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
 	}
 	updates, err = c.Send(early, "Different")
 	mustFinish(t, updates, err)
-	body := string(f.bodies[3])
+	body := string(f.bodies[4])
 	if !strings.Contains(body, "Be brief.") || !strings.Contains(body, "Different") || strings.Contains(body, "First") {
 		t.Errorf("request = %s", body)
 	}
 
-	whole, err := c.Fork(id, 5)
+	whole, err := c.Fork(id, 6)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1773,14 +1721,14 @@ func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n := len(original.Items); n != 5 {
+		if n := len(original.Items); n != 6 {
 			t.Errorf("original has %d items", n)
 		}
-		if kept.ForkedFrom != id || kept.ForkItems != 3 || len(kept.Items) != 5 {
+		if kept.ForkedFrom != id || kept.ForkItems != 4 || len(kept.Items) != 6 {
 			t.Errorf("fork = %+v", kept)
 		}
-		if kept.Items[4].Index != 4 {
-			t.Errorf("index = %d", kept.Items[4].Index)
+		if kept.Items[5].Index != 5 {
+			t.Errorf("index = %d", kept.Items[5].Index)
 		}
 		if len(kept.Notes) != 1 || len(other.Notes) != 0 {
 			t.Errorf("notes = %+v and %+v", kept.Notes, other.Notes)
@@ -1821,17 +1769,6 @@ func TestForkRefusesWhatItCantKeep(t *testing.T) {
 	}
 	if _, err := c.Fork("nope", 0); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing: %v", err)
-	}
-}
-
-func TestKeepGoingWithRealToolsIsIgnored(t *testing.T) {
-	f := newToolFake(t)
-	f.olderNoteTools()
-	c := f.open()
-	id := f.askForTools(c, callA, goCall)
-	d := f.decision(c, id, store.DecideCalls)
-	if !reflect.DeepEqual(d.Calls, []string{"call-a"}) {
-		t.Errorf("only the real call should need approval: %v", d.Calls)
 	}
 }
 

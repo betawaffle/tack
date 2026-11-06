@@ -177,6 +177,15 @@ func show(w io.Writer, conv core.Conversation, limit int) {
 	}
 	for i, item := range conv.Items {
 		fmt.Fprintf(w, "\n--- %d. %s%s\n", i, item.Role, itemTags(item))
+		if item.Written {
+			fmt.Fprintln(w, "[written by the user]")
+		}
+		if item.Name != "" {
+			fmt.Fprintf(w, "[name] %s\n", item.Name)
+		}
+		if item.ToolCallID != "" {
+			fmt.Fprintf(w, "[answers] %s\n", item.ToolCallID)
+		}
 		if item.Reasoning != "" {
 			fmt.Fprintf(w, "[reasoning] %s\n[/reasoning]\n", shorten(item.Reasoning, limit))
 		}
@@ -185,6 +194,9 @@ func show(w io.Writer, conv core.Conversation, limit int) {
 		}
 		if item.Pending != nil {
 			fmt.Fprintf(w, "[unused edit] %s\n", shorten(item.Pending.Text, limit))
+		}
+		for _, call := range item.WrittenCalls {
+			fmt.Fprintf(w, "[written tool call %s, %s] %s\n", call.ID, call.Name, shorten(call.Arguments, limit))
 		}
 		for _, call := range item.ToolCalls {
 			fmt.Fprintf(w, "[tool %s, %s] %s\n", call.Name, call.State, shorten(call.Arguments, limit))

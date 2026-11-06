@@ -41,13 +41,6 @@ type Tool struct {
 	// outside the conversation's own record.
 	NoApproval bool
 
-	// HoldsResults means that if a reply's only calls are to tools like this, the turn
-	// ends, and the results go out with the next message.
-	HoldsResults bool
-	// Retired means new conversations aren't offered it. Older ones still send its
-	// definition, byte for byte, so it has to keep working for them.
-	Retired bool
-
 	// TackWritten says a successful output is tack's own message, not anything read
 	// from the system, so there's nothing for a person to vet before the model sees it.
 	TackWritten bool
@@ -122,9 +115,7 @@ func (c *Core) ToolInfo() []ToolInfo {
 	out := make([]ToolInfo, 0, len(c.cfg.Tools))
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		if !tool.Retired {
-			out = append(out, ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval, Definition: tool.define(settings)})
-		}
+		out = append(out, ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval, Definition: tool.define(settings)})
 	}
 	return out
 }
@@ -185,6 +176,8 @@ type toolCall struct {
 	failure  string
 	result   []store.Part // what the model sees; set once it's final
 	released bool         // the result is the tool's output, not a denial
+	edited   bool         // someone changed what the model sees
+	pending  *edit        // a change to that, held until it's applied or discarded
 }
 
 func (t *toolCall) resolved() bool { return t.result != nil }
@@ -309,7 +302,7 @@ func (c *Core) storeDefinitions(settings store.Settings, opts Options) (store.Re
 	var definitions []jsontext.Value
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		if tool.Retired || (tool.NeedsWorkdir && opts.Workdir == "") || slices.Contains(opts.LeaveOut, tool.Name) {
+		if (tool.NeedsWorkdir && opts.Workdir == "") || slices.Contains(opts.LeaveOut, tool.Name) {
 			continue
 		}
 		definition := tool.define(settings)
@@ -469,7 +462,8 @@ func definedNames(definitions []byte) ([]string, error) {
 
 // storeCalls records calls, judging each one once. A call has to name a tool this
 // conversation was actually offered. A call that can't run still goes to a person:
-// no automatic reply means no loop a model can spend money on.
+// no automatic reply means no loop a model can spend money on. The exception is a tool
+// it was offered that tack no longer has, which failRemovedTools answers.
 func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Settings, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
 	offered, err := definedNames(definitions)
 	if err != nil {
@@ -483,8 +477,10 @@ func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Set
 		}
 		stored := store.ToolCall{ID: call.ID, Name: call.Name, Arguments: arguments}
 		tool := c.findTool(call.Name)
-		if !slices.Contains(offered, call.Name) || tool == nil {
+		if !slices.Contains(offered, call.Name) {
 			stored.Invalid = fmt.Sprintf("there is no tool named %q", call.Name)
+		} else if tool == nil {
+			// failRemovedTools answers it.
 		} else if args, err := parseArguments([]byte(call.Arguments)); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
 		} else if flags, err := inspect(tool, Call{Args: args, Workdir: workdir, Settings: settings}); err != nil {
@@ -501,6 +497,9 @@ func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Set
 // reports whether one is open, in which case nothing else can happen until a
 // person answers. The caller must not be running any tools.
 func (c *Core) ensureDecision(conv *conversation) (bool, error) {
+	if err := c.failRemovedTools(conv); err != nil {
+		return false, err
+	}
 	if err := c.releaseOwnMessages(conv); err != nil {
 		return false, err
 	}
@@ -535,6 +534,37 @@ func (c *Core) ensureDecision(conv *conversation) (bool, error) {
 	}
 	err := c.record(&store.Event{Type: store.DecisionRequested, Conversation: conv.id, Decision: store.NewID(), Kind: kind, DecisionCalls: calls})
 	return err == nil, err
+}
+
+// ToolUnavailable is what the model is told about a tool it was offered that tack no
+// longer has. A conversation keeps sending the definitions it started with, so that its
+// cache holds, which means a model can always call one.
+const ToolUnavailable = "This tool is no longer available, so this call did not run."
+
+// failRemovedTools answers calls to tools tack no longer has, which lets a tool be removed
+// without leaving anything behind. If a decision was waiting on one, it opens again for
+// whatever's left.
+func (c *Core) failRemovedTools(conv *conversation) error {
+	c.mu.Lock()
+	var calls []string
+	for _, call := range conv.openCalls() {
+		if c.findTool(call.Name) == nil && call.Invalid == "" {
+			calls = append(calls, call.ID)
+		}
+	}
+	c.mu.Unlock()
+	if len(calls) == 0 {
+		return nil
+	}
+	parts, err := c.parts(ToolUnavailable)
+	if err != nil {
+		return err
+	}
+	var choices []store.Choice
+	for _, id := range calls {
+		choices = append(choices, store.Choice{ToolCall: id, Parts: parts})
+	}
+	return c.record(&store.Event{Type: store.DecisionMade, Conversation: conv.id, Choices: choices, By: "tack"})
 }
 
 // releaseOwnMessages lets the model see a tool's success message when tack wrote it,
@@ -610,29 +640,15 @@ func (c *Core) advance(conv *conversation, send func(Update)) error {
 	}
 }
 
-// turnEnded reports whether the reply that just arrived finishes the turn: it made no
-// calls, or only ones whose results can wait for the next message. The caller holds mu.
+// turnEnded reports whether the reply that just arrived finishes the turn, which is when
+// it made no calls. The caller holds mu.
 func (c *Core) turnEnded(conv *conversation) bool {
 	for _, it := range slices.Backward(conv.items) {
-		if it.role != "" {
-			continue
+		if it.role == "" {
+			return len(it.calls) == 0
 		}
-		for _, call := range it.calls {
-			if tool := c.findTool(call.Name); tool == nil || !tool.HoldsResults {
-				return false
-			}
-		}
-		// Ending the turn takes something for the person to read.
-		return len(it.calls) == 0 || c.hasText(it)
 	}
 	return true
-}
-
-func (c *Core) hasText(it *item) bool {
-	if it.finished == nil || it.finished.Text == "" {
-		return false
-	}
-	return strings.TrimSpace(c.text([]store.Part{{Block: it.finished.Text}})) != ""
 }
 
 // approveAutomatic allows the calls that don't need a person.
@@ -1001,16 +1017,20 @@ func (c *Core) releasedOutput(call *toolCall) ([]store.Part, error) {
 
 func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 	view := ToolCallView{
-		ID:        call.ID,
-		Name:      call.Name,
-		Arguments: c.text([]store.Part{{Block: call.Arguments}}),
-		Invalid:   call.Invalid,
-		Flags:     call.Flags,
-		Error:     call.failure,
-		Compact:   c.isCompact(call.Name),
+		ID:           call.ID,
+		Name:         call.Name,
+		Arguments:    c.text([]store.Part{{Block: call.Arguments}}),
+		Invalid:      call.Invalid,
+		Flags:        call.Flags,
+		Error:        call.failure,
+		Compact:      c.isCompact(call.Name),
+		ResultEdited: call.edited,
 		// Only the newest call with an ID can be the one a decision means.
 		Decidable: conv.decision != nil && slices.Contains(conv.decision.calls, call.ID) &&
 			conv.tool(call.ID) == call && !call.resolved() && call.Invalid == "",
+	}
+	if call.pending != nil {
+		view.Pending = &PendingEdit{ID: call.pending.id, Text: c.text(call.pending.parts)}
 	}
 	if call.finished {
 		view.HasOutput = true
@@ -1027,6 +1047,8 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 	switch {
 	case call.released:
 		view.State = "sent"
+	case view.Result == ToolUnavailable:
+		view.State = "unavailable"
 	case call.resolved():
 		view.State = "denied"
 	case interrupted:

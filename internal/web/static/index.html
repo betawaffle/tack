@@ -59,11 +59,31 @@
   <div id="controls"></div>
   <form id="form">
     <div class="composer">
+      <div class="message-field" id="message-fields">
+        <label class="field-row" id="custom-role-row" hidden>Role <input id="custom-role" type="text" autocomplete="off" placeholder="developer" aria-label="Role name"></label>
+        <label class="field-row" id="tool-call-row" hidden>Answers <select id="tool-call-id" aria-label="Tool call this answers"></select></label>
+        <details id="more-fields">
+          <summary>More fields</summary>
+          <label class="field-row" id="name-row">Name <input id="message-name" type="text" autocomplete="off" aria-label="Message name"></label>
+          <div id="reasoning-row" hidden><label class="field-label" for="message-reasoning">Reasoning</label><textarea id="message-reasoning" rows="2"></textarea></div>
+          <div id="calls-row" hidden>
+            <div id="message-calls"></div>
+            <button class="mini" id="add-call" type="button">Add tool call</button>
+          </div>
+          <div class="refused" id="refused-row"></div>
+        </details>
+      </div>
       <textarea id="input" rows="1" placeholder="Message" aria-label="Message"></textarea>
       <div class="composer-row">
+        <select id="role" aria-label="Who this message is from">
+          <option value="user">User</option>
+          <option value="system">System</option>
+          <option value="assistant">Assistant</option>
+          <option value="tool">Tool</option>
+          <option value="custom">Custom</option>
+        </select>
         <span class="hint-keys">Enter to send · Shift+Enter for a new line</span>
-        <button class="quiet" id="hold" type="button" title="Adds this as your message, but doesn't call the model. It goes with the next call">Hold</button>
-        <button class="quiet" id="add-system" type="button" title="Waits for the next call, unless you ask the model to respond now">Add as system</button>
+        <button class="quiet" id="hold" type="button" title="Adds this message, but doesn't call the model. It goes with the next call">Hold</button>
         <button class="send spends" id="send" type="submit">Send</button>
       </div>
       <div id="spend"></div>

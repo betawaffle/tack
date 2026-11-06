@@ -48,7 +48,6 @@ const msgs = (b) => JSON.parse(b).messages;
     (await p.inputValue("#system-prompt")).startsWith("Be direct"),
     "default prompt prefilled",
   );
-  ok(await p.isDisabled("#add-system"), "add-system disabled before a conversation");
   await p.screenshot({ path: "shots/start-dark.png" });
 
   // Markdown
@@ -173,7 +172,8 @@ const msgs = (b) => JSON.parse(b).messages;
   const sys0 = await p.locator(".system").count();
   ok(sys0 === 1, "start prompt shown as a system message");
   await p.fill("#input", "Prefer haiku.");
-  await p.click("#add-system");
+  await p.selectOption("#role", "system");
+  await p.click("#hold");
   await p.waitForSelector(".tag.waiting");
   ok((await bodies()).length === 0, "adding a system message makes no call");
   ok((await p.inputValue("#input")) === "", "composer clears");
@@ -199,7 +199,8 @@ const msgs = (b) => JSON.parse(b).messages;
   // Out of turn
   await fetch(F + "/reset");
   await p.fill("#input", "Speak up please.");
-  await p.click("#add-system");
+  await p.selectOption("#role", "system");
+  await p.click("#hold");
   await p.waitForSelector(".reply-control");
   await p.locator(".reply-control button").click();
   await idle();
@@ -298,7 +299,8 @@ const msgs = (b) => JSON.parse(b).messages;
   ok((await bodies()).length === 0, "holding a message makes no call");
   ok((await p.inputValue("#input")) === "", "and clears the box");
   await p.fill("#input", "Answer in French.");
-  await p.click("#add-system");
+  await p.selectOption("#role", "system");
+  await p.click("#hold");
   await p.waitForSelector(".tag.waiting");
   ok((await p.locator(".reply-control button").textContent()).includes("respond now"), "a reply can then be asked for");
   await p.locator(".reply-control button").click();

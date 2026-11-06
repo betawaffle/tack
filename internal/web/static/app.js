@@ -28,6 +28,15 @@ function el(tag, className, text) {
   return node;
 }
 
+// What the current model won't accept, as far as is known.
+function refusedFeatures() {
+  return (draftFork?.conv ?? shown.conv)?.refused ?? [];
+}
+
+function isRefused(feature) {
+  return refusedFeatures().some((r) => r.feature === feature);
+}
+
 // A button shows that it's working on something, and can't be pressed twice. A button
 // that talks to tack has the class "net", and one that calls the model "spends". Those
 // are what get turned off when they couldn't work.
@@ -340,9 +349,35 @@ function renderReply(item, key, decision) {
   for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
   if (item.stats) r.node.append(ledger(item.stats, controls));
   if (item.chain_pico) r.node.append(chainNode(item));
+  if (item.name) r.node.append(el("div", "message-name", `name: ${item.name}`));
+  if (item.removed) r.node.append(el("div", "hint", "This reply is no longer sent."));
   const fork = el("div", "fork-row");
   fork.append(button("Fork from here", "mini net", () => beginFork(item.index + 1, "")));
+  if (item.edited) fork.append(" ", el("span", "tag", "Edited"));
+  if (item.staged) fork.append(" ", el("span", "tag waiting", "Changed for this fork"));
+  if (!isRefused("written_assistant") && item.call) {
+    const id = current;
+    const target = `call:${item.call}`;
+    editable(r.node, target, () => {
+      const was = item.pending ?? item;
+      const fields = { name: was.name };
+      if (!isRefused("written_reasoning")) fields.reasoning = was.reasoning;
+      const draft = Boolean(draftFork);
+      const form = editor(was.text, async (values) => {
+        if (draft) {
+          stageEdit(target, values, () => r.node.replaceWith(renderItem(stagedReply(item), item.index, decision)));
+          return;
+        }
+        await postConversation(id, "message-edits", { call: item.call, ...values });
+        await show(id);
+      }, () => form.remove(), draft, fields);
+      r.node.append(form);
+      return form;
+    });
+    fork.append(" ", button("Edit", draftFork ? "mini" : "mini net", () => r.node.openEditor().querySelector("textarea").focus()));
+  }
   r.node.append(fork);
+  if (item.pending) r.node.append(pendingBlock(item.pending, "Stop sending this reply.", CHANGE_HINT));
   return r.node;
 }
 
@@ -444,6 +479,7 @@ const STATE_LABELS = {
   finished: "Ran, output held",
   sent: "Output sent",
   denied: "Denied",
+  unavailable: "No longer available",
 };
 
 // Controls for what's running. They come and go with it.
@@ -612,7 +648,8 @@ function compactCall(call) {
   }
   const summary = el("summary");
   summary.append(exact(label, "tool-compact-label"));
-  node.append(summary, ...argumentRows(call));
+  if (call.result_edited || call.pending) node.open = true;
+  node.append(summary, ...argumentRows(call), resultControls(call));
   return node;
 }
 
@@ -644,9 +681,10 @@ function renderToolCall(call, decision) {
     if (call.error) output.append(el("div", "tool-invalid", `The tool reported an error: ${call.error}`));
     node.append(output);
   }
-  if (call.state === "denied") {
-    node.append(el("div", "hint", "The model was told:"), exact(call.result || ""));
+  if (call.state === "denied" || call.state === "unavailable") {
+    if (!call.result_edited) node.append(el("div", "hint", "The model was told:"), exact(call.result || ""));
   }
+  if (call.state === "sent" || call.state === "denied" || call.state === "unavailable") node.append(resultControls(call));
   if (decision && call.decidable) {
     const label = el("label", "tool-allow");
     const box = el("input");
@@ -723,19 +761,237 @@ function decisionCard(conv) {
 
 // System messages.
 
-function editor(initial, onSave, onCancel, draft) {
-  const box = el("div", "editor");
+// Rows for tool calls someone's writing, each with its own fields.
+function callRows(box, calls) {
+  const add = (call) => {
+    const row = el("div", "call-row");
+    const field = (label, name, value, kind) => {
+      const wrap = el("label", "field-row");
+      const input = el(kind ?? "input");
+      input.dataset.call = name;
+      input.value = value ?? "";
+      if (kind) input.rows = 2;
+      else {
+        input.type = "text";
+        input.autocomplete = "off";
+      }
+      input.setAttribute("aria-label", label);
+      wrap.append(label, input);
+      return wrap;
+    };
+    row.append(
+      field("ID", "id", call?.id ?? `call_${Math.random().toString(36).slice(2, 10)}`),
+      field("Tool", "name", call?.name),
+      field("Arguments", "arguments", call?.arguments ?? "{}", "textarea"),
+      button("Remove", "mini", () => row.remove()),
+    );
+    box.append(row);
+  };
+  for (const call of calls ?? []) add(call);
+  return add;
+}
+
+function readCalls(box) {
+  return [...box.querySelectorAll(".call-row")].map((row) => {
+    const value = (name) => row.querySelector(`[data-call="${name}"]`).value;
+    return { id: value("id").trim(), name: value("name").trim(), arguments: value("arguments") };
+  });
+}
+
+// An editor for a message, with a box for each field the API has for it. A field that
+// isn't given doesn't apply to this message, or this model won't accept it.
+function editor(initial, onSave, onCancel, draft, fields) {
+  const box = el("div", "editor message-field");
   const area = el("textarea");
-  area.rows = Math.min(12, initial.split("\n").length + 2);
-  area.value = initial;
+  area.rows = Math.min(12, (initial ?? "").split("\n").length + 2);
+  area.value = initial ?? "";
+  area.setAttribute("aria-label", "Text");
+  box.append(area);
+  const inputs = {};
+  if (fields && "reasoning" in fields) {
+    box.append(el("div", "field-label", "Reasoning"));
+    inputs.reasoning = el("textarea");
+    inputs.reasoning.rows = 2;
+    inputs.reasoning.value = fields.reasoning ?? "";
+    inputs.reasoning.setAttribute("aria-label", "Reasoning");
+    box.append(inputs.reasoning);
+  }
+  if (fields && "name" in fields) {
+    const row = el("label", "field-row");
+    inputs.name = el("input");
+    inputs.name.type = "text";
+    inputs.name.value = fields.name ?? "";
+    inputs.name.setAttribute("aria-label", "Name");
+    row.append("Name", inputs.name);
+    box.append(row);
+  }
+  let callBox = null;
+  let addCall = null;
+  if (fields && "tool_calls" in fields) {
+    callBox = el("div");
+    addCall = callRows(callBox, fields.tool_calls);
+    box.append(callBox, button("Add tool call", "mini", () => addCall()));
+  }
+  const read = () => ({
+    text: area.value,
+    ...(inputs.reasoning ? { reasoning: inputs.reasoning.value } : {}),
+    ...(inputs.name ? { name: inputs.name.value } : {}),
+    ...(callBox ? { tool_calls: readCalls(callBox) } : {}),
+  });
+  box.read = read;
+  box.fill = (values) => {
+    area.value = values.text ?? "";
+    if (inputs.reasoning) inputs.reasoning.value = values.reasoning ?? "";
+    if (inputs.name) inputs.name.value = values.name ?? "";
+    if (callBox) {
+      callBox.replaceChildren();
+      for (const call of values.tool_calls ?? []) addCall(call);
+    }
+  };
   const row = el("div", "row");
   row.append(
-    button(draft ? "Use in this fork" : "Hold edit", draft ? "mini primary" : "mini primary net", () => onSave(area.value)),
+    button(draft ? "Use in this fork" : "Hold edit", draft ? "mini primary" : "mini primary net", () => onSave(read())),
     button("Cancel", "mini", onCancel),
   );
-  box.append(area, el("div", "hint", draft
-    ? "This takes effect when the fork starts. Leave this empty to remove the message."
-    : "Held edits stay unused until you apply them. Leave this empty to propose removing the message."), row);
+  box.append(el("div", "hint", draft
+    ? "This takes effect when the fork starts. Leave it empty to remove the message."
+    : "Held edits stay unused until you apply them. Leave it empty to propose removing the message."), row);
+  return box;
+}
+
+// Sets a node up so an editor can open on it, whether by a click or when bringing back
+// what someone was doing before a reload. The target says what it edits.
+function editable(node, target, open) {
+  node.dataset.editTarget = target;
+  node.openEditor = () => node.querySelector(":scope > .editor") ?? open();
+}
+
+// A held change to a message, with what it would become.
+function pendingBlock(pending, removal, hint) {
+  const block = el("div", "pending");
+  const label = el("div", "system-head");
+  label.append(el("span", "tag unused", "Unused edit"));
+  block.append(label, el("div", "pending-body", pending.text || removal));
+  if (pending.reasoning) block.append(el("div", "written-detail", `Reasoning: ${pending.reasoning}`));
+  if (pending.name) block.append(el("div", "written-detail", `Name: ${pending.name}`));
+  for (const call of pending.tool_calls ?? []) block.append(el("div", "written-detail", `Tool call ${call.id}: ${call.name} ${call.arguments}`));
+  if (hint) block.append(el("div", "hint", hint));
+  const id = current;
+  const row = el("div", "row");
+  row.append(
+    button("Apply", "mini primary net", async () => {
+      await postConversation(id, `message-edits/${pending.id}/apply`);
+      await show(id);
+    }),
+    button("Discard", "mini net", async () => {
+      await postConversation(id, `message-edits/${pending.id}/discard`);
+      await show(id);
+    }),
+  );
+  block.append(row);
+  return block;
+}
+
+const CHANGE_HINT = "The model has already seen this. Applying changes it from here on, so the next call misses the cache from this point.";
+
+// Changes wait in a fork being set up, and go in once it starts.
+function stageEdit(target, values, redraw) {
+  draftFork.edits.set(target, values);
+  redraw();
+}
+
+// A message someone wrote as an assistant, a tool, or a role of their own.
+function renderWritten(item) {
+  const id = current;
+  const node = el("div", `written${item.queued ? " is-waiting" : ""}`);
+  const head = el("div", "written-role");
+  head.append(el("strong", "", item.role), el("span", "tag", "Written by you"));
+  if (item.queued) head.append(el("span", "tag waiting", "Goes with the next call"));
+  if (item.edited) head.append(el("span", "tag", "Edited"));
+  if (item.staged) head.append(el("span", "tag waiting", "Changed for this fork"));
+  if (item.removed) head.append(el("span", "tag", "Removed"));
+  if (item.name) head.append(el("span", "message-name", `name: ${item.name}`));
+  if (item.tool_call_id) head.append(el("span", "message-name", `answers ${item.tool_call_id}`));
+  head.append(el("span", "spacer"));
+  node.append(head);
+  if (item.reasoning) node.append(el("div", "written-detail", `Reasoning: ${item.reasoning}`));
+  if (item.text || item.removed) {
+    const body = el("div", "written-body", item.removed ? "This message is no longer sent." : item.text);
+    if (item.removed) body.classList.add("is-removed");
+    node.append(body);
+  }
+  for (const call of item.written_calls ?? []) node.append(el("div", "written-detail", `Tool call ${call.id}: ${call.name} ${call.arguments}`));
+  const target = `message:${item.message}`;
+  editable(node, target, () => {
+    const current_ = item.pending ?? item;
+    const fields = { name: current_.name };
+    if (item.role === "assistant") {
+      fields.tool_calls = current_.tool_calls ?? current_.written_calls;
+      if (!isRefused("written_reasoning")) fields.reasoning = current_.reasoning;
+    }
+    const draft = Boolean(draftFork);
+    const form = editor(item.removed ? "" : current_.text, async (values) => {
+      if (draft) {
+        stageEdit(target, values, () => node.replaceWith(renderWritten(stagedWritten(item))));
+        return;
+      }
+      await postConversation(id, "message-edits", { message: item.message, ...values });
+      await show(id);
+    }, () => form.remove(), draft, fields);
+    node.append(form);
+    return form;
+  });
+  head.append(button("Edit", draftFork ? "mini" : "mini net", () => node.openEditor().querySelector("textarea").focus()));
+  if (item.pending) node.append(pendingBlock(item.pending, "Remove this message.", item.queued ? null : CHANGE_HINT));
+  return node;
+}
+
+function stagedWritten(item) {
+  const staged = { ...item, pending: null, queued: false };
+  const values = draftFork.edits.get(`message:${item.message}`);
+  if (!values) return staged;
+  return {
+    ...staged, text: values.text, name: values.name, reasoning: values.reasoning ?? item.reasoning, written_calls: values.tool_calls ?? item.written_calls,
+    removed: !values.text.trim() && !(values.tool_calls ?? item.written_calls ?? []).length, staged: true,
+  };
+}
+
+function stagedReply(item) {
+  const staged = { ...item, pending: null };
+  staged.tool_calls = item.tool_calls?.map((call) => {
+    const values = draftFork.edits.get(`tool:${call.id}`);
+    const copy = { ...call, pending: null };
+    return values ? { ...copy, result: values.text, result_edited: true, staged: true } : copy;
+  });
+  const values = draftFork.edits.get(`call:${item.call}`);
+  if (!values) return staged;
+  return { ...staged, text: values.text, reasoning: values.reasoning ?? item.reasoning, name: values.name, staged: true };
+}
+
+// What the model was given by a tool call, for changing it.
+function resultControls(call) {
+  const id = current;
+  const box = el("div", "tool-result");
+  if (call.result_edited) {
+    box.append(el("div", "hint", call.staged ? "Changed for this fork. The model will be told:" : "Changed. The model is told:"), exact(call.result ?? ""));
+  }
+  if (isRefused("written_tool")) return box;
+  const target = `tool:${call.id}`;
+  editable(box, target, () => {
+    const draft = Boolean(draftFork);
+    const form = editor(call.pending?.text ?? call.result, async (values) => {
+      if (draft) {
+        stageEdit(target, values, () => box.replaceWith(resultControls({ ...call, result: values.text, result_edited: true, staged: true })));
+        return;
+      }
+      await postConversation(id, "message-edits", { tool_call: call.id, text: values.text });
+      await show(id);
+    }, () => form.remove(), draft);
+    box.append(form);
+    return form;
+  });
+  box.append(button("Edit what the model saw", draftFork ? "mini" : "mini net", () => box.openEditor().querySelector("textarea").focus()));
+  if (call.pending) box.append(pendingBlock(call.pending, "", CHANGE_HINT));
   return box;
 }
 
@@ -773,14 +1029,12 @@ function renderSystem(item) {
     if (folded) body.addEventListener("click", () => toggle.click());
   }
 
-  node.openEditor = () => {
-    const open = node.querySelector(".editor");
-    if (open) return open;
+  const target = `system:${item.message}`;
+  editable(node, target, () => {
     const draft = Boolean(draftFork);
-    const form = editor(item.pending ? item.pending.text : (item.removed ? "" : item.text), async (text) => {
+    const form = editor(item.pending ? item.pending.text : (item.removed ? "" : item.text), async ({ text }) => {
       if (draft) {
-        draftFork.edits.set(item.message, text);
-        node.replaceWith(renderSystem(stagedItem(item)));
+        stageEdit(target, { text }, () => node.replaceWith(renderSystem(stagedItem(item))));
         return;
       }
       await postConversation(id, `system/${item.message}/edits`, { text });
@@ -788,7 +1042,7 @@ function renderSystem(item) {
     }, () => form.remove(), draft);
     node.append(form);
     return form;
-  };
+  });
   head.append(button("Edit", draftFork ? "mini" : "mini net", () => node.openEditor().querySelector("textarea").focus()));
 
   if (item.pending) {
@@ -817,6 +1071,7 @@ function renderSystem(item) {
 }
 
 function renderItem(item, index, decision) {
+  if (item.written) return renderWritten(item);
   if (item.role === "system") return renderSystem(item);
   if (item.role === "assistant") return renderReply(item, `reply-${index}`, decision);
   if (item.role === "user" && item.queued) {
@@ -857,7 +1112,14 @@ async function beginFork(items, text, edits) {
     button("Cancel", "mini net", () => open(from)),
   );
   const kept = conv.items.filter((item) => item.index < items);
-  $("list").replaceChildren(banner, forkSettingsPanel(conv), ...kept.map((item) => renderItem(item.role === "system" ? stagedItem(item) : item, item.index, null)));
+  const prepared = (item) => {
+    if (item.written) return stagedWritten(item);
+    if (item.role === "system") return stagedItem(item);
+    if (item.role === "assistant") return stagedReply(item);
+    return item;
+  };
+  $("list").replaceChildren(banner, forkSettingsPanel(conv), ...kept.map((item) => renderItem(prepared(item), item.index, null)));
+  refreshMessageFields();
   setInput(text);
   scrollDown();
   $("input").focus();
@@ -866,9 +1128,9 @@ async function beginFork(items, text, edits) {
 // A system message as the fork would have it.
 function stagedItem(item) {
   const staged = { ...item, pending: null, queued: false };
-  if (!draftFork.edits.has(item.message)) return staged;
-  const text = draftFork.edits.get(item.message);
-  return { ...staged, text, removed: !text, staged: true };
+  const values = draftFork.edits.get(`system:${item.message}`);
+  if (!values) return staged;
+  return { ...staged, text: values.text, removed: !values.text, staged: true };
 }
 
 function forkSettingsPanel(conv) {
@@ -1027,7 +1289,6 @@ async function refreshList() {
 }
 
 let sendBusy = false;
-let canAddSystem = false;
 
 function setBusy(busy) {
   sendBusy = busy;
@@ -1191,6 +1452,7 @@ async function show(id, polling, force) {
     }
   }
   showMeta(conv);
+  refreshMessageFields();
   if (!live) setControls(id, conv.busy ? conv.running : null);
   // If tack can't be reached, catching up restarts this.
   if (conv.busy) pollTimer = setTimeout(() => show(id, true).catch(ignoreUnreachable), 2000);
@@ -1201,7 +1463,6 @@ async function show(id, polling, force) {
 
 function setOpenMode(isOpen) {
   $("start").hidden = isOpen;
-  canAddSystem = isOpen;
   refreshComposer();
 }
 
@@ -1248,6 +1509,8 @@ async function startNew() {
   setupStart(defaults);
   spendInfo = { allowance: Math.round((defaults.settings?.budget_usd ?? 0) * 1e12) };
   refreshSpend();
+  shown = { id: null, revision: 0, busy: false, conv: null };
+  refreshMessageFields();
   await refreshList();
 }
 
@@ -1576,7 +1839,7 @@ function settleUncertain() {
 // call runs one model call and redraws afterwards. A user message is optional:
 // without one, the model responds to the conversation as it stands. It reports
 // whether the server took the request. A decision moves things along the same way.
-async function call(id, userText, decision) {
+async function call(id, message, decision) {
   if (streaming === id) return false;
   const expected = expectHeaders(id);
   const staged = captureConversation();
@@ -1590,8 +1853,8 @@ async function call(id, userText, decision) {
   let shownUser = null;
   try {
     for (const node of $("list").querySelectorAll(":scope > .reply-control, :scope > .waiting-note, :scope > .decision-card, :scope > .budget-card")) node.remove();
-    if (userText !== undefined) {
-      shownUser = el("div", "user", userText);
+    if (message !== undefined) {
+      shownUser = el("div", message.role === "user" ? "user" : "written", message.text);
       $("list").append(shownUser);
     }
     setControls(id, {});
@@ -1601,8 +1864,8 @@ async function call(id, userText, decision) {
     let res;
     if (decision) {
       res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, denial_text: decision.denial_text }, expected);
-    } else if (userText !== undefined) {
-      res = await postJSON(`/api/conversations/${id}/messages`, { text: userText }, expected);
+    } else if (message !== undefined) {
+      res = await postJSON(`/api/conversations/${id}/messages`, message, expected);
     } else {
       res = await postJSON(`/api/conversations/${id}/reply`, undefined, expected);
     }
@@ -1664,10 +1927,10 @@ async function ensureConversation() {
 // startFork records the fork, then the changes made to it, before any model call.
 async function startFork() {
   const { from, items, conv, edits } = draftFork;
-  // Text left in an open editor was meant to count.
-  for (const node of $("list").querySelectorAll(".system")) {
-    const area = node.querySelector(".editor textarea");
-    if (area) edits.set(node.dataset.message, area.value);
+  // What's left in an open editor was meant to count.
+  for (const node of $("list").querySelectorAll("[data-edit-target]")) {
+    const form = node.querySelector(":scope > .editor");
+    if (form) edits.set(node.dataset.editTarget, form.read());
   }
   const text = $("settings-text").value;
   let settings = null;
@@ -1684,9 +1947,16 @@ async function startFork() {
   current = id;
   location.hash = id;
   setOpenMode(true);
-  for (const [message, messageText] of edits) {
-    const edit = await postJSON(`/api/conversations/${id}/system/${message}/edits`, { text: messageText });
-    await postJSON(`/api/conversations/${id}/edits/${(await edit.json()).edit}/apply`);
+  for (const [target, values] of edits) {
+    const [kind, name] = target.split(/:(.*)/s);
+    if (kind === "system") {
+      const edit = await postJSON(`/api/conversations/${id}/system/${name}/edits`, { text: values.text });
+      await postJSON(`/api/conversations/${id}/edits/${(await edit.json()).edit}/apply`);
+      continue;
+    }
+    const key = { message: "message", call: "call", tool: "tool_call" }[kind];
+    const edit = await postJSON(`/api/conversations/${id}/message-edits`, { [key]: name, ...values });
+    await postJSON(`/api/conversations/${id}/message-edits/${(await edit.json()).edit}/apply`);
   }
   if (settings) {
     const proposal = await postJSON(`/api/conversations/${id}/settings`, settings);
@@ -1695,21 +1965,177 @@ async function startFork() {
   await show(id);
 }
 
+// The composer's role and the fields that go with it. Each is a field of the API's message,
+// and nothing is ever worked out from the text.
+function roleLabel(feature) {
+  if (feature.startsWith("role:")) return `the role ${feature.slice(5)}`;
+  return {
+    name: "message names",
+    written_assistant: "assistant messages you wrote or changed",
+    written_reasoning: "reasoning you wrote",
+    written_tool: "tool results you wrote or changed",
+    ends_with_assistant: "ending on an assistant message",
+  }[feature] ?? feature;
+}
+
+function refreshMessageFields() {
+  const role = $("role");
+  const conv = draftFork?.conv ?? shown.conv;
+  const live = current || draftFork;
+  const waiting = live && !draftFork ? shown.conv?.waiting_tool_calls ?? [] : [];
+  // What isn't possible isn't offered. A tool message needs a written call to answer,
+  // and once one's waiting, nothing else can come next.
+  for (const option of role.options) {
+    let off = false;
+    if (option.value === "tool") off = waiting.length === 0;
+    else if (waiting.length > 0) off = true;
+    if (option.value === "assistant" && isRefused("written_assistant")) off = true;
+    option.hidden = off;
+    option.disabled = off;
+  }
+  if (role.selectedOptions[0]?.disabled) role.value = waiting.length ? "tool" : "user";
+  const kind = role.value;
+  $("custom-role-row").hidden = kind !== "custom";
+  $("tool-call-row").hidden = kind !== "tool";
+  const select = $("tool-call-id");
+  const chosen = select.value;
+  select.replaceChildren(...waiting.map((id) => {
+    const option = el("option", "", id);
+    option.value = id;
+    return option;
+  }));
+  if (waiting.includes(chosen)) select.value = chosen;
+  $("name-row").hidden = isRefused("name");
+  $("reasoning-row").hidden = kind !== "assistant" || isRefused("written_reasoning");
+  $("calls-row").hidden = kind !== "assistant";
+  // Learning this from a response can blame the wrong thing, so it can be asked again.
+  const refused = $("refused-row");
+  refused.replaceChildren();
+  if (conv) {
+    for (const item of conv.refused ?? []) {
+      const row = el("div");
+      row.append(`${conv.model.replace(/^.*\//, "")} doesn't accept ${roleLabel(item.feature)}. `);
+      if (item.why) row.title = item.why;
+      if (item.learned && current) {
+        row.append(button("Try again", "mini net", async () => {
+          await postConversation(current, "refusals/forget", { feature: item.feature });
+          await show(current, true, true);
+        }));
+      }
+      refused.append(row);
+    }
+  }
+  $("more-fields").hidden = $("name-row").hidden && $("reasoning-row").hidden && $("calls-row").hidden && !refused.childElementCount;
+}
+
+const addComposerCall = callRows($("message-calls"));
+$("add-call").addEventListener("click", () => addComposerCall());
+$("role").addEventListener("change", refreshMessageFields);
+
+// The message as it stands, refusing what could never be sent before it goes anywhere.
+function readMessage() {
+  let role = $("role").value;
+  const message = { role, text: $("input").value };
+  if (role === "custom") {
+    role = $("custom-role").value.trim();
+    if (!role) throw new Error("A custom message needs a role name.");
+    if (["user", "system", "assistant", "tool"].includes(role)) throw new Error(`Choose ${role} from the list instead.`);
+    message.role = role;
+  }
+  const name = $("message-name").value.trim();
+  if (name && !isRefused("name")) message.name = name;
+  if (role === "assistant") {
+    if ($("message-reasoning").value && !isRefused("written_reasoning")) message.reasoning = $("message-reasoning").value;
+    message.tool_calls = readCalls($("message-calls"));
+    const seen = new Set();
+    for (const call of message.tool_calls) {
+      if (!call.id) throw new Error("A tool call needs an ID.");
+      if (seen.has(call.id)) throw new Error(`Two tool calls have the ID ${call.id}.`);
+      seen.add(call.id);
+      if (!call.name) throw new Error(`Tool call ${call.id} needs a tool name.`);
+      let args;
+      try {
+        args = JSON.parse(call.arguments);
+      } catch {
+        args = null;
+      }
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error(`The arguments of tool call ${call.id} have to be a JSON object.`);
+    }
+    if (!message.text.trim() && !message.tool_calls.length) throw new Error("An assistant message needs text or a tool call.");
+    return message;
+  }
+  if (role === "tool") {
+    message.tool_call_id = $("tool-call-id").value;
+    if (!message.tool_call_id) throw new Error("There's no tool call waiting for an answer.");
+  }
+  // Nothing to send isn't a mistake.
+  return message.text.trim() ? message : null;
+}
+
+function resetMessageFields() {
+  for (const id of ["custom-role", "message-name", "message-reasoning"]) $(id).value = "";
+  $("message-calls").replaceChildren();
+  $("role").value = "user";
+  $("more-fields").open = false;
+  refreshMessageFields();
+}
+
+function captureComposer() {
+  return {
+    role: $("role").value,
+    custom: $("custom-role").value,
+    tool: $("tool-call-id").value,
+    name: $("message-name").value,
+    reasoning: $("message-reasoning").value,
+    calls: readCalls($("message-calls")),
+    open: $("more-fields").open,
+  };
+}
+
+function restoreComposer(saved) {
+  if (!saved) return;
+  $("role").value = saved.role;
+  $("custom-role").value = saved.custom;
+  $("message-name").value = saved.name;
+  $("message-reasoning").value = saved.reasoning;
+  $("message-calls").replaceChildren();
+  for (const call of saved.calls) addComposerCall(call);
+  $("more-fields").open = saved.open;
+  refreshMessageFields();
+  $("tool-call-id").value = saved.tool;
+}
+
+// Reads the message, saying what's wrong with it if anything is.
+function messageOrReport() {
+  try {
+    return readMessage();
+  } catch (err) {
+    reportError(err);
+    return null;
+  }
+}
+
 $("form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const text = $("input").value;
-  if (!text.trim() || (current && streaming === current)) return;
+  if (current && streaming === current) return;
+  const hasFields = $("role").value === "assistant" && $("message-calls").childElementCount > 0;
+  if (!$("input").value.trim() && !hasFields) return;
   // The text stays put. Someone typing may not have seen the light change.
   const locked = lockReason("spends");
   if (locked) {
     flash(`${locked}, so that wasn't sent. It's still in the box.`);
     return;
   }
+  const message = messageOrReport();
+  if (!message) return;
+  const text = message.text;
   setInput("");
   try {
     await ensureConversation();
     // If the server refused it, nothing was recorded, so don't lose the text.
-    if (!(await call(current, text))) {
+    if (await call(current, message)) {
+      resetMessageFields();
+    } else {
       setInput(text);
       if (lastCallFailure instanceof Unreachable) maybeArrived(text);
     }
@@ -1720,31 +2146,22 @@ $("form").addEventListener("submit", async (event) => {
 });
 
 $("hold").addEventListener("click", async () => {
-  const text = $("input").value;
-  if (!text.trim()) return;
+  const hasFields = $("role").value === "assistant" && $("message-calls").childElementCount > 0;
+  if (!$("input").value.trim() && !hasFields) return;
+  const message = messageOrReport();
+  if (!message) return;
   await pendingWhile($("hold"), async () => {
     await ensureConversation();
     try {
-      await postConversation(current, "held", { text });
+      await postConversation(current, "held", message);
     } catch (err) {
-      if (err instanceof Unreachable) maybeArrived(text);
+      if (err instanceof Unreachable) maybeArrived(message.text);
       throw err;
     }
     setInput("");
+    resetMessageFields();
     if (streaming !== current) await show(current);
     await refreshList();
-  }).catch(reportError);
-  $("input").focus();
-});
-
-$("add-system").addEventListener("click", async () => {
-  const text = $("input").value;
-  if (!text.trim() || (!current && !draftFork)) return;
-  await pendingWhile($("add-system"), async () => {
-    await ensureConversation();
-    await postConversation(current, "system", { text });
-    setInput("");
-    await show(current);
   }).catch(reportError);
   $("input").focus();
 });
@@ -1835,8 +2252,7 @@ function refreshComposer() {
   const spends = lockReason("spends");
   const net = lockReason("net");
   set($("send"), sendBusy || Boolean(spends), spends, "Calls the model");
-  set($("hold"), Boolean(net), net, "Adds this as your message, but doesn't call the model. It goes with the next call");
-  set($("add-system"), !canAddSystem || Boolean(net), net, "Waits for the next call, unless you ask the model to respond now");
+  set($("hold"), Boolean(net), net, "Adds this message, but doesn't call the model. It goes with the next call");
 }
 
 // Buttons come and go with every redraw, so this looks at what's there each time.
@@ -2027,9 +2443,9 @@ const STAGING_KEY = "tack-staging";
 
 function captureConversation() {
   const editors = [];
-  for (const node of $("list").querySelectorAll(".system")) {
-    const area = node.querySelector(".editor textarea");
-    if (area) editors.push([node.dataset.message, area.value]);
+  for (const node of $("list").querySelectorAll("[data-edit-target]")) {
+    const form = node.querySelector(":scope > .editor");
+    if (form) editors.push([node.dataset.editTarget, form.read()]);
   }
   const card = document.querySelector(".decision-card");
   return {
@@ -2047,9 +2463,9 @@ function captureConversation() {
 }
 
 function restoreConversation(staged) {
-  for (const [message, text] of staged.editors) {
-    const node = [...$("list").querySelectorAll(".system")].find((n) => n.dataset.message === message);
-    if (node) node.openEditor().querySelector("textarea").value = text;
+  for (const [target, values] of staged.editors) {
+    const node = [...$("list").querySelectorAll("[data-edit-target]")].find((n) => n.dataset.editTarget === target);
+    if (node) node.openEditor().fill(values);
   }
   const settings = $("settings-text");
   if (settings && staged.settings !== undefined) {
@@ -2107,7 +2523,7 @@ function restoreStart(saved) {
 }
 
 function captureStaging() {
-  const staging = { composer: $("input").value, conversation: captureConversation() };
+  const staging = { composer: $("input").value, fields: captureComposer(), conversation: captureConversation() };
   if (draftFork) staging.fork = { from: draftFork.from, items: draftFork.items, edits: [...draftFork.edits] };
   else if (!current && start) staging.start = captureStart();
   return staging;
@@ -2137,6 +2553,7 @@ async function restoreStaging(staging) {
   if (staging.start) restoreStart(staging.start);
   restoreConversation(staging.conversation);
   setInput(staging.composer);
+  restoreComposer(staging.fields);
   const box = stagedSettingsBox();
   if (box) box.dispatchEvent(new Event("input", { bubbles: true }));
   refreshSpend();

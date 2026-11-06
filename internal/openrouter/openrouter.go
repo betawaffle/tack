@@ -34,6 +34,7 @@ type Routing struct {
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	Name       string     `json:"name,omitzero"`
 	Reasoning  string     `json:"reasoning,omitzero"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitzero"`
 	ToolCallID string     `json:"tool_call_id,omitzero"`
