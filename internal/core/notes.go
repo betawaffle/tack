@@ -17,6 +17,11 @@ type noteItem struct {
 	text              store.Ref
 }
 
+type noteAt struct {
+	items int
+	note  *store.Note
+}
+
 func (conv *conversation) addNote(n *store.Note) {
 	for _, item := range conv.notes {
 		if item.kind == n.Kind && item.key == n.Key {

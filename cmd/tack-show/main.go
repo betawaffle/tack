@@ -146,6 +146,9 @@ func show(w io.Writer, conv core.Conversation, limit int) {
 		fmt.Fprint(w, ", tools")
 	}
 	fmt.Fprintf(w, ", spent $%.6f of $%.6f\n", conv.Budget.Spent, conv.Budget.Limit)
+	if conv.ForkedFrom != "" {
+		fmt.Fprintf(w, "forked from %s, keeping its first %d items\n", conv.ForkedFrom, conv.ForkItems)
+	}
 	var states []string
 	if conv.Busy {
 		states = append(states, "busy")

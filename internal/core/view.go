@@ -40,6 +40,8 @@ type PendingEdit struct {
 // Item is something to show in a conversation. Text holds the message, or for
 // the "notice" role, what went wrong.
 type Item struct {
+	// Index is its place among the conversation's items, which is what Fork counts.
+	Index     int    `json:"index"`
 	Role      string `json:"role"`
 	Text      string `json:"text"`
 	Reasoning string `json:"reasoning,omitzero"`
@@ -135,6 +137,10 @@ type Conversation struct {
 
 	Decision *DecisionView `json:"decision,omitzero"`
 
+	// Where it was forked from, and how many of its items came from there.
+	ForkedFrom string `json:"forked_from,omitzero"`
+	ForkItems  int    `json:"fork_items,omitzero"`
+
 	Budget  BudgetView  `json:"budget"`
 	Paused  bool        `json:"paused,omitzero"`
 	Running RunningView `json:"running"`
@@ -192,7 +198,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}}
+	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}, ForkedFrom: conv.forkedFrom, ForkItems: conv.forkItems}
 	effective := conv.effectiveSettings(c.settings)
 	out.Model, out.Host = effective.Model, effective.Host
 	full := effective.WithDefaults()
@@ -220,6 +226,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		}
 	}
 	for i, it := range conv.items {
+		shown := len(out.Items)
 		switch {
 		case it.role == "user":
 			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.parts), Queued: !it.sent})
@@ -240,6 +247,9 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 				reply.ToolCalls = append(reply.ToolCalls, c.toolCallView(conv, call))
 			}
 			out.Items = append(out.Items, reply)
+		}
+		if len(out.Items) > shown {
+			out.Items[shown].Index = i
 		}
 	}
 	return out, nil

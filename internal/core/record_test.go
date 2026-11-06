@@ -109,7 +109,7 @@ func TestAnUnknownEventTypeRefusesToStart(t *testing.T) {
 
 func TestEveryEventTypeThisBuildWritesIsKnown(t *testing.T) {
 	for _, eventType := range []string{
-		store.TackStarted, store.ConversationAdded, store.UserMessage, store.SystemMessage,
+		store.TackStarted, store.ConversationAdded, store.ConversationForked, store.UserMessage, store.SystemMessage,
 		store.EditProposed, store.EditApplied, store.EditDiscarded, store.CallStarted, store.CallFinished,
 		store.DecisionRequested, store.DecisionMade, store.ToolStarted, store.ToolFinished,
 		store.ConfigLoaded, store.SettingsProposed, store.SettingsApplied, store.SettingsDiscarded,

@@ -181,6 +181,15 @@ ends the turn without another model call, and the results go out with your next 
 directory. With `notes_without_text_continue` on, a reply with notes and no text carries on
 by itself, so only text ends the turn.
 
+## Forking
+
+**Edit** on one of your messages, or **Fork from here** on a reply, sets up a new conversation
+with everything before that point. Nothing is recorded until you send or hold something from
+it, and the original isn't touched. A fork has the same tools and settings, sends the same
+bytes for what it keeps, so the cache still applies, and starts with its own budget. It can't
+keep a tool call that's still waiting. Forking doesn't undo anything: a file that a later
+tool call changed stays changed.
+
 ## Reading the record
 
 `tack-show` prints conversations from the record. It only reads, so it's safe beside a

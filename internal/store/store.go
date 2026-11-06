@@ -88,26 +88,30 @@ const (
 const (
 	TackStarted       = "tack_started"
 	ConversationAdded = "conversation_created"
-	UserMessage       = "user_message"
-	SystemMessage     = "system_message"
-	EditProposed      = "system_edit_proposed"
-	EditApplied       = "system_edit_applied"
-	EditDiscarded     = "system_edit_discarded"
-	CallStarted       = "model_call_started"
-	CallFinished      = "model_call_finished"
-	DecisionRequested = "decision_requested"
-	DecisionMade      = "decision_made"
-	ToolStarted       = "tool_started"
-	ToolFinished      = "tool_finished"
-	ConfigLoaded      = "config_loaded"
-	SettingsProposed  = "settings_proposed"
-	SettingsApplied   = "settings_applied"
-	SettingsDiscarded = "settings_discarded"
-	BudgetAdded       = "budget_added"
-	BudgetStopped     = "budget_stopped"
-	PauseRequested    = "pause_requested"
-	PauseCleared      = "pause_cleared"
-	NoteAdded         = "note_added"
+	// ConversationForked starts a conversation from the state of another one at that
+	// moment. It's its own type so that a build that can't work out the history
+	// refuses the record, rather than showing an empty conversation.
+	ConversationForked = "conversation_forked"
+	UserMessage        = "user_message"
+	SystemMessage      = "system_message"
+	EditProposed       = "system_edit_proposed"
+	EditApplied        = "system_edit_applied"
+	EditDiscarded      = "system_edit_discarded"
+	CallStarted        = "model_call_started"
+	CallFinished       = "model_call_finished"
+	DecisionRequested  = "decision_requested"
+	DecisionMade       = "decision_made"
+	ToolStarted        = "tool_started"
+	ToolFinished       = "tool_finished"
+	ConfigLoaded       = "config_loaded"
+	SettingsProposed   = "settings_proposed"
+	SettingsApplied    = "settings_applied"
+	SettingsDiscarded  = "settings_discarded"
+	BudgetAdded        = "budget_added"
+	BudgetStopped      = "budget_stopped"
+	PauseRequested     = "pause_requested"
+	PauseCleared       = "pause_cleared"
+	NoteAdded          = "note_added"
 )
 
 // Note is an item on a conversation's page. The text is a block, like other content.
@@ -250,7 +254,7 @@ type Artifact struct {
 // getting history wrong, such as not knowing a tool call was already decided.
 func Known(eventType string) bool {
 	switch eventType {
-	case TackStarted, ConversationAdded, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
+	case TackStarted, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
@@ -277,6 +281,11 @@ type Event struct {
 	Tools    Ref       `json:"tools,omitzero"`
 	Workdir  string    `json:"workdir,omitzero"`
 	Settings *Settings `json:"settings,omitzero"`
+
+	// conversation_forked: where it came from, and how many of that conversation's
+	// items it keeps, counting from the start. Absent means none. It also has settings.
+	ForkedFrom string `json:"forked_from,omitzero"`
+	ForkItems  int    `json:"fork_items,omitzero"`
 
 	// budget_added, budget_stopped.
 	AmountUSD   float64 `json:"amount_usd,omitzero"`

@@ -232,6 +232,7 @@ func (conv *conversation) applyTool(ev *store.Event) {
 		conv.paused = false
 	case store.NoteAdded:
 		if ev.Note != nil {
+			conv.noteHistory = append(conv.noteHistory, noteAt{items: len(conv.items), note: ev.Note})
 			conv.addNote(ev.Note)
 		}
 	case store.SettingsProposed:

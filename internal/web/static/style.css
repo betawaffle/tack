@@ -256,6 +256,10 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .note-text { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note-concern .note-text { color: var(--warn); }
 
+.user-actions { margin-top: 5px; text-align: right; }
+.fork-row { margin-top: 4px; }
+.fork-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 13px; }
+.fork-mark { color: var(--muted); font-size: 12.5px; text-align: center; }
 .user-waiting { margin-top: 3px; color: var(--brass); font-size: 11.5px; }
 
 /* Start panel options */
@@ -358,3 +362,5 @@ button:disabled { opacity: .45; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+/* A system message can't be edited in a fork that doesn't exist yet. */
+#list:has(.fork-banner) .system button { display: none; }

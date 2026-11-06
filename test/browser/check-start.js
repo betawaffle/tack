@@ -401,6 +401,46 @@ let page;
   await p.waitForSelector("#settings-text", { state: "attached", timeout: 15000 });
   ok(JSON.parse(await p.inputValue("#settings-text")).notes_without_text_continue === true, "and the same settings");
 
+  // Forking: try other first messages without setting anything up again.
+  await fresh();
+  await p.fill("#system-prompt", "The prompt to keep.");
+  await reset();
+  await send("short the original");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  await p.locator(".user-actions button", { hasText: "Edit" }).click();
+  await p.waitForSelector(".fork-banner");
+  ok((await p.inputValue("#input")) === "short the original", "editing puts the message in the composer");
+  ok((await p.locator(".user").count()) === 0, "and the preview stops before it");
+  await p.locator(".fork-banner button", { hasText: "Cancel" }).click();
+  await p.waitForFunction(() => !document.querySelector(".fork-banner") && document.querySelector(".user"), null, { timeout: 5000 });
+  ok(true, "cancelling goes back to the original");
+  await p.locator(".user-actions button", { hasText: "Edit" }).click();
+  await p.waitForSelector(".fork-banner");
+  await p.screenshot({ path: "shots/fork-draft.png" });
+  await reset();
+  await p.fill("#input", "short an edited first message");
+  await p.press("#input", "Enter");
+  await p.waitForSelector(".fork-mark", { timeout: 15000 });
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  const forked = (await bodies())[0];
+  ok(forked.messages[0].content === "The prompt to keep.", "the fork keeps the prompt");
+  ok(forked.messages.length === 2 && forked.messages[1].content === "short an edited first message", "and sends the edited message instead");
+  ok(forked.tools.length > 0, "with the same tools");
+  ok(!(await p.locator("#list").innerText()).includes("short the original"), "the original message isn't in the fork");
+  await p.screenshot({ path: "shots/fork.png" });
+
+  await reset();
+  await p.locator(".fork-row button").first().click();
+  await p.waitForSelector(".fork-banner");
+  await p.fill("#input", "short a continuation");
+  await p.press("#input", "Enter");
+  await p.waitForFunction(() => document.querySelectorAll(".assistant > .prose").length > 1, null, { timeout: 15000 });
+  await idle();
+  const continued = (await bodies())[0];
+  ok(continued.messages.length === 4 && continued.messages[2].role === "assistant", "forking from a reply keeps that reply");
+
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
   await br.close();
   console.log(fails ? `\n${fails} FAILED` : "\nall passed");

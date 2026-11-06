@@ -30,6 +30,7 @@ var (
 	ErrBadChoice      = errors.New("that choice isn't possible for this decision")
 	ErrBadSettings    = errors.New("those settings can't work")
 	ErrBadTools       = errors.New("those tools can't work")
+	ErrBadFork        = errors.New("that isn't a place to fork from")
 	ErrNothingRunning = errors.New("that isn't running")
 )
 
@@ -76,6 +77,13 @@ type conversation struct {
 
 	paused bool // don't call the model until a message or Continue
 	notes  []*noteItem
+	// noteHistory is every note in order, with how many items there were at the time,
+	// so that a fork can keep only those from before its point.
+	noteHistory []noteAt
+
+	forkedFrom string
+	forkItems  int
+	session    string // the session ID it shares with what it forked from, if it did
 
 	// What's running now, so it can be stopped. These aren't derived from the record,
 	// because nothing survives a restart to be stopped.
@@ -100,9 +108,10 @@ type item struct {
 	pending   *edit // held until it's applied or discarded
 
 	// Calls.
-	callID   string
-	finished *store.Event
-	calls    []*toolCall // what a usable reply asked for
+	callID       string
+	requestBytes int
+	finished     *store.Event
+	calls        []*toolCall // what a usable reply asked for
 }
 
 type edit struct {
@@ -176,6 +185,14 @@ func (c *Core) apply(ev *store.Event) {
 		c.order = append(c.order, ev.Conversation)
 		return
 	}
+	if ev.Type == store.ConversationForked {
+		// Events are in order, so the parent is exactly as it was when this happened.
+		if parent := c.convs[ev.ForkedFrom]; parent != nil {
+			c.convs[ev.Conversation] = parent.fork(ev)
+			c.order = append(c.order, ev.Conversation)
+		}
+		return
+	}
 	conv := c.convs[ev.Conversation]
 	if conv == nil {
 		return
@@ -197,7 +214,7 @@ func (c *Core) apply(ev *store.Event) {
 		if json.Unmarshal(ev.Routing, &routing) == nil && len(routing.Order) > 0 {
 			conv.lastHost = routing.Order[0]
 		}
-		conv.items = append(conv.items, &item{callID: ev.Call, time: ev.Time})
+		conv.items = append(conv.items, &item{callID: ev.Call, requestBytes: ev.RequestBytes, time: ev.Time})
 	case store.CallFinished:
 		for _, it := range conv.items {
 			if it.callID == ev.Call {
@@ -363,6 +380,81 @@ func (c *Core) NewConversationWith(opts Options) (string, error) {
 		}
 	}
 	return id, c.record(&store.Event{Type: store.SystemMessage, Conversation: id, Message: store.NewID(), Parts: parts})
+}
+
+// Fork starts a new conversation with the first items of this one, the same tools
+// and its current settings, which then goes its own way. The items it keeps have to
+// be settled: a tool call still waiting can't be answered in two places. Nothing is
+// undone, so files that later tool calls changed stay changed.
+func (c *Core) Fork(convID string, items int) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conv := c.convs[convID]
+	if conv == nil {
+		return "", ErrNotFound
+	}
+	if items < 0 || items > len(conv.items) {
+		return "", fmt.Errorf("%w: it has %d items", ErrBadFork, len(conv.items))
+	}
+	for _, it := range conv.items[:items] {
+		if it.role == "" && it.finished == nil && conv.busy {
+			return "", ErrBusy
+		}
+		for _, call := range it.calls {
+			if !call.resolved() {
+				return "", ErrAwaiting
+			}
+		}
+	}
+	settings := conv.effectiveSettings(c.settings)
+	ev := &store.Event{Type: store.ConversationForked, Conversation: store.NewID(), ForkedFrom: convID, ForkItems: items, Settings: &settings}
+	if err := c.cfg.Store.Append(ev); err != nil {
+		return "", err
+	}
+	c.apply(ev)
+	return ev.Conversation, nil
+}
+
+// sessionID is what calls tell the host. Forks keep the original's, so that a host
+// that routes by session can send them where the cache is.
+func (conv *conversation) sessionID() string {
+	if conv.session != "" {
+		return conv.session
+	}
+	return conv.id
+}
+
+// fork copies what a forked conversation keeps. Its budget starts again, because it
+// hasn't spent anything itself, but what those calls cost still informs its estimates.
+func (conv *conversation) fork(ev *store.Event) *conversation {
+	out := &conversation{
+		id: ev.Conversation, created: ev.Time, tools: conv.tools, workdir: conv.workdir, settings: ev.Settings,
+		lastModel: conv.lastModel, lastHost: conv.lastHost, forkedFrom: ev.ForkedFrom, forkItems: ev.ForkItems, session: conv.sessionID(),
+	}
+	for _, it := range conv.items[:ev.ForkItems] {
+		kept := *it
+		kept.pending = nil
+		kept.calls = nil
+		for _, call := range it.calls {
+			copied := *call
+			kept.calls = append(kept.calls, &copied)
+		}
+		if it.finished != nil {
+			out.addCost(it.finished)
+		}
+		if it.requestBytes > 0 {
+			out.lastRequestBytes = it.requestBytes
+		}
+		out.items = append(out.items, &kept)
+	}
+	out.spent = 0
+	for _, entry := range conv.noteHistory {
+		if entry.items <= ev.ForkItems {
+			out.noteHistory = append(out.noteHistory, entry)
+			out.addNote(entry.note)
+		}
+	}
+	return out
 }
 
 func (c *Core) parts(text string) ([]store.Part, error) {
@@ -617,7 +709,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		Model:     model,
 		Routing:   routingChoice,
 		Messages:  messages,
-		SessionID: conv.id,
+		SessionID: conv.sessionID(),
 		Tools:     definitions,
 	})
 	if err != nil {

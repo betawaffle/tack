@@ -49,6 +49,7 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations", s.create)
 	mux.HandleFunc("GET /api/conversations/{id}", s.get)
 	mux.HandleFunc("GET /api/conversations/{id}/tools", s.definitions)
+	mux.HandleFunc("POST /api/conversations/{id}/fork", s.fork)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", s.send)
 	mux.HandleFunc("POST /api/conversations/{id}/held", s.hold)
 	mux.HandleFunc("POST /api/conversations/{id}/reply", s.reply)
@@ -178,6 +179,22 @@ func (s *server) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, conv)
+}
+
+func (s *server) fork(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Items int `json:"items"`
+	}
+	if err := json.UnmarshalRead(r.Body, &body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := s.core.Fork(r.PathValue("id"), body.Items)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": id})
 }
 
 func (s *server) definitions(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +442,7 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools):
+	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		log.Printf("request failed: %v", err)

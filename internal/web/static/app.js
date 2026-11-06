@@ -15,6 +15,8 @@ const unfolded = new Set();
 const views = new Map();
 // Which conversations have their settings panel open.
 const settingsOpen = new Set();
+// The fork being set up, if any: which conversation, and how many items it keeps.
+let draftFork = null;
 // Which conversations have their tool definitions showing, and those definitions.
 const definitionsOpen = new Set();
 const definitionsShown = new Map();
@@ -260,6 +262,9 @@ function renderReply(item, key, decision) {
   if (!item.text) r.text.hidden = true;
   for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
   if (item.stats) r.node.append(ledger(item.stats, controls));
+  const fork = el("div", "fork-row");
+  fork.append(button("Fork from here", "mini", () => beginFork(item.index + 1, "").catch(reportError)));
+  r.node.append(fork);
   return r.node;
 }
 
@@ -634,7 +639,41 @@ function renderItem(item, index, decision) {
     node.append(el("div", "user-waiting", "Goes with the next call"));
     return node;
   }
-  return el("div", item.role, item.text);
+  const node = el("div", item.role, item.text);
+  if (item.role === "user") {
+    const actions = el("div", "user-actions");
+    actions.append(button("Edit", "mini", () => beginFork(item.index, item.text).catch(reportError)));
+    node.append(actions);
+  }
+  return node;
+}
+
+// beginFork shows what a fork would keep and puts text in the composer. Nothing is
+// recorded until something is sent from it, the same as a new conversation.
+async function beginFork(items, text) {
+  const from = current ?? draftFork.from;
+  const res = await api(`/api/conversations/${from}`);
+  const conv = await res.json();
+  clearTimeout(pollTimer);
+  streaming = null;
+  current = null;
+  draftFork = { from, items };
+  history.replaceState(null, "", location.pathname);
+  setOpenMode(true);
+  $("add-system").disabled = true;
+  setControls(from, null);
+  setBusy(false);
+  showMeta(conv);
+  const banner = el("div", "fork-banner");
+  banner.append(
+    el("span", "", "A new conversation from this point, with the same tools and settings. Nothing is recorded until you send."),
+    button("Cancel", "mini", () => open(from).catch(reportError)),
+  );
+  const kept = conv.items.filter((item) => item.index < items);
+  $("list").replaceChildren(banner, ...kept.map((item) => renderItem(item, item.index, null)));
+  setInput(text);
+  scrollDown();
+  $("input").focus();
 }
 
 // A conversation owns its settings. The config only supplied where they started.
@@ -776,12 +815,11 @@ function setBusy(busy) {
 
 function showMeta(conv) {
   const stats = conv.items.filter((i) => i.stats).map((i) => i.stats);
-  const total = stats.reduce((sum, s) => sum + s.cost_usd, 0);
   const parts = [conv.model.replace(/^.*\//, "")];
   if (conv.host) parts.push(conv.host);
   if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
-  parts.push(`${dollars(conv.budget.spent || total)} of ${dollars(conv.budget.limit)}`);
+  parts.push(`${dollars(conv.budget.spent)} of ${dollars(conv.budget.limit)}`);
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
 }
 
@@ -794,7 +832,16 @@ async function show(id, polling) {
   const live = streaming === id;
   const typing = polling && document.querySelector("#list .editor, #settings-text:focus");
   if (!typing) {
-    $("list").replaceChildren(...conv.items.map((item, i) => renderItem(item, i, conv.decision)));
+    const nodes = conv.items.map((item) => renderItem(item, item.index, conv.decision));
+    if (conv.forked_from) {
+      const mark = el("div", "fork-mark", "Forked from ");
+      const link = el("a", "", "the original");
+      link.href = `#${conv.forked_from}`;
+      mark.append(link, " here");
+      const at = conv.items.findIndex((item) => item.index >= conv.fork_items);
+      nodes.splice(at < 0 ? nodes.length : at, 0, mark);
+    }
+    $("list").replaceChildren(...nodes);
     if (conv.notes) $("list").prepend(notesPanel(conv.notes));
     $("list").prepend(settingsPanel(conv));
     if (conv.budget.stopped && !conv.busy && !live) $("list").append(budgetCard(conv));
@@ -824,6 +871,7 @@ function closeDrawer() {
 }
 
 async function open(id) {
+  draftFork = null;
   if (id !== current) {
     unfolded.clear();
     views.clear();
@@ -839,6 +887,7 @@ async function open(id) {
 }
 
 async function startNew() {
+  draftFork = null;
   unfolded.clear();
   views.clear();
   streaming = null;
@@ -1201,7 +1250,10 @@ function setInput(text) {
 
 async function ensureConversation() {
   if (current) return;
-  const res = await postJSON("/api/conversations", newConversationBody());
+  const res = draftFork
+    ? await postJSON(`/api/conversations/${draftFork.from}/fork`, { items: draftFork.items })
+    : await postJSON("/api/conversations", newConversationBody());
+  draftFork = null;
   current = (await res.json()).id;
   location.hash = current;
   setOpenMode(true);

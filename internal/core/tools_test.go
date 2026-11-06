@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -1480,6 +1481,122 @@ func TestToolDefinitionsCanBeEditedAndLeftOut(t *testing.T) {
 		if _, err := c.NewConversationWith(opts); !errors.Is(err, ErrBadTools) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id, err := c.NewConversation("Be brief.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies == 1 {
+			io.WriteString(w, toolStream(noteCall))
+			return
+		}
+		io.WriteString(w, replyStream)
+	}
+	updates, err := c.Send(id, "First")
+	mustFinish(t, updates, err)
+	updates, err = c.Send(id, "Second")
+	mustFinish(t, updates, err)
+	second := f.bodies[1]
+
+	// Keep the system message, the first message and the reply with the note.
+	fork, err := c.Fork(id, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Send(fork, "Second")
+	mustFinish(t, updates, err)
+	if !bytes.Equal(f.bodies[2], second) {
+		t.Errorf("the same point should send the same bytes:\n got %s\nwant %s", f.bodies[2], second)
+	}
+
+	// An edited first message: nothing after the system message comes along.
+	early, err := c.Fork(id, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Send(early, "Different")
+	mustFinish(t, updates, err)
+	body := string(f.bodies[3])
+	if !strings.Contains(body, "Be brief.") || !strings.Contains(body, "Different") || strings.Contains(body, "First") {
+		t.Errorf("request = %s", body)
+	}
+
+	whole, err := c.Fork(id, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(c *Core) {
+		t.Helper()
+		original, err := c.Conversation(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept, err := c.Conversation(fork)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other, err := c.Conversation(early)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(original.Items); n != 5 {
+			t.Errorf("original has %d items", n)
+		}
+		if kept.ForkedFrom != id || kept.ForkItems != 3 || len(kept.Items) != 5 {
+			t.Errorf("fork = %+v", kept)
+		}
+		if kept.Items[4].Index != 4 {
+			t.Errorf("index = %d", kept.Items[4].Index)
+		}
+		if len(kept.Notes) != 1 || len(other.Notes) != 0 {
+			t.Errorf("notes = %+v and %+v", kept.Notes, other.Notes)
+		}
+		// Its budget only counts what it spent itself, but it knows what calls cost.
+		copied, err := c.Conversation(whole)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if copied.Budget.Spent != 0 || copied.Budget.Estimate != original.Budget.Estimate || original.Budget.Estimate == 0 {
+			t.Errorf("budget = %+v, original %+v", copied.Budget, original.Budget)
+		}
+	}
+	check(c)
+	again, err := New(Config{Store: f.store, Tools: f.tools})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(again)
+}
+
+func TestForkRefusesWhatItCantKeep(t *testing.T) {
+	f := newToolFake(t)
+	c := f.open()
+	id := f.askForTools(c, callA)
+	conv, err := c.Conversation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Fork(id, len(conv.Items)); !errors.Is(err, ErrAwaiting) {
+		t.Errorf("waiting call: %v", err)
+	}
+	if _, err := c.Fork(id, len(conv.Items)-1); err != nil {
+		t.Errorf("before the waiting call: %v", err)
+	}
+	if _, err := c.Fork(id, len(conv.Items)+1); !errors.Is(err, ErrBadFork) {
+		t.Errorf("too far: %v", err)
+	}
+	if _, err := c.Fork("nope", 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing: %v", err)
 	}
 }
 
