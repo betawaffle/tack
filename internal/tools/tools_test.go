@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -806,7 +809,12 @@ attempt("network", connect)
 attempt("namespace", lambda: subprocess.run(["unshare", "-m", "true"], check=True, capture_output=True))
 print("cwd", os.getcwd())
 print("env", sorted(os.environ))
-print("pids", sorted(p for p in os.listdir("/proc") if p.isdigit()))
+attempt("proc", lambda: os.listdir("/proc"))
+attempt("write root", lambda: open("/nope", "w"))
+attempt("write dev", lambda: open("/dev/nope", "w"))
+print("host", os.uname().nodename)
+for gone in ["/usr/bin/gcc", "/usr/bin/bash", "/bin/sh", "/usr/local/bin", "/usr/lib64/python3.14/site-packages/pip"]:
+    print("exists", gone, os.path.exists(gone))
 print("workdir exists", os.path.exists(` + fmt.Sprintf("%q", f.workdir) + `))
 open("/tmp/mine", "w").write("kept for now")
 print("tmp", open("/tmp/mine").read())
@@ -821,12 +829,13 @@ print("tmp", open("/tmp/mine").read())
 	if strings.Contains(got, "TACK_SHOULD_NOT_LEAK") || strings.Contains(got, "ONLY_THIS") {
 		t.Errorf("the environment leaked:\n%s", got)
 	}
-	for _, want := range []string{"cwd /tmp\n", "workdir exists False\n", "tmp kept for now\n", "refused network", "refused namespace"} {
+	for _, want := range []string{"cwd /work\n", "workdir exists False\n", "tmp kept for now\n", "refused network", "refused namespace", "host sandbox\n",
+		"exists /usr/bin/gcc False", "exists /usr/bin/bash False", "exists /bin/sh False", "exists /usr/local/bin False", "site-packages/pip False"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in:\n%s", want, got)
 		}
 	}
-	// Nothing carries over.
+	// /tmp doesn't carry over.
 	if got, err := runCode(t, f, "import os\nprint(os.listdir('/tmp'))"); err != nil || got != "[]\n" {
 		t.Errorf("next call = %q, %v", got, err)
 	}
@@ -853,8 +862,13 @@ func TestCodeNeedsNoWorkingDirectoryAndIgnoresSettings(t *testing.T) {
 
 func TestCodeLimitsHold(t *testing.T) {
 	f := newFixture(t)
+	// None of the places it can write are unlimited.
+	got, err := runCode(t, f, "import os\nfor path in ['/work/big', '/dev/shm/big']:\n    try:\n        open(path, 'wb').write(b'x' * (128 << 20))\n        print('WROTE', path)\n    except OSError as e:\n        print('full', e.errno)\n    os.remove(path)")
+	if err != nil || strings.Contains(got, "WROTE") {
+		t.Errorf("big = %q, %v", got, err)
+	}
 	// /tmp is small.
-	got, err := runCode(t, f, "try:\n    open('/tmp/big', 'wb').write(b'x' * (128 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)")
+	got, err = runCode(t, f, "try:\n    open('/tmp/big', 'wb').write(b'x' * (128 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)")
 	if err != nil || strings.Contains(got, "WROTE") {
 		t.Errorf("big = %q, %v", got, err)
 	}
@@ -868,7 +882,7 @@ func TestCodeLimitsHold(t *testing.T) {
 	// Stopping it ends everything it started.
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	call = f.call(map[string]string{"language": "python", "code": "import subprocess, time\nsubprocess.Popen(['sleep', '60'])\ntime.sleep(60)"})
+	call = f.call(map[string]string{"language": "python", "code": "import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\ntime.sleep(60)"})
 	started := time.Now()
 	_, err = f.tools["run_code"].Run(ctx, call)
 	if err == nil || !strings.Contains(err.Error(), "the code was stopped") {
@@ -876,6 +890,252 @@ func TestCodeLimitsHold(t *testing.T) {
 	}
 	if took := time.Since(started); took > 20*time.Second {
 		t.Errorf("stopping took %v", took)
+	}
+}
+
+// Each of these goes straight to the kernel, so nothing but the filter is in the way.
+func TestCodeSyscallsAreFiltered(t *testing.T) {
+	f := newFixture(t)
+	got, err := runCode(t, f, `
+import ctypes, errno, socket
+libc = ctypes.CDLL(None, use_errno=True)
+refused = {"io_uring_setup": 425, "io_uring_enter": 426, "io_uring_register": 427, "bpf": 321, "perf_event_open": 298,
+    "userfaultfd": 323, "keyctl": 250, "add_key": 248, "request_key": 249, "ptrace": 101, "process_vm_readv": 310,
+    "process_vm_writev": 311, "pidfd_getfd": 438, "pidfd_open": 434, "kcmp": 312, "mount": 165, "umount2": 166, "pivot_root": 155, "chroot": 161,
+    "unshare": 272, "setns": 308, "open_tree": 428, "move_mount": 429, "fsopen": 430, "init_module": 175, "finit_module": 313,
+    "kexec_load": 246, "reboot": 169, "acct": 163, "swapon": 167, "setuid": 105, "setgid": 106, "setns": 308, "seccomp": 317,
+    "memfd_create": 319, "shmget": 29, "msgget": 68, "semget": 64, "mknod": 133, "mknodat": 259, "quotactl": 179, "syslog": 103,
+    "fanotify_init": 300, "inotify_init1": 294, "name_to_handle_at": 303, "open_by_handle_at": 304, "landlock_create_ruleset": 444,
+    "mbind": 237, "migrate_pages": 256, "move_pages": 279, "vmsplice": 278, "splice": 275, "tee": 276, "modify_ldt": 154, "iopl": 172, "ioperm": 173}
+for name, number in refused.items():
+    ctypes.set_errno(0)
+    result = libc.syscall(number, 0, 0, 0, 0, 0, 0)
+    if result != -1 or ctypes.get_errno() != errno.EPERM:
+        print("REACHED", name, result, ctypes.get_errno())
+# clone3 pretends not to exist, so that libc falls back to clone.
+if libc.syscall(435, 0, 0) != -1 or ctypes.get_errno() != errno.ENOSYS:
+    print("REACHED clone3")
+# A namespace through plain clone, flags in the first argument.
+for flag in [0x10000000, 0x00020000, 0x40000000, 0x20000000, 0x08000000, 0x04000000, 0x02000000, 0x80]:
+    if libc.syscall(56, flag | 17, 0, 0, 0, 0) != -1 or ctypes.get_errno() != errno.EPERM:
+        print("REACHED clone", hex(flag))
+# Pushing input into a terminal.
+if libc.syscall(16, 0, 0x5412, 0) != -1 or ctypes.get_errno() != errno.ENOTTY:
+    print("REACHED TIOCSTI")
+# Calling convention tricks: the x32 bit.
+if libc.syscall(0x40000000 | 39) != -1:
+    print("REACHED x32")
+for family in [socket.AF_INET, socket.AF_INET6, socket.AF_NETLINK, socket.AF_PACKET, socket.AF_VSOCK, socket.AF_ALG, 30, 38]:
+    try:
+        socket.socket(family, socket.SOCK_DGRAM if family != socket.AF_ALG else socket.SOCK_SEQPACKET)
+        print("REACHED socket", family)
+    except OSError:
+        pass
+print("done")
+`)
+	if err != nil || got != "done\n" {
+		t.Errorf("%v:\n%s", err, got)
+	}
+}
+
+// What the filter and the small tree leave has to still be a useful Python.
+func TestCodeTheStandardLibraryStillWorks(t *testing.T) {
+	f := newFixture(t)
+	got, err := runCode(t, f, `
+import asyncio, base64, bz2, concurrent.futures, csv, ctypes, dataclasses, datetime, decimal, fractions, gzip, hashlib, heapq, itertools, json, lzma, math, multiprocessing, os, pathlib, pickle, random, re, resource, secrets, shutil, socket, sqlite3, ssl, statistics, struct, subprocess, sys, tarfile, tempfile, threading, time, unicodedata, uuid, xml.etree.ElementTree, zipfile, zlib, zoneinfo
+
+def square(x):
+    return x * x
+
+async def together():
+    return await asyncio.gather(asyncio.sleep(0.01, 1), asyncio.to_thread(sum, [1, 1]))
+
+if __name__ == "__main__":
+    con = sqlite3.connect("/tmp/db.sqlite")
+    con.execute("create table t (x)")
+    con.execute("insert into t values (41)")
+    con.commit()
+    assert con.execute("select x + 1 from t").fetchone() == (42,)
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d, "a.txt")
+        p.write_text("héllo")
+        shutil.copy2(p, p.with_suffix(".bak"))
+        shutil.make_archive(d + "-archive", "gztar", d)
+        os.symlink(p, p.with_suffix(".lnk"))
+        assert sorted(x.name for x in pathlib.Path(d).iterdir()) == ["a.bak", "a.lnk", "a.txt"]
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        assert list(pool.map(square, range(4))) == [0, 1, 4, 9]
+    assert asyncio.run(together()) == [1, 2]
+    a, b = socket.socketpair()
+    a.send(b"hi")
+    assert b.recv(2) == b"hi"
+    out = subprocess.run([sys.executable, "-I", "-c", "print(6 * 7)"], capture_output=True, text=True)
+    assert out.stdout == "42\n", out
+    with multiprocessing.Pool(2) as pool:
+        assert pool.map(square, range(3)) == [0, 1, 4]
+    print(datetime.datetime(2026, 7, 1, tzinfo=zoneinfo.ZoneInfo("Asia/Tokyo")).utcoffset())
+    print(hashlib.sha256(b"x").hexdigest()[:8], base64.b64encode(zlib.compress(b"x"))[:2], os.cpu_count() > 0, secrets.token_hex(1) != "", len(uuid.uuid4().hex))
+    print("done")
+`)
+	if err != nil || !strings.Contains(got, "9:00:00\n") || !strings.HasSuffix(got, "done\n") {
+		t.Errorf("%v:\n%s", err, got)
+	}
+}
+
+func TestCodeOutputStaysInOrder(t *testing.T) {
+	f := newFixture(t)
+	got, err := runCode(t, f, "import sys\nprint('one')\nprint('two', file=sys.stderr)\nprint('three')")
+	if err != nil || got != "one\ntwo\nthree\n" {
+		t.Errorf("%q, %v", got, err)
+	}
+}
+
+// keeper runs code the way a conversation does, carrying what's kept from call to call.
+type keeper struct {
+	f     *fixture
+	kept  []byte
+	files map[string][]byte
+	saved int
+}
+
+func (k *keeper) run(code string, ctx context.Context) (string, error) {
+	call := k.f.call(map[string]string{"language": "python", "code": code})
+	call.Workspace, call.Files = k.kept, k.files
+	call.Execution = store.NewID()
+	call.SaveWorkspace = func(data []byte) error {
+		k.kept = data
+		k.saved++
+		return nil
+	}
+	out, err := k.f.tools["run_code"].Run(ctx, call)
+	return string(out), err
+}
+
+func TestCodeKeepsFilesInWork(t *testing.T) {
+	f := newFixture(t)
+	k := &keeper{f: f}
+	if got, err := k.run("import os\nos.mkdir('dir')\nopen('dir/a.txt', 'w').write('kept')\nos.symlink('dir/a.txt', 'link')\nopen('/tmp/gone', 'w').write('gone')\nprint(os.getcwd())", context.Background()); err != nil || got != "/work\n" {
+		t.Fatalf("%q, %v", got, err)
+	}
+	first := k.kept
+	got, err := k.run("import os\nprint(open('dir/a.txt').read(), open('link').read(), os.path.exists('/tmp/gone'))", context.Background())
+	if err != nil || got != "kept kept False\n" {
+		t.Errorf("%q, %v", got, err)
+	}
+	// Nothing changed, so it's the same bytes, which the store only keeps once.
+	if !bytes.Equal(first, k.kept) {
+		t.Error("nothing changed, and what's kept did")
+	}
+	// A failing call keeps its files too.
+	if _, err := k.run("open('more', 'w').write('x')\nraise SystemExit(4)", context.Background()); err == nil || !strings.Contains(err.Error(), "exit code 4") {
+		t.Errorf("%v", err)
+	}
+	if got, _ := k.run("print(open('more').read())", context.Background()); got != "x\n" {
+		t.Errorf("%q", got)
+	}
+}
+
+// These need a delegated cgroup, like the ones in internal/cgroup, so they only run inside:
+//
+//	systemd-run --user --scope -p Delegate=yes env TACK_TEST_CGROUP=1 go test ./internal/tools -run Delegated
+func delegated(t *testing.T) *keeper {
+	t.Helper()
+	if os.Getenv("TACK_TEST_CGROUP") == "" {
+		t.Skip("needs a delegated cgroup")
+	}
+	groups, err := cgroup.Setup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	for _, tool := range All(Options{Protected: []string{f.key}, Cgroups: groups}) {
+		f.tools[tool.Name] = tool
+	}
+	return &keeper{f: f}
+}
+
+func TestDelegatedCodeStoppedStillLeavesItsFiles(t *testing.T) {
+	k := delegated(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := k.run("import time\nopen('stopped', 'w').write('y')\ntime.sleep(60)", ctx); err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Errorf("%v", err)
+	}
+	if got, err := k.run("print(open('stopped').read())", context.Background()); got != "y\n" {
+		t.Errorf("%q, %v", got, err)
+	}
+}
+
+func TestDelegatedCodeLimits(t *testing.T) {
+	k := delegated(t)
+	// Memory: a list that wants far more than the limit. It says why it died.
+	got, err := k.run("x = [bytes(1 << 20) for _ in range(4096)]\nfor b in x: pass\nx = [bytearray(b'y' * (1 << 20)) for _ in range(4096)]\nprint('ALLOCATED')", context.Background())
+	if strings.Contains(got, "ALLOCATED") || err == nil || !strings.Contains(err.Error(), "memory limit") {
+		t.Errorf("memory: %q, %v", got, err)
+	}
+	// Processes: a fork bomb stops at the limit, and only hurts itself.
+	got, err = k.run("import os, time\ncount = 0\ntry:\n    while True:\n        if os.fork() == 0:\n            time.sleep(5)\n            os._exit(0)\n        count += 1\nexcept OSError as e:\n    print('stopped at', count, e.errno)\n    os._exit(0)", context.Background())
+	if !strings.Contains(got, "stopped at") {
+		t.Errorf("processes: %q, %v", got, err)
+	}
+	if strings.Contains(got, "stopped at 0") {
+		t.Errorf("no process could start: %q", got)
+	}
+}
+
+// What comes out is hostile, so tampering can only ever cost it its own files.
+func TestCodeThatBreaksSavingLosesOnlyItsOwnFiles(t *testing.T) {
+	f := newFixture(t)
+	k := &keeper{f: f}
+	if _, err := k.run("open('safe', 'w').write('safe')", context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Its parent is what saves, so kill that. Nothing comes out.
+	got, err := k.run("import os, signal, time\nos.kill(os.getppid(), signal.SIGKILL)\ntime.sleep(0.2)\nprint('still here')", context.Background())
+	if err == nil {
+		t.Errorf("no complaint: %q", got)
+	}
+	if got, err := k.run("print(open('safe').read())", context.Background()); err != nil || got != "safe\n" {
+		t.Errorf("%q, %v", got, err)
+	}
+	// An archive that climbs out has nowhere to go, because it's only unpacked in a sandbox.
+	var buf bytes.Buffer
+	zipped := gzip.NewWriter(&buf)
+	archive := tar.NewWriter(zipped)
+	body := []byte("escaped")
+	escape := filepath.Join(filepath.Dir(f.workdir), "escaped")
+	archive.WriteHeader(&tar.Header{Name: "../../../.." + escape, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+	archive.Write(body)
+	archive.Close()
+	zipped.Close()
+	k.kept = buf.Bytes()
+	got, err = k.run("print('ran')", context.Background())
+	if err != nil || !strings.Contains(got, "couldn't restore") || !strings.Contains(got, "ran\n") {
+		t.Errorf("%q, %v", got, err)
+	}
+	if _, err := os.Stat(escape); err == nil {
+		t.Error("it got out")
+	}
+	if checkKept([]byte("not an archive")) == nil || checkKept(buf.Bytes()[:buf.Len()-10]) == nil {
+		t.Error("a broken archive passed")
+	}
+}
+
+func TestCodeCanReadTheConversationButNotChangeIt(t *testing.T) {
+	f := newFixture(t)
+	k := &keeper{f: f, files: map[string][]byte{"notes.json": []byte(`[{"kind":"plan","key":"a","text":"b"}]`), "scratch.json": []byte(`{"x":"y"}`)}}
+	got, err := k.run(`
+import json
+print(json.load(open("/conversation/notes.json"))[0]["text"], json.load(open("/conversation/scratch.json"))["x"])
+for path in ["/conversation/notes.json", "/conversation/new"]:
+    try:
+        open(path, "w")
+        print("REACHED", path)
+    except OSError:
+        pass
+`, context.Background())
+	if err != nil || got != "b y\n" {
+		t.Errorf("%q, %v", got, err)
 	}
 }
 

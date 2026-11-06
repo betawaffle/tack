@@ -110,10 +110,11 @@ func All(opts Options) []core.Tool {
 			},
 		},
 		core.Tool{
-			Name:       "run_code",
-			Definition: definition("run_code", "Run code in a sandbox with no network, no input and no access to the user's files. Each call starts fresh, with an empty /tmp to write to that's gone afterwards. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped.", `{"language":{"type":"string","enum":["python"],"description":"The language it's written in."},"code":{"type":"string","description":"The code to run."}}`, `["language","code"]`),
-			Inspect:    inspectCode,
-			Run:        r.runCode,
+			Name:          "run_code",
+			Definition:    definition("run_code", codeDescription, `{"language":{"type":"string","enum":["python"],"description":"The language it's written in."},"code":{"type":"string","description":"The code to run."}}`, `["language","code"]`),
+			AutoSendBytes: codeAutoSendBytes,
+			Inspect:       inspectCode,
+			Run:           r.runCode,
 			Timeout: func(settings store.Settings) time.Duration {
 				return time.Duration(settings.WithDefaults().CommandTimeoutSeconds) * time.Second
 			},

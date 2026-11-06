@@ -122,6 +122,7 @@ const (
 	PauseRequested       = "pause_requested"
 	PauseCleared         = "pause_cleared"
 	NoteAdded            = "note_added"
+	ScratchChanged       = "scratch_changed"
 )
 
 // Note is an item on a conversation's page. The text is a block, like other content.
@@ -130,6 +131,13 @@ type Note struct {
 	Key    string `json:"key"`
 	Status string `json:"status,omitzero"`
 	Text   Ref    `json:"text"`
+}
+
+// Scratch is one key of a model's working text.
+type Scratch struct {
+	Key     string `json:"key"`
+	Text    Ref    `json:"text,omitzero"`
+	Deleted bool   `json:"deleted,omitzero"`
 }
 
 // Settings is everything a conversation keeps as its own. The config only provides
@@ -263,7 +271,7 @@ func Known(eventType string) bool {
 		TackStarted, RestartRequested, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
-		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
+		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged:
 		return true
 	}
 	return false
@@ -320,6 +328,9 @@ type Event struct {
 	// note_added
 	Note *Note `json:"note,omitzero"`
 
+	// scratch_changed: the whole of one key's text now, or that it's gone.
+	Scratch *Scratch `json:"scratch,omitzero"`
+
 	// config_loaded: the settings in force, at startup and on each reload.
 	Config Ref `json:"config,omitzero"`
 
@@ -373,6 +384,9 @@ type Event struct {
 	ToolCall  string     `json:"tool_call,omitzero"`
 	Output    Ref        `json:"output,omitzero"`
 	Artifacts []Artifact `json:"artifacts,omitzero"`
+	// tool_finished: the files run_code keeps between calls, as they were left. Absent
+	// means this call didn't change what's kept.
+	Workspace Ref `json:"workspace,omitzero"`
 }
 
 var errReadOnly = errors.New("this store was opened read-only")

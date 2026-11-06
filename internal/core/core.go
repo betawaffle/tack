@@ -105,7 +105,9 @@ type conversation struct {
 	notes  []*noteItem
 	// noteHistory is every note in order, with how many items there were at the time,
 	// so that a fork can keep only those from before its point.
-	noteHistory []noteAt
+	noteHistory    []noteAt
+	scratch        []*scratchItem
+	scratchHistory []scratchAt
 
 	forkedFrom string
 	forkItems  int
@@ -522,6 +524,12 @@ func (conv *conversation) fork(ev *store.Event) *conversation {
 	for _, start := range conv.chainStarts {
 		if start < ev.ForkItems {
 			out.chainStarts = append(out.chainStarts, start)
+		}
+	}
+	for _, entry := range conv.scratchHistory {
+		if entry.items <= ev.ForkItems {
+			out.scratchHistory = append(out.scratchHistory, entry)
+			out.applyScratch(entry.change)
 		}
 	}
 	for _, entry := range conv.noteHistory {

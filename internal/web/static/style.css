@@ -231,7 +231,7 @@ button.pending { cursor: progress; animation: pending 1s ease-in-out infinite al
 .mini.view[aria-pressed="true"] { color: var(--text); background: var(--hover); border-color: var(--muted); }
 .view-row { display: flex; margin: 4px 0; }
 .json {
-  margin: 4px 0 0; padding: 6px 8px; max-height: 480px; overflow: auto; background: var(--code);
+  margin: 4px 0 0; padding: 6px 8px; background: var(--code);
   border-radius: 6px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .j-key { color: var(--link); }
@@ -252,7 +252,6 @@ button.pending { cursor: progress; animation: pending 1s ease-in-out infinite al
 .tool-editor { margin-top: 12px; }
 .tool-editor .hint { margin-top: 6px; }
 .definitions { margin-top: 10px; }
-.definitions pre { max-height: 360px; overflow: auto; }
 #start-details { align-self: stretch; margin-top: 10px; }
 
 #controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 740px; width: 100%; margin: 0 auto; padding: 0 16px; font-size: 12.5px; }
@@ -322,10 +321,34 @@ button.pending { cursor: progress; animation: pending 1s ease-in-out infinite al
 .tool.state-waiting, .tool.state-finished, .tool.state-interrupted { border-color: var(--wait); }
 .tool-head, .tool-arg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .tool-name { margin: 0; font: 600 13px var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.tool-head { cursor: pointer; list-style-position: inside; }
+.tool:not([open]) .tool-flag { display: none; }
+.tool-preview {
+  flex: 1 1 0; min-width: 40px; margin: 0; overflow: hidden; color: var(--muted);
+  font: 12px var(--mono); white-space: nowrap; text-overflow: ellipsis;
+}
+.tool[open] .tool-preview { display: none; }
+.tool-head .spacer { flex: 0 0 auto; }
+.tool[open] .tool-head .spacer { flex: 1; }
+@media (hover: hover) {
+  .tool-head .copy-button, .tool-arg-head .copy-button { opacity: 0; }
+  .tool-head:hover .copy-button, .tool-arg:hover .copy-button, .tool-head :focus-visible, .tool-arg-head :focus-visible { opacity: 1; }
+}
 .tool-arg { margin-top: 7px; }
+.tool-arg-short .tool-text { margin: 0; padding: 0 4px; background: none; }
+.foldable { position: relative; }
+.folded { max-height: 24lh; overflow: hidden; -webkit-mask-image: linear-gradient(#000 80%, transparent); mask-image: linear-gradient(#000 80%, transparent); }
+.fold-toggle { margin-top: 4px; }
+.p-keyword { color: var(--spend); font-weight: 600; }
+.p-builtin { color: var(--link); }
+.p-name { color: var(--link); font-weight: 600; }
+.p-decorator { color: var(--link); }
+.p-string { color: light-dark(#1f7a4d, #7fd1a5); }
+.p-number { color: var(--warn); }
+.p-comment { color: var(--muted); font-style: italic; }
 .tool-arg-name { margin: 0; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }
 .tool-text {
-  margin: 4px 0 0; padding: 6px 8px; max-height: 320px; overflow: auto; background: var(--code);
+  margin: 4px 0 0; padding: 6px 8px; background: var(--code);
   border-radius: 6px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .ctrl {
@@ -334,6 +357,10 @@ button.pending { cursor: progress; animation: pending 1s ease-in-out infinite al
 }
 .tool-invalid { margin-top: 6px; color: var(--warn); overflow-wrap: anywhere; }
 .tool-output { margin-top: 8px; }
+.tool-result { margin-top: 8px; }
+.tool-compact-body { padding: 3px 0 0 14px; }
+.tool-compact-text { margin: 0 0 2px; font: 12.5px/1.45 var(--ui); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.tool-compact .tool-result { margin: 4px 0 6px 14px; }
 .tool-output summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; color: var(--muted); }
 .tool-allow { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-weight: 600; cursor: pointer; }
 .tool-allow input { width: 16px; height: 16px; accent-color: var(--link); }
@@ -341,7 +368,11 @@ button.pending { cursor: progress; animation: pending 1s ease-in-out infinite al
   margin: 10px 0; padding: 11px 13px; background: var(--wait-soft);
   border: 1px solid var(--wait); border-radius: 8px;
 }
-.denial { display: block; margin-top: 7px; }
+.decision-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mini.spends.quiet { border-color: var(--line); background: transparent; color: var(--muted); font-weight: 400; }
+.mini.spends.quiet:hover { border-color: var(--muted); background: var(--hover); color: var(--text); filter: none; }
+.denial { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.denial summary { cursor: pointer; }
 .denial textarea {
   display: block; width: 100%; padding: 6px 8px; resize: vertical; background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px;
@@ -437,3 +468,20 @@ button:disabled { opacity: .45; cursor: default; }
 .jump-buttons .mini { background: var(--surface); box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
 .jump-buttons .mini[hidden] { display: none; }
 #follow[aria-pressed="true"] { color: var(--text); border-color: var(--text); }
+
+/* With room beside the column, what's about a reply rather than in it moves out there. */
+#items { container-type: inline-size; }
+@container (min-width: 1240px) {
+  .assistant.has-side { display: flex; align-items: flex-start; gap: 20px; width: calc(100% + 230px); }
+  .reply-main { flex: none; width: calc(100% - 230px); min-width: 0; }
+  .reply-side { position: sticky; top: 8px; flex: none; width: 210px; }
+  .reply-side .ledger { flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 0; }
+  .reply-side .ledger-actions { margin: 4px 0 0; flex-wrap: wrap; }
+  .reply-side .chain-total { margin-top: 6px; }
+  .reply-side .fork-row { margin-top: 6px; }
+}
+
+/* Ways of showing text sit on the line that names it, instead of taking one of their own. */
+.thinking, .tool-output { position: relative; }
+.thinking > .view-row, .tool-output > .view-row { position: absolute; top: 0; right: 0; margin: 0; }
+.thinking:not([open]) > .view-row { display: none; }

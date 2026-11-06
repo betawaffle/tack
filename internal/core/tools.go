@@ -45,6 +45,11 @@ type Tool struct {
 	// from the system, so there's nothing for a person to vet before the model sees it.
 	TackWritten bool
 
+	// AutoSendBytes sends output up to this size to the model without asking, errors
+	// included. It's only for tools that can't see anything a person would want to vet,
+	// and a person has approved the call by then. Larger output still waits.
+	AutoSendBytes int
+
 	// Inspect runs when a call arrives, before any approval, on input the model
 	// chose. An error means the call can't run. Flags draw a person's attention on
 	// the approval card. It can touch metadata but mustn't open anything.
@@ -68,6 +73,17 @@ type Call struct {
 	// Keep stores a block beside the output. It's nil during Inspect, which mustn't
 	// do anything but look.
 	Keep func(name string, data []byte) error
+
+	// Workspace is the files kept from the last call that kept any, and Files is the
+	// conversation's own text for code to read, by file name. SaveWorkspace records what
+	// to keep from this call. All are empty during Inspect.
+	Workspace     []byte
+	Files         map[string][]byte
+	SaveWorkspace func(data []byte) error
+
+	// Scratch does an operation on the conversation's scratch and returns what the model
+	// should see. It's nil during Inspect.
+	Scratch func(op, key, text string) (string, error)
 }
 
 func (t *Tool) define(settings store.Settings) jsontext.Value {
@@ -168,16 +184,17 @@ func denialText(kind string) string {
 // toolCall is the state of one call, derived from events.
 type toolCall struct {
 	store.ToolCall
-	allowed  bool // approved to run, and not since told to stop
-	network  bool // and may use the network
-	started  bool
-	finished bool
-	output   store.Ref
-	failure  string
-	result   []store.Part // what the model sees; set once it's final
-	released bool         // the result is the tool's output, not a denial
-	edited   bool         // someone changed what the model sees
-	pending  *edit        // a change to that, held until it's applied or discarded
+	allowed   bool // approved to run, and not since told to stop
+	network   bool // and may use the network
+	started   bool
+	finished  bool
+	output    store.Ref
+	failure   string
+	workspace store.Ref    // the files this call left
+	result    []store.Part // what the model sees; set once it's final
+	released  bool         // the result is the tool's output, not a denial
+	edited    bool         // someone changed what the model sees
+	pending   *edit        // a change to that, held until it's applied or discarded
 }
 
 func (t *toolCall) resolved() bool { return t.result != nil }
@@ -239,6 +256,11 @@ func (conv *conversation) applyTool(ev *store.Event) {
 			conv.noteHistory = append(conv.noteHistory, noteAt{items: len(conv.items), note: ev.Note})
 			conv.addNote(ev.Note)
 		}
+	case store.ScratchChanged:
+		if ev.Scratch != nil {
+			conv.scratchHistory = append(conv.scratchHistory, scratchAt{items: len(conv.items), change: ev.Scratch})
+			conv.applyScratch(ev.Scratch)
+		}
 	case store.SettingsProposed:
 		// A newer proposal replaces an older one. The record keeps both.
 		conv.pendingSettings = &pendingSettings{id: ev.Edit, settings: *ev.Settings}
@@ -281,6 +303,7 @@ func (conv *conversation) applyTool(ev *store.Event) {
 	case store.ToolFinished:
 		if call := conv.tool(ev.ToolCall); call != nil {
 			call.finished, call.output, call.failure = true, ev.Output, ev.Error
+			call.workspace = ev.Workspace
 		}
 	}
 }
@@ -568,14 +591,15 @@ func (c *Core) failRemovedTools(conv *conversation) error {
 }
 
 // releaseOwnMessages lets the model see a tool's success message when tack wrote it,
-// since there's nothing in it for a person to vet. Errors still stop at the gate.
+// since there's nothing in it for a person to vet. Errors still stop at the gate. It also
+// sends small output from a tool that says that's fine.
 func (c *Core) releaseOwnMessages(conv *conversation) error {
 	c.mu.Lock()
 	var calls []toolCall
 	if conv.decision == nil {
 		for _, call := range conv.openCalls() {
 			tool := c.findTool(call.Name)
-			if tool != nil && tool.TackWritten && call.allowed && call.finished && call.failure == "" {
+			if tool != nil && call.allowed && call.finished && (tool.TackWritten && call.failure == "" || tool.AutoSendBytes > 0) {
 				calls = append(calls, *call)
 			}
 		}
@@ -586,11 +610,20 @@ func (c *Core) releaseOwnMessages(conv *conversation) error {
 	}
 	var choices []store.Choice
 	for i := range calls {
+		tool := c.findTool(calls[i].Name)
+		if !(tool.TackWritten && calls[i].failure == "") {
+			if output, err := c.cfg.Store.Get(calls[i].output); err != nil || len(output) > tool.AutoSendBytes {
+				continue
+			}
+		}
 		parts, err := c.releasedOutput(&calls[i])
 		if err != nil {
 			return err
 		}
 		choices = append(choices, store.Choice{ToolCall: calls[i].ID, Allow: true, Parts: parts})
+	}
+	if len(choices) == 0 {
+		return nil
 	}
 	return c.record(&store.Event{Type: store.DecisionMade, Conversation: conv.id, Choices: choices, By: "tack"})
 }
@@ -760,7 +793,18 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		}
 		return c.record(&store.Event{Type: store.NoteAdded, Conversation: conv.id, Note: &store.Note{Kind: kind, Key: key, Status: status, Text: block}})
 	}
-	output, failure := c.execute(ctx, call, Call{Workdir: workdir, Settings: settings, Execution: execution, Network: network, AddNote: addNote}, func(name string, data []byte) error {
+	var workspace store.Ref
+	saveWorkspace := func(data []byte) error {
+		ref, err := c.cfg.Store.Put(data)
+		workspace = ref
+		return err
+	}
+	kept, files, err := c.codeState(conv)
+	if err != nil {
+		return err
+	}
+	scratch := func(op, key, text string) (string, error) { return c.scratchOperation(conv, op, key, text) }
+	output, failure := c.execute(ctx, call, Call{Workdir: workdir, Settings: settings, Execution: execution, Network: network, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch}, func(name string, data []byte) error {
 		block, err := c.cfg.Store.Put(data)
 		if err != nil {
 			return err
@@ -779,6 +823,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		Execution:      execution,
 		Output:         ref,
 		Artifacts:      artifacts,
+		Workspace:      workspace,
 		DurationMillis: time.Since(start).Milliseconds(),
 	}
 	if failure != nil {
@@ -923,6 +968,19 @@ func (c *Core) Decide(convID, decisionID string, allow []string, text string) (<
 // DecideWithNetwork also lets the calls named in network use the network. They have
 // to be allowed, and to be calls that offer that.
 func (c *Core) DecideWithNetwork(convID, decisionID string, allow, network []string, text string) (<-chan Update, error) {
+	return c.DecideWith(convID, decisionID, Decision{Allow: allow, Network: network, Text: text})
+}
+
+// Decision is an answer to what a conversation is waiting on. Shorten sends only the start
+// and end of those calls' output, for ones that are allowed.
+type Decision struct {
+	Allow, Network, Shorten []string
+	Text                    string
+}
+
+// DecideWith answers a decision.
+func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update, error) {
+	allow, network := d.Allow, d.Network
 	var open decision
 	conv, err := c.reserve(convID, func(conv *conversation) error {
 		if conv.decision == nil || conv.decision.id != decisionID {
@@ -944,12 +1002,17 @@ func (c *Core) DecideWithNetwork(convID, decisionID string, allow, network []str
 				return ErrBadChoice
 			}
 		}
+		for _, id := range d.Shorten {
+			if !slices.Contains(allow, id) || open.kind != store.DecideOutput {
+				return ErrBadChoice
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	choices, err := c.choices(conv, &open, allow, network, text)
+	choices, err := c.choices(conv, &open, d)
 	if err == nil {
 		err = c.record(&store.Event{Type: store.DecisionMade, Conversation: convID, Decision: decisionID, Choices: choices, By: "user"})
 	}
@@ -960,7 +1023,8 @@ func (c *Core) DecideWithNetwork(convID, decisionID string, allow, network []str
 	return c.start(conv), nil
 }
 
-func (c *Core) choices(conv *conversation, open *decision, allow, network []string, text string) ([]store.Choice, error) {
+func (c *Core) choices(conv *conversation, open *decision, d Decision) ([]store.Choice, error) {
+	allow, network, text := d.Allow, d.Network, d.Text
 	if strings.TrimSpace(text) == "" {
 		text = denialText(open.kind)
 	}
@@ -982,7 +1046,12 @@ func (c *Core) choices(conv *conversation, open *decision, allow, network []stri
 		case !choice.Allow:
 			choice.Parts = denial
 		case open.kind == store.DecideOutput:
-			if choice.Parts, err = c.releasedOutput(&call); err != nil {
+			if slices.Contains(d.Shorten, id) {
+				choice.Parts, err = c.shortenedOutput(&call)
+			} else {
+				choice.Parts, err = c.releasedOutput(&call)
+			}
+			if err != nil {
 				return nil, err
 			}
 		}
@@ -1013,6 +1082,27 @@ func (c *Core) releasedOutput(call *toolCall) ([]store.Part, error) {
 		parts = append(parts, failure...)
 	}
 	return parts, nil
+}
+
+// ShortenedBytes is how much of each end of a call's output "shorten" keeps.
+const ShortenedBytes = 2048
+
+// shortenedOutput is a call's output with its middle taken out, marked so the model knows.
+func (c *Core) shortenedOutput(call *toolCall) ([]store.Part, error) {
+	output, err := c.cfg.Store.Get(call.output)
+	if err != nil {
+		return nil, err
+	}
+	if len(output) <= 2*ShortenedBytes {
+		return c.releasedOutput(call)
+	}
+	first := strings.ToValidUTF8(string(output[:ShortenedBytes]), "")
+	last := strings.ToValidUTF8(string(output[len(output)-ShortenedBytes:]), "")
+	text := fmt.Sprintf("%s\n\n[... the user left out %d bytes here ...]\n\n%s", first, len(output)-2*ShortenedBytes, last)
+	if call.failure != "" {
+		text += "\n\nThe tool reported an error: " + call.failure
+	}
+	return c.parts(text)
 }
 
 func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {

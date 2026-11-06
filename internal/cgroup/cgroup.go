@@ -46,7 +46,8 @@ func setupAt(base string) (*Manager, error) {
 	if err := os.WriteFile(filepath.Join(main, "cgroup.procs"), procs, 0o644); err != nil {
 		return nil, err
 	}
-	// Limits come later. Failing to enable a controller shouldn't stop anything now.
+	// Failing to enable a controller shouldn't stop anything now. What needs a limit
+	// finds out when it tries to set one.
 	os.WriteFile(filepath.Join(base, "cgroup.subtree_control"), []byte("+memory +pids"), 0o644)
 	return &Manager{base: base}, nil
 }
@@ -72,6 +73,43 @@ func (m *Manager) New(execution string) (*Group, error) {
 		return nil, err
 	}
 	return &Group{path: path, dir: dir}, nil
+}
+
+// Limits are what a group's processes can use together, including what they keep in
+// memory-backed filesystems.
+type Limits struct {
+	Memory int64
+	Pids   int
+}
+
+// Limit applies limits. It has to come before anything starts in the group. With swap
+// off there may be no swap file to set, which comes to the same thing.
+func (g *Group) Limit(limits Limits) error {
+	write := func(name, value string) error {
+		return os.WriteFile(filepath.Join(g.path, name), []byte(value), 0o644)
+	}
+	if err := write("memory.max", strconv.FormatInt(limits.Memory, 10)); err != nil {
+		return err
+	}
+	if err := write("memory.swap.max", "0"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return write("pids.max", strconv.Itoa(limits.Pids))
+}
+
+// OOMKills counts the processes the kernel killed for going over the memory limit.
+func (g *Group) OOMKills() int {
+	data, err := os.ReadFile(filepath.Join(g.path, "memory.events"))
+	if err != nil {
+		return 0
+	}
+	for line := range strings.Lines(string(data)) {
+		if rest, ok := strings.CutPrefix(line, "oom_kill "); ok {
+			n, _ := strconv.Atoi(strings.TrimSpace(rest))
+			return n
+		}
+	}
+	return 0
 }
 
 // FD is for starting a process directly inside the cgroup, so that there's no moment

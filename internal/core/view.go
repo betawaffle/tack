@@ -186,6 +186,7 @@ type Conversation struct {
 	Paused  bool        `json:"paused,omitzero"`
 	Running RunningView `json:"running"`
 	Notes   []NoteView  `json:"notes,omitzero"`
+	Scratch []NoteView  `json:"scratch,omitzero"`
 }
 
 // Conversations lists conversations, newest first.
@@ -271,6 +272,9 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	}
 	for _, note := range conv.notes {
 		out.Notes = append(out.Notes, NoteView{Kind: note.kind, Key: note.key, Status: note.status, Text: c.text([]store.Part{{Block: note.text}})})
+	}
+	for _, item := range conv.scratch {
+		out.Scratch = append(out.Scratch, NoteView{Key: item.key, Text: c.text([]store.Part{{Block: item.text}})})
 	}
 	out.Settings, out.ConfigSettings = effective, c.settings
 	out.SettingsChanged = !reflect.DeepEqual(effective.WithDefaults(), c.settings.WithDefaults())

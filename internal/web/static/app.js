@@ -149,7 +149,7 @@ async function copyText(text) {
 }
 
 function copyButton(label, getText) {
-  return button(label, "mini", async (b) => {
+  return button(label, "mini copy-button", async (b) => {
     await copyText(getText());
     b.textContent = "Copied";
     setTimeout(() => { b.textContent = label; }, 1200);
@@ -231,7 +231,10 @@ function renderCode(b) {
   const head = el("div", "codeblock-head");
   head.append(el("span", "", b.lang || "text"), copyButton("Copy", () => b.text));
   const pre = el("pre");
-  pre.append(el("code", "", b.text));
+  const code = el("code");
+  if (b.lang === "python" || b.lang === "py") appendPython(code, b.text);
+  else code.textContent = b.text;
+  pre.append(code);
   box.append(head, pre);
   return box;
 }
@@ -325,15 +328,18 @@ function ledger(s, controls) {
 }
 
 function replyNode() {
-  const node = el("div", "assistant");
+  const node = el("div", "assistant has-side");
+  const main = el("div", "reply-main");
+  const side = el("div", "reply-side");
+  node.append(main, side);
   const thinking = el("details", "thinking");
   thinking.hidden = true;
   thinking.append(el("summary", "", "Reasoning"));
   const reasoning = el("div", "thinking-text prose");
   thinking.append(reasoning);
   const text = el("div", "prose");
-  node.append(thinking, text);
-  return { node, thinking, reasoning, text };
+  main.append(thinking, text);
+  return { node, main, side, thinking, reasoning, text };
 }
 
 // Which replies have their reasoning open, kept across redraws, so it never closes on
@@ -359,11 +365,13 @@ function renderReply(item, key, decision) {
       else reasoningOpen.delete(item.call);
     });
   }
-  for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
-  if (item.stats) r.node.append(ledger(item.stats, controls));
-  if (item.chain_pico) r.node.append(chainNode(item));
-  if (item.name) r.node.append(el("div", "message-name", `name: ${item.name}`));
-  if (item.removed) r.node.append(el("div", "hint", "This reply is no longer sent."));
+  const { main, side } = r;
+  for (const call of item.tool_calls || []) main.append(renderToolCall(call, decision));
+  // What's about the reply rather than in it goes beside it, where there's room.
+  if (item.stats) side.append(ledger(item.stats, controls));
+  if (item.chain_pico) side.append(chainNode(item));
+  if (item.name) main.append(el("div", "message-name", `name: ${item.name}`));
+  if (item.removed) main.append(el("div", "hint", "This reply is no longer sent."));
   const fork = el("div", "fork-row");
   fork.append(button("Fork from here", "mini net", () => beginFork(item.index + 1, "")));
   if (item.edited) fork.append(" ", el("span", "tag", "Edited"));
@@ -371,7 +379,7 @@ function renderReply(item, key, decision) {
   if (!isRefused("written_assistant") && item.call) {
     const id = current;
     const target = `call:${item.call}`;
-    editable(r.node, target, () => {
+    editable(main, target, () => {
       const was = item.pending ?? item;
       const fields = { name: was.name };
       if (!isRefused("written_reasoning")) fields.reasoning = was.reasoning;
@@ -384,13 +392,13 @@ function renderReply(item, key, decision) {
         await postConversation(id, "message-edits", { call: item.call, ...values });
         await show(id);
       }, () => form.remove(), draft, fields);
-      r.node.append(form);
+      main.append(form);
       return form;
     });
-    fork.append(" ", button("Edit", draftFork ? "mini" : "mini net", () => r.node.openEditor().querySelector("textarea").focus()));
+    fork.append(" ", button("Edit", draftFork ? "mini" : "mini net", () => main.openEditor().querySelector("textarea").focus()));
   }
-  r.node.append(fork);
-  if (item.pending) r.node.append(pendingBlock(item.pending, "Stop sending this reply.", CHANGE_HINT));
+  side.append(fork);
+  if (item.pending) main.append(pendingBlock(item.pending, "Stop sending this reply.", CHANGE_HINT));
   return r.node;
 }
 
@@ -464,24 +472,85 @@ function appendExact(node, text) {
   node.append(text.slice(at));
 }
 
-function argumentRows(call) {
-  let args = null;
-  if (!call.invalid) {
-    try {
-      args = JSON.parse(call.arguments);
-    } catch {
-      // Shown raw below.
+function appendPython(node, text) {
+  for (const token of tackHighlight.python(text)) {
+    if (token.type === "plain") appendExact(node, token.text);
+    else {
+      const span = el("span", `p-${token.type}`);
+      appendExact(span, token.text);
+      node.append(span);
     }
   }
-  if (!args || typeof args !== "object") return [exact(call.arguments)];
-  return Object.entries(args).map(([name, value]) => {
-    const text = typeof value === "string" ? value : JSON.stringify(value);
-    const row = el("div", "tool-arg");
-    const head = el("div", "tool-arg-head");
-    head.append(exact(name, "tool-arg-name"), el("span", "spacer"), copyButton("Copy", () => text));
-    row.append(head, exact(text));
-    return row;
+}
+
+function pythonNode(text) {
+  const pre = el("pre", "tool-text");
+  appendPython(pre, text);
+  return pre;
+}
+
+// Which long blocks someone's opened all the way, kept across redraws.
+const foldsOpen = new Set();
+const FOLD_LINES = 24;
+
+// fold shows the start of something long, with a way to see the rest. It's never a box to
+// scroll inside, because those get in the way of scrolling the page.
+function fold(key, text, body) {
+  const lines = text.split("\n").length;
+  const box = el("div", "foldable");
+  box.append(body);
+  if (lines <= FOLD_LINES) return box;
+  const toggle = button("", "mini fold-toggle", () => {
+    if (foldsOpen.has(key)) foldsOpen.delete(key);
+    else foldsOpen.add(key);
+    paint();
   });
+  const paint = () => {
+    const open = foldsOpen.has(key);
+    body.classList.toggle("folded", !open);
+    toggle.textContent = open ? "Show less" : `Show all ${count(lines)} lines`;
+  };
+  paint();
+  box.append(toggle);
+  return box;
+}
+
+function parsedArguments(call) {
+  if (call.invalid) return null;
+  try {
+    const args = JSON.parse(call.arguments);
+    return args && typeof args === "object" && !Array.isArray(args) ? args : null;
+  } catch {
+    return null;
+  }
+}
+
+function argumentRows(call) {
+  const args = parsedArguments(call);
+  if (!args) return [exact(call.arguments)];
+  return Object.entries(args).flatMap(([name, value]) => {
+    // The card's head already says what language it is.
+    if (name === "language" && typeof args.code === "string") return [];
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    const python = name === "code" && args.language === "python";
+    const short = !python && text.length <= 72 && !text.includes("\n");
+    const row = el("div", short ? "tool-arg tool-arg-short" : "tool-arg");
+    const head = el("div", "tool-arg-head");
+    // Code doesn't need a label saying it's code.
+    if (!python) head.append(exact(name, "tool-arg-name"));
+    if (short) head.append(exact(text));
+    head.append(el("span", "spacer"), copyButton("Copy", () => text));
+    row.append(head);
+    if (!short) row.append(fold(`arg-${call.id}-${name}`, text, python ? pythonNode(text) : exact(text)));
+    return [row];
+  });
+}
+
+// A line to stand in for the arguments when a card's closed.
+function callPreview(call) {
+  const args = parsedArguments(call);
+  const text = args ? args.code ?? args.command ?? args.path ?? args.pattern ?? Object.values(args).find((v) => typeof v === "string") ?? "" : call.arguments;
+  return String(text).trim().split("\n")[0].replace(HIDDEN, "·");
 }
 
 const STATE_LABELS = {
@@ -648,50 +717,89 @@ function notesPanel(notes) {
   return node;
 }
 
-// Bookkeeping like a note gets one line where it happened, since the panel has what it said.
-function compactCall(call) {
-  const node = el("details", "tool-compact");
-  node.dataset.call = call.id;
-  let label = call.name;
-  try {
-    const args = JSON.parse(call.arguments);
-    if (args && args.kind && args.key) label = `${call.name}: ${args.kind}, ${args.key}${args.status ? `, ${args.status}` : ""}`;
-  } catch {
-    // The name will do.
+// Scratch is the model's own, so it starts closed.
+function scratchPanel(scratch) {
+  const node = el("details", "notes scratch");
+  node.append(el("summary", "", `Model's scratch (${scratch.length})`));
+  for (const item of scratch) {
+    const group = el("div", "note-group");
+    group.append(exact(item.key, "note-kind"));
+    const text = exact(item.text, "note-text");
+    text.addEventListener("click", () => text.classList.toggle("whole"));
+    group.append(text);
+    node.append(group);
   }
-  const summary = el("summary");
-  summary.append(exact(label, "tool-compact-label"));
-  if (call.result_edited || call.pending) node.open = true;
-  node.append(summary, ...argumentRows(call), resultControls(call));
   return node;
 }
 
+// Bookkeeping like a note gets one line where it happened, and opening it shows only what the
+// line doesn't already say.
+function compactCall(call) {
+  const node = el("details", "tool-compact");
+  node.dataset.call = call.id;
+  const args = parsedArguments(call) || {};
+  let label = call.name;
+  if (args.kind && args.key) label = `${call.name}: ${args.kind}, ${args.key}${args.status ? `, ${args.status}` : ""}`;
+  else if (args.op) label = `${call.name}: ${args.op}${args.key ? `, ${args.key}` : ""}`;
+  const summary = el("summary");
+  summary.append(exact(label, "tool-compact-label"));
+  if (call.result_edited || call.pending) node.open = true;
+  const known = ["kind", "key", "status", "op", "text"];
+  const body = el("div", "tool-compact-body");
+  if (Object.keys(args).length && Object.keys(args).every((name) => known.includes(name))) {
+    if (args.text) body.append(exact(args.text, "tool-compact-text"));
+  } else {
+    body.append(...argumentRows(call));
+  }
+  // A result that's more than an acknowledgment, like reading scratch back.
+  if (call.result && call.result !== "ok" && !call.result_edited) body.append(exact(call.result, "tool-compact-text"));
+  node.append(summary, body, resultControls(call));
+  return node;
+}
+
+// Which cards someone's opened or closed, kept across redraws.
+const cardsOpen = new Map();
+
 function renderToolCall(call, decision) {
   if (call.compact && !call.invalid && !call.error && !call.decidable) return compactCall(call);
-  const node = el("div", `tool state-${call.state}`);
+  const node = el("details", `tool state-${call.state}`);
   node.dataset.call = call.id;
-  const head = el("div", "tool-head");
-  head.append(exact(call.name, "tool-name"), el("span", "tag", STATE_LABELS[call.state] || call.state));
+  const needsYou = call.decidable || ["waiting", "finished", "interrupted", "running", "approved"].includes(call.state);
+  node.open = cardsOpen.get(call.id) ?? Boolean(needsYou || call.invalid);
+  const head = el("summary", "tool-head");
+  // Copying from the head shouldn't also close the card.
+  head.addEventListener("click", (event) => {
+    if (event.target.closest("button")) event.preventDefault();
+    // On the click, so a redraw right after it can't undo it.
+    else cardsOpen.set(call.id, !node.open);
+  });
+  head.append(exact(call.name, "tool-name"));
+  const args = parsedArguments(call);
+  if (args?.language) head.append(el("span", "tag", args.language));
+  head.append(el("span", "tag", STATE_LABELS[call.state] || call.state));
   for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
   if (call.network) head.append(el("span", "tag unused tool-flag", "Network allowed"));
-  head.append(el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
+  head.append(el("span", "tool-preview", callPreview(call)), el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
   node.append(head);
   if (call.invalid) node.append(el("div", "tool-invalid", `Can't run: ${call.invalid}`));
   node.append(...argumentRows(call));
   if (node.querySelector(".ctrl")) {
-    head.insertBefore(el("span", "tag unused", "Has hidden characters"), head.querySelector(".spacer"));
+    head.insertBefore(el("span", "tag unused", "Has hidden characters"), head.querySelector(".tool-preview"));
   }
 
   if (call.has_output) {
     // Empty output is left out of the JSON, and it's still output.
     const text = call.output || "";
     const output = el("details", "tool-output");
-    output.open = call.state === "finished";
+    output.open = true;
     const body = el("div");
     const row = el("div", "view-row");
     row.append(viewed(`output-${call.id}`, text, ["raw", "markdown", "json"], body, "tool-text"));
-    output.append(el("summary", "", `Output, ${count(new TextEncoder().encode(text).length)} bytes`), row, body);
+    output.append(el("summary", "", `Output, ${count(new TextEncoder().encode(text).length)} bytes`), row, fold(`output-${call.id}`, text, body));
     if (call.error) output.append(el("div", "tool-invalid", `The tool reported an error: ${call.error}`));
+    if (call.state === "sent" && !call.result_edited && (call.result || "").includes("[... the user left out ")) {
+      output.append(el("div", "hint", "The model got only the start and end of this."));
+    }
     node.append(output);
   }
   if (call.state === "denied" || call.state === "unavailable") {
@@ -703,6 +811,9 @@ function renderToolCall(call, decision) {
     const box = el("input");
     box.type = "checkbox";
     box.dataset.choice = call.id;
+    // With one call, the buttons say it all. With several, they start out allowed.
+    box.checked = true;
+    label.hidden = decision.calls.length === 1;
     label.append(box, el("span", "", DECISION_TEXT[decision.kind].allow));
     node.append(label);
     if (call.network_option) {
@@ -719,56 +830,72 @@ function renderToolCall(call, decision) {
 
 const DECISION_TEXT = {
   tool_calls: {
-    title: "Approve these tool calls?",
-    hint: "Nothing has run yet. Anything you leave unticked is denied.",
+    title: "Run these calls?",
+    single: "Run this call?",
     allow: "Allow this call",
     verb: "Run",
   },
   tool_output: {
     title: "Send this output to the model?",
-    hint: "The tools have run. The model sees only the output you tick.",
+    single: "Send this output to the model?",
     allow: "Send this output",
     verb: "Send",
   },
   interrupted: {
-    title: "These calls didn't finish",
-    hint: "tack stopped before they finished, and any that started may have partly run. Tick one to run it again. The model is told about the rest.",
+    title: "These calls didn't finish, and may have partly run.",
+    single: "This call didn't finish, and may have partly run.",
     allow: "Run this again",
-    verb: "Run",
+    verb: "Run again",
   },
 };
+
+const SHORTEN_ABOVE = 4096;
 
 function decisionCard(conv) {
   const decision = conv.decision;
   const text = DECISION_TEXT[decision.kind];
   const card = el("div", "decision-card");
-  card.append(el("strong", "", text.title), el("div", "hint", text.hint));
-  const label = el("label", "denial");
-  label.append(el("span", "hint", "What the model sees about anything denied"));
+  const single = decision.calls.length === 1;
+  const row = el("div", "row decision-row");
+  row.append(el("strong", "", single ? text.single : text.title));
+  const label = el("details", "denial");
+  label.append(el("summary", "", "What the model's told about anything denied"));
   const area = el("textarea");
   area.rows = 2;
   area.value = decision.denial_text;
   label.append(area);
-  const row = el("div", "row");
   const ticked = () => [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice);
   card.dataset.decision = decision.id;
-  const go = button("", "mini spends", async () => {
-    const allow = ticked();
+  const answer = async (allow, shorten) => {
     const network = [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network).filter((id) => allow.includes(id));
-    await call(conv.id, undefined, { id: decision.id, allow, network, denial_text: area.value });
-  });
+    await call(conv.id, undefined, { id: decision.id, allow, network, shorten, denial_text: area.value });
+  };
+  const go = button("", "mini spends", () => answer(ticked()));
   go.id = "decide";
   const relabel = () => {
     const allowed = ticked().length;
     const denied = decision.calls.length - allowed;
     if (!allowed) go.textContent = "Deny all";
+    else if (single) go.textContent = text.verb;
     else if (!denied) go.textContent = `${text.verb} ${allowed}`;
     else go.textContent = `${text.verb} ${allowed}, deny ${denied}`;
   };
   relabel();
   card.addEventListener("refresh", relabel);
-  row.append(go);
-  card.append(label, row);
+  row.append(el("span", "spacer"), go);
+  if (decision.kind === "tool_output") {
+    const large = conv.items.flatMap((item) => item.tool_calls || []).filter((c) => decision.calls.includes(c.id) && new TextEncoder().encode(c.output || "").length > SHORTEN_ABOVE);
+    if (large.length) {
+      const ids = large.map((c) => c.id);
+      const shorten = button("Send the first and last 2 KB", "mini spends quiet", () => answer(ticked(), ids.filter((id) => ticked().includes(id))));
+      shorten.id = "shorten";
+      row.append(shorten);
+    }
+  }
+  const deny = button(decision.kind === "tool_output" ? "Withhold" : "Deny", "mini spends quiet", () => answer([]));
+  deny.id = "deny";
+  row.append(deny);
+  card.append(row, label);
   return card;
 }
 
@@ -1027,15 +1154,15 @@ function renderSystem(item) {
 
   // Messages the model has already seen fold down, to keep the reading flowing.
   const foldable = !item.queued && !item.removed && (item.text.length > 90 || item.text.includes("\n"));
-  const folded = foldable && !unfolded.has(item.message);
+  const folded = foldable && !foldsOpen.has(item.message);
   const body = el("div", "system-body", item.removed ? "This message is no longer sent." : item.text);
   if (item.removed) body.classList.add("is-removed");
   if (folded) body.classList.add("folded");
   node.append(body);
   if (foldable) {
     const toggle = button(folded ? "Show" : "Fold", "mini", () => {
-      if (unfolded.has(item.message)) unfolded.delete(item.message);
-      else unfolded.add(item.message);
+      if (foldsOpen.has(item.message)) foldsOpen.delete(item.message);
+      else foldsOpen.add(item.message);
       node.replaceWith(renderSystem(item));
     });
     head.append(toggle);
@@ -1524,6 +1651,7 @@ async function show(id, polling, force) {
       nodes.splice(at < 0 ? nodes.length : at, 0, mark);
     }
     $("list").replaceChildren(...nodes);
+    if (conv.scratch) $("list").prepend(scratchPanel(conv.scratch));
     if (conv.notes) $("list").prepend(notesPanel(conv.notes));
     $("list").prepend(settingsPanel(conv));
     if (conv.budget.stopped && !conv.busy && !live) $("list").append(budgetCard(conv));
@@ -1560,7 +1688,7 @@ async function open(id) {
   draftFork = null;
   spendEditing = false;
   if (id !== current) {
-    unfolded.clear();
+    foldsOpen.clear();
     views.clear();
   }
   streaming = null;
@@ -1577,7 +1705,7 @@ async function startNew() {
   following = false;
   draftFork = null;
   spendEditing = false;
-  unfolded.clear();
+  foldsOpen.clear();
   views.clear();
   streaming = null;
   current = null;
@@ -1999,12 +2127,12 @@ async function call(id, message, decision) {
       $("list").append(shownUser);
     }
     setControls(id, {});
-    reply.node.append(waiting);
+    reply.main.append(waiting);
     $("list").append(reply.node);
     pinToTop(shownUser ?? reply.node);
     let res;
     if (decision) {
-      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, denial_text: decision.denial_text }, expected);
+      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, shorten: decision.shorten, denial_text: decision.denial_text }, expected);
     } else if (message !== undefined) {
       res = await postJSON(`/api/conversations/${id}/messages`, message, expected);
     } else {

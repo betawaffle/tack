@@ -133,9 +133,16 @@ New conversations can offer `read_file`, `list_files`, `search_files`, `edit_fil
 for the file tools, whose limit is you reading each call. Tools that need a working
 directory are left out without one.
 
-`run_code` runs Python, and needs no working directory because it can't see one. It only gets
-read-only system paths and an empty 64 MB `/tmp`, with no network, no input and a fixed
-environment. None of that depends on settings, and each call starts fresh.
+`run_code` runs Python, and needs no working directory because it can't see one. Its sandbox
+has only the interpreter, the standard library and the libraries they load, plus time zones, all
+read-only. It has no `/proc`, no network, no other programs and nothing installed on the machine. A
+syscall filter allows only what ordinary Python needs (x86-64 only), and limits of 2 GB of memory and
+256 processes apply when tack has a delegated cgroup. None of this is a setting. `/work` is kept
+between calls in a conversation, up to 16 MB, as an archive in the record that's only ever unpacked
+inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.
+Notes and scratch can be read from `/conversation`. Output up to 8 KB goes to the model without
+a second approval, because it can't contain anything the model didn't already have, and larger output
+waits, with the choice of sending only the first and last 2 KB
 
 Commands run under [bubblewrap](https://github.com/containers/bubblewrap), which is
 required. They see only read-only system paths, a writable working directory and an
@@ -205,7 +212,7 @@ While something is running:
 
 ## Notes
 
-`note` writes to a panel on the conversation's page, labelled as coming from the model. It
+`scratch` keeps text for the model to read back, with a closed panel on the page so that nothing in it is hidden from you. `note` writes to a panel on the conversation's page, labelled as coming from the model. It
 doesn't need approval, and nothing reads it back. A reply with notes carries on by itself unless
 you've paused the conversation, so only a reply with no tool calls ends the turn. Notes are
 offered even with no working directory.

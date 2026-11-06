@@ -26,7 +26,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js static/money.js
+//go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js static/money.js static/highlight.js
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -521,6 +521,7 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Allow      []string `json:"allow"`
 		Network    []string `json:"network"`
+		Shorten    []string `json:"shorten"`
 		DenialText string   `json:"denial_text"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
@@ -528,7 +529,7 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	updates, err := s.core.DecideWithNetwork(r.PathValue("id"), r.PathValue("decision"), body.Allow, body.Network, body.DenialText)
+	updates, err := s.core.DecideWith(r.PathValue("id"), r.PathValue("decision"), core.Decision{Allow: body.Allow, Network: body.Network, Shorten: body.Shorten, Text: body.DenialText})
 	if err != nil {
 		fail(w, err)
 		return

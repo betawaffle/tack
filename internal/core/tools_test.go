@@ -2002,3 +2002,171 @@ func TestARestartWithNothingRunningIsDrainedRightAway(t *testing.T) {
 		t.Errorf("send = %v", err)
 	}
 }
+
+func scratchReply(n int, op, key, text string) string {
+	args, _ := json.Marshal(map[string]string{"op": op, "key": key, "text": text})
+	if op == "read" || op == "list" || op == "delete" {
+		args, _ = json.Marshal(map[string]string{"op": op, "key": key})
+	}
+	return toolStream(wireCall{fmt.Sprintf("call-s%d", n), "scratch", string(args)})
+}
+
+func TestScratchIsTheModelsAndForksWithIt(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id, _ := c.NewConversation("Be brief.")
+	steps := []string{
+		scratchReply(1, "write", "a", "one"),
+		scratchReply(2, "append", "a", " two"),
+		scratchReply(3, "read", "a", ""),
+		scratchReply(4, "read", "nope", ""),
+		scratchReply(5, "write", "b", "other"),
+		scratchReply(6, "list", "", ""),
+		scratchReply(7, "delete", "b", ""),
+		replyStream,
+	}
+	next := 0
+	f.handler = func(w http.ResponseWriter) {
+		io.WriteString(w, steps[next])
+		next++
+	}
+	updates, err := c.Send(id, "Use scratch.")
+	mustFinish(t, updates, err)
+	conv, _ := c.Conversation(id)
+	if conv.Decision != nil {
+		t.Fatalf("it waited: %+v", conv.Decision)
+	}
+	last := func(call int) string {
+		m := f.messagesIn(call)
+		return fmt.Sprint(m[len(m)-1].Content)
+	}
+	if got := last(3); got != "one two" {
+		t.Errorf("read = %q", got)
+	}
+	if got := last(4); !strings.Contains(got, "nothing") {
+		t.Errorf("read of nothing = %q", got)
+	}
+	if got := last(6); got != "a: 7 bytes\nb: 5 bytes\n" {
+		t.Errorf("list = %q", got)
+	}
+	if len(conv.Scratch) != 1 || conv.Scratch[0].Key != "a" || conv.Scratch[0].Text != "one two" {
+		t.Errorf("scratch = %+v", conv.Scratch)
+	}
+	// A fork from before the delete has what was there then. Restarting finds the same.
+	var at int
+	for i, item := range conv.Items {
+		if len(item.ToolCalls) > 0 && strings.Contains(item.ToolCalls[0].Arguments, `"list"`) {
+			at = i + 1
+		}
+	}
+	forked, err := c.Fork(id, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := c.Conversation(forked)
+	if len(view.Scratch) != 2 {
+		t.Errorf("forked scratch = %+v", view.Scratch)
+	}
+	c = f.open()
+	view, _ = c.Conversation(id)
+	if len(view.Scratch) != 1 || view.Scratch[0].Text != "one two" {
+		t.Errorf("after restart = %+v", view.Scratch)
+	}
+}
+
+// keptTool is a tool like run_code, but in memory: it adds a letter to what's kept.
+func keptTool(saw *[]string, output string, failure error) Tool {
+	return Tool{
+		Name:          "kept",
+		Definition:    jsontext.Value(`{"type":"function","function":{"name":"kept","parameters":{"type":"object","properties":{}}}}`),
+		AutoSendBytes: 100,
+		Run: func(_ context.Context, call Call) ([]byte, error) {
+			*saw = append(*saw, string(call.Workspace)+"|"+string(call.Files["notes.json"])+"|"+string(call.Files["scratch.json"]))
+			if err := call.SaveWorkspace(append(call.Workspace, 'x')); err != nil {
+				return nil, err
+			}
+			return []byte(output), failure
+		},
+	}
+}
+
+func TestSmallOutputGoesStraightOnAndLargeWaits(t *testing.T) {
+	f := newToolFake(t)
+	var saw []string
+	output := "short"
+	f.tools = []Tool{keptTool(&saw, output, errors.New("exit code 3"))}
+	c := f.open()
+	id := f.askForTools(c, wireCall{"call-k", "kept", `{}`})
+	f.replyWith(replyStream)
+	f.decide(c, id, store.DecideCalls, "", "call-k")
+	conv, _ := c.Conversation(id)
+	if conv.Decision != nil {
+		t.Fatalf("small output waited: %+v", conv.Decision)
+	}
+	m := f.messagesIn(1)
+	if got := fmt.Sprint(m[len(m)-1].Content); !strings.Contains(got, "short") || !strings.Contains(got, "exit code 3") {
+		t.Errorf("sent = %q", got)
+	}
+
+	// Large output waits, and can be sent with its middle taken out.
+	big := strings.Repeat("a", 3000) + strings.Repeat("b", 3000) + strings.Repeat("c", 3000)
+	f.tools = []Tool{keptTool(&saw, big, nil)}
+	c = f.open()
+	f.replyWith(toolStream(wireCall{"call-l", "kept", `{}`}))
+	updates, err := c.Send(id, "Again.")
+	mustFinish(t, updates, err)
+	f.decide(c, id, store.DecideCalls, "", "call-l")
+	decision := f.decision(c, id, store.DecideOutput)
+	f.replyWith(replyStream)
+	updates, err = c.DecideWith(id, decision.ID, Decision{Allow: []string{"call-l"}, Shorten: []string{"call-l"}})
+	mustFinish(t, updates, err)
+	sent := f.messagesIn(len(f.bodies) - 1)
+	got := fmt.Sprint(sent[len(sent)-1].Content)
+	if !strings.HasPrefix(got, strings.Repeat("a", 2048)) || !strings.HasSuffix(got, strings.Repeat("c", 2048)) || !strings.Contains(got, "left out 4904 bytes") || strings.Contains(got, "b") && len(got) > 4300 {
+		t.Errorf("shortened = %d bytes: %.60q", len(got), got)
+	}
+	// What's kept carried over from the first call.
+	if len(saw) != 2 || !strings.HasPrefix(saw[1], "x|") {
+		t.Errorf("saw = %q", saw)
+	}
+}
+
+func TestKeptFilesFollowTheConversationAndItsForks(t *testing.T) {
+	f := newToolFake(t)
+	var saw []string
+	f.tools = append([]Tool{keptTool(&saw, "ok", nil)}, NoteTools()...)
+	c := f.open()
+	steps := []string{toolStream(wireCall{"c1", "kept", `{}`}), toolStream(wireCall{"c2", "kept", `{}`}), replyStream, toolStream(wireCall{"c3", "kept", `{}`}), replyStream}
+	next := 0
+	f.handler = func(w http.ResponseWriter) {
+		io.WriteString(w, steps[next])
+		next++
+	}
+	id, _ := c.NewConversation("Be brief.")
+	updates, err := c.Send(id, "Go.")
+	mustFinish(t, updates, err)
+	f.decide(c, id, store.DecideCalls, "", "c1")
+	f.decide(c, id, store.DecideCalls, "", "c2")
+	conv, _ := c.Conversation(id)
+	if len(saw) != 2 || saw[0] != "|[]|{}" || !strings.HasPrefix(saw[1], "x|") {
+		t.Fatalf("saw = %q", saw)
+	}
+	// A fork from before the second call goes on from the first call's files.
+	var at int
+	for i, item := range conv.Items {
+		if len(item.ToolCalls) > 0 && item.ToolCalls[0].ID == "c1" {
+			at = i + 1
+		}
+	}
+	forked, err := c.Fork(id, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, err = c.Send(forked, "More.")
+	mustFinish(t, updates, err)
+	f.decide(c, forked, store.DecideCalls, "", "c3")
+	if len(saw) != 3 || !strings.HasPrefix(saw[2], "x|") {
+		t.Errorf("forked saw = %q", saw)
+	}
+}

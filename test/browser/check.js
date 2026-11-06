@@ -45,7 +45,7 @@ const msgs = (b) => JSON.parse(b).messages;
   await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
   ok(await p.isVisible("#start"), "start panel shows");
   ok(
-    (await p.inputValue("#system-prompt")).startsWith("Be direct"),
+    (await p.inputValue("#system-prompt")).startsWith("You are an AI agent"),
     "default prompt prefilled",
   );
   await p.screenshot({ path: "shots/start-dark.png" });
@@ -69,7 +69,7 @@ const msgs = (b) => JSON.parse(b).messages;
     "code keeps tabs",
   );
   ok(
-    (await p.locator(".assistant > .prose").first().textContent()).includes("snake_case_name"),
+    (await p.locator(".reply-main > .prose").first().textContent()).includes("snake_case_name"),
     "snake_case left alone",
   );
   ok((await p.locator(".prose li.task input").count()) === 2, "task list");
@@ -115,7 +115,7 @@ const msgs = (b) => JSON.parse(b).messages;
     (await p.locator(".thinking-text pre.raw").textContent()).includes("**moment**"),
     "reasoning has its own raw view",
   );
-  ok((await p.locator(".assistant > .prose h2").count()) === 1, "the reply's view stays as it was");
+  ok((await p.locator(".reply-main > .prose h2").count()) === 1, "the reply's view stays as it was");
   await p.locator(".thinking button", { hasText: "Markdown" }).click();
   await p.locator(".codeblock button").click();
   ok(
@@ -151,18 +151,18 @@ const msgs = (b) => JSON.parse(b).messages;
   const jsonLedger = p.locator(".ledger").last();
   ok((await jsonLedger.locator("button", { hasText: "JSON" }).count()) === 1, "JSON view offered for valid JSON");
   await jsonLedger.locator("button", { hasText: "JSON" }).click();
-  const pretty = await p.locator(".assistant > .prose .json").textContent();
+  const pretty = await p.locator(".reply-main > .prose .json").textContent();
   ok(pretty === '{\n  "big": 12345678901234567890,\n  "ok": true\n}', "JSON is indented and numbers stay exact");
   await p.evaluate(() => window.scrollTo(0, 0));
   await send("notmd please");
   await idle();
   ok(
-    (await p.locator(".assistant > .prose .json").count()) === 1,
+    (await p.locator(".reply-main > .prose .json").count()) === 1,
     "the chosen view survives a redraw",
   );
   await p.locator(".ledger").last().locator("button", { hasText: "Raw" }).click();
   ok(
-    (await p.locator(".assistant > .prose").last().textContent()) === "a *b* c",
+    (await p.locator(".reply-main > .prose").last().textContent()) === "a *b* c",
     "markdown can be turned off for one message",
   );
 
@@ -191,7 +191,7 @@ const msgs = (b) => JSON.parse(b).messages;
   );
   ok((await p.locator(".tag.waiting").count()) === 0, "waiting tag clears once sent");
   ok(
-    m[0].role === "system" && m[0].content.startsWith("Be direct"),
+    m[0].role === "system" && m[0].content.startsWith("You are an AI agent"),
     "start prompt comes first",
   );
 
@@ -236,7 +236,7 @@ const msgs = (b) => JSON.parse(b).messages;
   await send("short two");
   await idle();
   b = await bodies();
-  ok(msgs(b[0])[0].content.startsWith("Be direct"), "held edit is not used");
+  ok(msgs(b[0])[0].content.startsWith("You are an AI agent"), "held edit is not used");
   ok((await p.locator(".tag.unused").count()) === 1, "held edit still shown after a call");
   await p.locator(".pending button", { hasText: "Apply" }).click();
   await p.waitForSelector('.tag:text("Edited")');
@@ -433,7 +433,7 @@ const msgs = (b) => JSON.parse(b).messages;
   });
   const lp = await light.newPage();
   await lp.goto(url);
-  await lp.waitForSelector(".assistant > .prose");
+  await lp.waitForSelector(".reply-main > .prose");
   await lp.evaluate(() => {
     document.getElementById("items").scrollTop = 0;
   });
@@ -450,7 +450,7 @@ const msgs = (b) => JSON.parse(b).messages;
   const merr = [];
   mp.on("pageerror", (e) => merr.push(e.message));
   await mp.goto(url);
-  await mp.waitForSelector(".assistant > .prose");
+  await mp.waitForSelector(".reply-main > .prose");
   for (const sel of ["html", "body", "main"]) {
     const over = await mp.evaluate((s) => {
       const e = document.querySelector(s);
