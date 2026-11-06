@@ -44,7 +44,7 @@ let page;
   ok((await p.inputValue("#workdir")) === WORK, "working directory prefilled");
   ok((await p.isChecked("#offer-tools")), "tools offered by default");
   await p.fill("#workdir", "");
-  ok((await prompt()).includes("access to files"), "no working directory leaves no real tools here");
+  ok((await prompt()).includes("user's approval") && !(await prompt()).includes("working directory"), "no working directory still leaves running code");
   await p.fill("#workdir", WORK);
   ok((await prompt()).includes("user's approval"), "and a working directory brings them back");
   let text = await prompt();
@@ -87,7 +87,7 @@ let page;
   await idle();
   b = await bodies();
   ok(b[0].messages[0].content === "Written by hand.", "hand edit is what gets sent");
-  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command,note", "tools are offered");
+  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command,run_code,note", "tools are offered");
 
   // A bad directory is refused, and nothing is lost.
   await fresh();
@@ -237,8 +237,8 @@ let page;
   await p.waitForSelector(".ledger", { timeout: 15000 });
   await idle();
   b = await bodies();
-  ok(b[0].tools.map((t) => t.function.name).join() === "note", "no working directory leaves only notes");
-  ok(b[0].messages[0].content.includes("access to files"), "and the model is told");
+  ok(b[0].tools.map((t) => t.function.name).join() === "run_code,note", "no working directory leaves running code and notes");
+  ok(b[0].messages[0].content.includes("user's approval"), "and the model is told how those work");
   fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
 
   // Holding the very first message starts the conversation.
@@ -633,6 +633,20 @@ let page;
   await p.locator("#refused-row button", { hasText: "Try again" }).click();
   await p.waitForFunction(() => !document.getElementById("refused-row").textContent.includes("message names"), null, { timeout: 5000 });
   ok(await p.locator("#name-row").isVisible(), "and it can be asked again");
+
+  // Running code, with a conversation that has no working directory.
+  await fresh();
+  await p.fill("#workdir", "");
+  await reset();
+  await send("tools code");
+  await card();
+  ok((await p.locator(".tool-flag", { hasText: "Runs code" }).count()) === 1, "running code is flagged");
+  await p.locator("input[data-choice]").check();
+  await p.click("#decide");
+  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
+  const codeOutput = await p.locator(".tool-output").last().innerText();
+  ok(codeOutput.includes("4") && codeOutput.includes("no such file"), "it runs, and can't see outside its sandbox: " + codeOutput.slice(0, 120));
+  ok((await p.locator("input[data-network]").count()) === 0, "and has no network option");
 
   // A reply coming in leaves the page alone, and only draws whole blocks.
   await p.setViewportSize({ width: 1280, height: 500 });

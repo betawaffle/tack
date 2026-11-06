@@ -54,6 +54,7 @@ const TOOL_CALLS = {
   wrong: [["read_file", '{"file":"hello.txt"}']],
   note: [["note", JSON.stringify({ kind: "plan", key: "first", text: "Do the <b>thing</b>", status: "doing" })], ["note", JSON.stringify({ kind: "tool_wish", key: "w", text: "A tool for go test" })]],
   notego: [["note", JSON.stringify({ kind: "concern", key: "c", text: "This looks odd" })]],
+  code: [["run_code", JSON.stringify({ language: "python", code: `print(2 + 2)\ntry:\n    open(${JSON.stringify(process.env.TACK_TEST_WORKDIR + "/hello.txt")})\nexcept OSError as e:\n    print("no such file:", e)` })]],
   sleep: [["run_command", JSON.stringify({ command: "sleep 2; echo finished" })]],
   long: [["run_command", JSON.stringify({ command: "echo begun; sleep 30" })]],
   edit: [["edit_file", JSON.stringify({ path: "hello.txt", old_string: "hello", new_string: "goodbye" })]],

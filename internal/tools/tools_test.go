@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -649,7 +650,7 @@ func TestEditIsMarkedAsTacksOwnMessage(t *testing.T) {
 		t.Error("only edit_file writes its own message")
 	}
 	for name, tool := range f.tools {
-		if !tool.NeedsWorkdir {
+		if !tool.NeedsWorkdir && name != "run_code" {
 			t.Errorf("%s doesn't need a working directory", name)
 		}
 	}
@@ -749,5 +750,157 @@ func TestStoppingACommandAsksFirstWithACgroup(t *testing.T) {
 	time.Sleep(4 * time.Second)
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("a child survived")
+	}
+}
+
+func runCode(t *testing.T, f *fixture, code string) (string, error) {
+	t.Helper()
+	if _, err := os.Stat(python); err != nil {
+		t.Skip("no python here")
+	}
+	return f.run("run_code", map[string]string{"language": "python", "code": code})
+}
+
+func TestCodeRunsAndReportsLikeACommand(t *testing.T) {
+	f := newFixture(t)
+	got, err := runCode(t, f, "import sys\nprint(2 + 2)\nprint('to-stderr', file=sys.stderr)\nsys.exit(3)")
+	if !strings.Contains(got, "4\n") || !strings.Contains(got, "to-stderr") {
+		t.Errorf("output = %q", got)
+	}
+	if err == nil || err.Error() != "exit code 3" {
+		t.Errorf("err = %v", err)
+	}
+	// It's not limited by how long a command line can be.
+	long := "x = '" + strings.Repeat("a", 1<<20) + "'\nprint(len(x))"
+	if got, err := runCode(t, f, long); err != nil || got != "1048576\n" {
+		t.Errorf("long = %q, %v", got, err)
+	}
+}
+
+func TestCodeCantReachAnything(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv("TACK_SHOULD_NOT_LEAK", "secret-looking")
+	outside := filepath.Join(filepath.Dir(f.workdir), "outside.txt")
+	f.write(outside, "outside\n", 0o644)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.write(filepath.Join(f.workdir, "secret.txt"), "in the workdir\n", 0o644)
+	script := `
+import os, socket, subprocess
+def attempt(name, fn):
+    try:
+        fn()
+        print("REACHED", name)
+    except Exception as e:
+        print("refused", name, type(e).__name__)
+for path in ` + fmt.Sprintf("%q, %q, %q, %q, %q", outside, f.key, filepath.Join(f.workdir, "secret.txt"), "/etc/passwd", filepath.Join(home, ".bashrc")) + `:
+    attempt("read " + path, lambda: open(path).read())
+attempt("write usr", lambda: open("/usr/nope", "w"))
+def connect():
+    s = socket.socket()
+    s.settimeout(2)
+    s.connect(("1.1.1.1", 53))
+attempt("network", connect)
+attempt("namespace", lambda: subprocess.run(["unshare", "-m", "true"], check=True, capture_output=True))
+print("cwd", os.getcwd())
+print("env", sorted(os.environ))
+print("pids", sorted(p for p in os.listdir("/proc") if p.isdigit()))
+print("workdir exists", os.path.exists(` + fmt.Sprintf("%q", f.workdir) + `))
+open("/tmp/mine", "w").write("kept for now")
+print("tmp", open("/tmp/mine").read())
+`
+	got, err := runCode(t, f, script)
+	if err != nil {
+		t.Fatalf("%v: %s", err, got)
+	}
+	if strings.Contains(got, "REACHED") {
+		t.Errorf("it got out:\n%s", got)
+	}
+	if strings.Contains(got, "TACK_SHOULD_NOT_LEAK") || strings.Contains(got, "ONLY_THIS") {
+		t.Errorf("the environment leaked:\n%s", got)
+	}
+	for _, want := range []string{"cwd /tmp\n", "workdir exists False\n", "tmp kept for now\n", "refused network", "refused namespace"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	// Nothing carries over.
+	if got, err := runCode(t, f, "import os\nprint(os.listdir('/tmp'))"); err != nil || got != "[]\n" {
+		t.Errorf("next call = %q, %v", got, err)
+	}
+}
+
+func TestCodeNeedsNoWorkingDirectoryAndIgnoresSettings(t *testing.T) {
+	f := newFixture(t)
+	if _, err := os.Stat(python); err != nil {
+		t.Skip("no python here")
+	}
+	// A conversation's settings can widen what commands see, but never what code sees.
+	call := f.call(map[string]string{"language": "python", "code": "import os\nprint(os.path.exists('/etc/passwd'), os.path.exists(" + fmt.Sprintf("%q", f.workdir) + "))"})
+	call.Workdir = ""
+	call.Settings.SandboxReadOnly = []string{"/etc", f.workdir}
+	call.Network = true
+	out, err := f.tools["run_code"].Run(context.Background(), call)
+	if err != nil || string(out) != "False False\n" {
+		t.Errorf("out = %q, %v", out, err)
+	}
+	if f.tools["run_code"].NeedsWorkdir || f.tools["run_code"].NetworkOption || f.tools["run_code"].NoApproval {
+		t.Error("it should need no directory, offer no network, and still need approval")
+	}
+}
+
+func TestCodeLimitsHold(t *testing.T) {
+	f := newFixture(t)
+	// /tmp is small.
+	got, err := runCode(t, f, "try:\n    open('/tmp/big', 'wb').write(b'x' * (128 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)")
+	if err != nil || strings.Contains(got, "WROTE") {
+		t.Errorf("big = %q, %v", got, err)
+	}
+	// Output is capped, and it says so.
+	call := f.call(map[string]string{"language": "python", "code": "print('y' * 100000)"})
+	call.Settings.MaxReadBytes = 1000
+	out, err := f.tools["run_code"].Run(context.Background(), call)
+	if len(out) != 1000 || err == nil || !strings.Contains(err.Error(), "were dropped") {
+		t.Errorf("capped = %d bytes, %v", len(out), err)
+	}
+	// Stopping it ends everything it started.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	call = f.call(map[string]string{"language": "python", "code": "import subprocess, time\nsubprocess.Popen(['sleep', '60'])\ntime.sleep(60)"})
+	started := time.Now()
+	_, err = f.tools["run_code"].Run(ctx, call)
+	if err == nil || !strings.Contains(err.Error(), "the code was stopped") {
+		t.Errorf("stopped = %v", err)
+	}
+	if took := time.Since(started); took > 20*time.Second {
+		t.Errorf("stopping took %v", took)
+	}
+}
+
+func TestBadCodeIsCaughtBeforeApproval(t *testing.T) {
+	f := newFixture(t)
+	if flags := f.inspect("run_code", map[string]string{"language": "python", "code": "print(1)"}); !slices.Equal(flags, []string{FlagCode}) {
+		t.Errorf("flags = %v", flags)
+	}
+	for name, args := range map[string]map[string]string{
+		"language": {"language": "ruby", "code": "puts 1"},
+		"empty":    {"language": "python", "code": "  "},
+		"nul":      {"language": "python", "code": "a\x00b"},
+	} {
+		if _, err := f.tools["run_code"].Inspect(f.call(args)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestCommandOutputIsCappedWhateverItsSize(t *testing.T) {
+	f := newFixture(t)
+	call := f.call(map[string]string{"command": "head -c 5000000 /dev/zero"})
+	call.Settings.MaxReadBytes = 1000
+	out, err := f.tools["run_command"].Run(context.Background(), call)
+	if len(out) != 1000 || err == nil || !strings.Contains(err.Error(), "were dropped") {
+		t.Errorf("capped = %d bytes, %v", len(out), err)
 	}
 }

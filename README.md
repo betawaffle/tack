@@ -128,10 +128,14 @@ edit that text by hand, it's sent as written.
 
 ## Tool calls
 
-New conversations can offer `read_file`, `list_files`, `search_files`, `edit_file`
-and `run_command`, starting from a working directory you choose. There's no sandbox
+New conversations can offer `read_file`, `list_files`, `search_files`, `edit_file`,
+`run_command` and `run_code`, starting from a working directory you choose. There's no sandbox
 for the file tools, whose limit is you reading each call. Tools that need a working
 directory are left out without one.
+
+`run_code` runs Python, and needs no working directory because it can't see one. It only gets
+read-only system paths and an empty 64 MB `/tmp`, with no network, no input and a fixed
+environment. None of that depends on settings, and each call starts fresh.
 
 Commands run under [bubblewrap](https://github.com/containers/bubblewrap), which is
 required. They see only read-only system paths, a writable working directory and an

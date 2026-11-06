@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -199,22 +200,26 @@ func checkWorkdir(workdir string) error {
 	return nil
 }
 
-// capped keeps the start of what's written and counts the rest.
+// capped keeps the start of what's written and counts the rest. The buffer is a field
+// rather than embedded, because a bytes.Buffer's ReadFrom would let io.Copy go straight
+// past Write, and past the limit.
 type capped struct {
-	bytes.Buffer
+	buffer  bytes.Buffer
 	limit   int
 	dropped int64
 }
 
 func (c *capped) Write(p []byte) (int, error) {
-	room := max(c.limit-c.Len(), 0)
+	room := max(c.limit-c.buffer.Len(), 0)
 	if room >= len(p) {
-		return c.Buffer.Write(p)
+		return c.buffer.Write(p)
 	}
-	c.Buffer.Write(p[:room])
+	c.buffer.Write(p[:room])
 	c.dropped += int64(len(p) - room)
 	return len(p), nil
 }
+
+func (c *capped) Bytes() []byte { return c.buffer.Bytes() }
 
 // bwrap is the sandbox. It's an absolute path, so that it can't depend on any PATH.
 const bwrap = "/usr/bin/bwrap"
@@ -280,13 +285,20 @@ func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error)
 			return nil, err
 		}
 	}
-	output := capped{limit: s.MaxReadBytes}
+	env := []string{}
+	for _, name := range slices.Sorted(maps.Keys(s.CommandEnv)) {
+		env = append(env, name+"="+s.CommandEnv[name])
+	}
 	cmd := exec.CommandContext(ctx, bwrap, append(sandbox, "/bin/bash", "-c", args["command"])...)
 	cmd.Dir = call.Workdir
-	cmd.Env = []string{}
-	for _, name := range slices.Sorted(maps.Keys(s.CommandEnv)) {
-		cmd.Env = append(cmd.Env, name+"="+s.CommandEnv[name])
-	}
+	cmd.Env = env
+	return r.runSandboxed(ctx, cmd, call, s, "command")
+}
+
+// runSandboxed runs a prepared bwrap command, keeping its output, stopping it if the
+// context ends, and reporting whatever went wrong alongside what it printed.
+func (r *reader) runSandboxed(ctx context.Context, cmd *exec.Cmd, call core.Call, s store.Settings, what string) ([]byte, error) {
+	output := capped{limit: s.MaxReadBytes}
 	cmd.Stdout, cmd.Stderr = &output, &output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Stopping prefers to be clean: a signal first, then a kill if that's ignored.
@@ -296,10 +308,11 @@ func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error)
 	if r.cgroups != nil {
 		id := call.Execution
 		if id == "" {
-			return nil, errors.New("a command needs an execution ID")
+			return nil, fmt.Errorf("a %s needs an execution ID", what)
 		}
+		var err error
 		if group, err = r.cgroups.New(id); err != nil {
-			return nil, fmt.Errorf("making a cgroup for this command: %w", err)
+			return nil, fmt.Errorf("making a cgroup for this %s: %w", what, err)
 		}
 		defer group.Close()
 		cmd.SysProcAttr.UseCgroupFD = true
@@ -314,13 +327,13 @@ func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error)
 		return terminate()
 	}
 	cmd.WaitDelay = grace + time.Duration(s.OutputWaitSeconds)*time.Second
-	err = cmd.Run()
+	err := cmd.Run()
 	if killer != nil {
 		killer.Stop()
 	}
 	var problems []string
 	if ctx.Err() != nil {
-		problems = append(problems, "the command was stopped: "+context.Cause(ctx).Error())
+		problems = append(problems, "the "+what+" was stopped: "+context.Cause(ctx).Error())
 	} else if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() >= 0 {
@@ -336,4 +349,84 @@ func (r *reader) runCommand(ctx context.Context, call core.Call) ([]byte, error)
 		return output.Bytes(), errors.New(strings.Join(problems, "; "))
 	}
 	return output.Bytes(), nil
+}
+
+// python is the interpreter for run_code. It's an absolute path, so it can't depend on
+// any PATH.
+const python = "/usr/bin/python3"
+
+// codeTmpBytes is how much run_code can write, since its /tmp is held in memory.
+const codeTmpBytes = 64 << 20
+
+// codeSystemPaths is all that code can see of the machine, whatever a config says
+// commands can see. Nothing from /etc, the home directory, or the working directory.
+var codeSystemPaths = []string{"/usr", "/bin", "/lib", "/lib64"}
+
+// codeEnv is the whole environment for code. It's fixed, because a config's
+// environment for commands can have anything in it.
+var codeEnv = []string{"PATH=/usr/bin:/bin", "HOME=/tmp", "LANG=C.UTF-8", "PYTHONDONTWRITEBYTECODE=1"}
+
+// codeArgs is the sandbox for run_code: read-only system paths and a small empty /tmp
+// that's gone afterwards. There's no network, no input and no working directory, and it's
+// not a setting, so nothing about a conversation can widen it. It shares the host's
+// kernel, like commands do.
+func (r *reader) codeArgs() []string {
+	args := []string{"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
+		"--proc", "/proc", "--dev", "/dev", "--size", strconv.Itoa(codeTmpBytes), "--tmpfs", "/tmp"}
+	for _, path := range codeSystemPaths {
+		args = append(args, "--ro-bind-try", path, path)
+	}
+	for _, path := range r.protected {
+		if slices.ContainsFunc(codeSystemPaths, func(dir string) bool { return within(path, dir) }) {
+			args = append(args, "--ro-bind", "/dev/null", path)
+		}
+	}
+	return append(args, "--chdir", "/tmp")
+}
+
+func inspectCode(call core.Call) ([]string, error) {
+	args, err := arguments(call, "language", "code")
+	if err != nil {
+		return nil, err
+	}
+	if args["language"] != "python" {
+		return nil, errors.New("the only language is python")
+	}
+	if strings.TrimSpace(args["code"]) == "" {
+		return nil, errors.New("the code is empty")
+	}
+	if strings.ContainsRune(args["code"], 0) {
+		return nil, errors.New("the code has a NUL in it")
+	}
+	for _, needed := range []string{bwrap, python} {
+		if _, err := os.Stat(needed); err != nil {
+			return nil, fmt.Errorf("running code needs %s, and it isn't there", needed)
+		}
+	}
+	return []string{FlagCode}, nil
+}
+
+// runCode runs code in its own sandbox. The code goes in on stdin, which is also why it
+// has no input of its own, and so it can be longer than a command line.
+func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
+	if _, err := inspectCode(call); err != nil {
+		return nil, err
+	}
+	args, err := arguments(call, "language", "code")
+	if err != nil {
+		return nil, err
+	}
+	s := call.Settings.WithDefaults()
+	sandbox := r.codeArgs()
+	if call.Keep != nil {
+		if err := call.Keep("sandbox", []byte(strings.Join(sandbox, "\n"))); err != nil {
+			return nil, err
+		}
+	}
+	cmd := exec.CommandContext(ctx, bwrap, append(sandbox, python, "-I", "-")...)
+	// Somewhere that's always there. It's tack's side of things, which code never sees.
+	cmd.Dir = "/"
+	cmd.Env = codeEnv
+	cmd.Stdin = strings.NewReader(args["code"])
+	return r.runSandboxed(ctx, cmd, call, s, "code")
 }

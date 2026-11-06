@@ -40,6 +40,9 @@ const (
 // a candidate for approving automatically.
 const FlagCommand = "Runs any command"
 
+// FlagCode is on every run_code, for the same reason.
+const FlagCode = "Runs code"
+
 // Options configure the tools.
 type Options struct {
 	// Protected files are refused outright, wherever a path to them comes from.
@@ -102,6 +105,15 @@ func All(opts Options) []core.Tool {
 			Definition:    definition("run_command", "Run a command with bash in the working directory, in a sandbox. Only the working directory is writable, there is no input, the environment is limited, and there is no network unless the user allows it for the call. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the command was stopped.", `{"command":{"type":"string","description":"The command to run."}}`, `["command"]`),
 			Inspect:       inspectCommand,
 			Run:           r.runCommand,
+			Timeout: func(settings store.Settings) time.Duration {
+				return time.Duration(settings.WithDefaults().CommandTimeoutSeconds) * time.Second
+			},
+		},
+		core.Tool{
+			Name:       "run_code",
+			Definition: definition("run_code", "Run code in a sandbox with no network, no input and no access to the user's files. Each call starts fresh, with an empty /tmp to write to that's gone afterwards. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped.", `{"language":{"type":"string","enum":["python"],"description":"The language it's written in."},"code":{"type":"string","description":"The code to run."}}`, `["language","code"]`),
+			Inspect:    inspectCode,
+			Run:        r.runCode,
 			Timeout: func(settings store.Settings) time.Duration {
 				return time.Duration(settings.WithDefaults().CommandTimeoutSeconds) * time.Second
 			},
