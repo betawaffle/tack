@@ -67,6 +67,7 @@ These are only defaults, copied into each new conversation, which owns them afte
 | `max_read_bytes` | 16 MiB | For `read_file`, `edit_file` and command output |
 | `max_listed`, `max_matches` | `10000`, `1000` | |
 | `max_search_file_bytes`, `max_line_shown` | 2 MiB, `500` | |
+| `notes_without_text_continue` | `false` | Carry on after a reply with notes and no text, instead of ending the turn |
 
 Paths have to be absolute. To apply changes, press **Reload config** in the page,
 which tells you if the file has a problem and leaves the running settings alone if
@@ -98,6 +99,11 @@ Put your own in `~/.config/tack/prompt/`: `<name>.md` replaces the section of th
 name, an empty file removes it, and any other name adds a section. There's no
 template language, only `{{workdir}}`, which becomes the working directory. They're
 read each time, so editing them doesn't need a restart.
+
+Below the text, the start panel can also leave out tools, edit what each tool and its
+parameters are described as, and change the settings. Only descriptions can be edited: the
+rest of a definition is what the tool's code relies on. Each conversation shows the exact
+definitions it sends, and **Start another like this** fills the panel in from it.
 
 The start panel has a checkbox per section above the text that will be sent. If you
 edit that text by hand, it's sent as written.
@@ -172,7 +178,8 @@ While something is running:
 doesn't need approval, and nothing reads it back. A reply whose only tool calls are notes
 ends the turn without another model call, and the results go out with your next message.
 `keep_going` is how a model says it has more to do. These are offered even with no working
-directory.
+directory. With `notes_without_text_continue` on, a reply with notes and no text carries on
+by itself, so only text ends the turn.
 
 ## Reading the record
 
