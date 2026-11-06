@@ -23,7 +23,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js
+//go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js static/money.js
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -32,7 +32,7 @@ const maxMessageBytes = 8 << 20
 // this server, so that it has to be reloaded. Any other change to the page's files only
 // offers a reload. Pages send it with every request, and it's checked there too, since
 // they might not have heard yet.
-const pageRequired = 1
+const pageRequired = 2
 
 const pageRequiredHeader = "X-Tack-Page-Required"
 
@@ -94,22 +94,22 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations", s.create)
 	mux.HandleFunc("GET /api/conversations/{id}", s.get)
 	mux.HandleFunc("GET /api/conversations/{id}/tools", s.definitions)
-	mux.HandleFunc("POST /api/conversations/{id}/fork", s.fork)
-	mux.HandleFunc("POST /api/conversations/{id}/messages", s.send)
-	mux.HandleFunc("POST /api/conversations/{id}/held", s.hold)
-	mux.HandleFunc("POST /api/conversations/{id}/reply", s.reply)
-	mux.HandleFunc("POST /api/conversations/{id}/system", s.addSystem)
-	mux.HandleFunc("POST /api/conversations/{id}/system/{message}/edits", s.proposeEdit)
-	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.applyEdit)
-	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.discardEdit)
-	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.decide)
-	mux.HandleFunc("POST /api/conversations/{id}/budget", s.addBudget)
+	mux.HandleFunc("POST /api/conversations/{id}/fork", s.current(s.fork))
+	mux.HandleFunc("POST /api/conversations/{id}/messages", s.current(s.send))
+	mux.HandleFunc("POST /api/conversations/{id}/held", s.current(s.hold))
+	mux.HandleFunc("POST /api/conversations/{id}/reply", s.current(s.reply))
+	mux.HandleFunc("POST /api/conversations/{id}/system", s.current(s.addSystem))
+	mux.HandleFunc("POST /api/conversations/{id}/system/{message}/edits", s.current(s.proposeEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/apply", s.current(s.applyEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/edits/{edit}/discard", s.current(s.discardEdit))
+	mux.HandleFunc("POST /api/conversations/{id}/decisions/{decision}", s.current(s.decide))
+	mux.HandleFunc("POST /api/conversations/{id}/budget", s.current(s.addBudget))
 	mux.HandleFunc("POST /api/conversations/{id}/pause", s.pause)
 	mux.HandleFunc("POST /api/conversations/{id}/cancel", s.cancelReply)
 	mux.HandleFunc("POST /api/conversations/{id}/tools/{call}/stop", s.stopTool)
-	mux.HandleFunc("POST /api/conversations/{id}/settings", s.proposeSettings)
-	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/apply", s.applySettings)
-	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/discard", s.discardSettings)
+	mux.HandleFunc("POST /api/conversations/{id}/settings", s.current(s.proposeSettings))
+	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/apply", s.current(s.applySettings))
+	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/discard", s.current(s.discardSettings))
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
@@ -164,6 +164,26 @@ func security(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// current refuses an action that says which revision of the conversation it was based
+// on, if that isn't the current one. Stopping what's running doesn't go through this: it
+// has to work while the revision moves, and it names what it stops anyway.
+func (s *server) current(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if text := r.Header.Get("X-Tack-Revision"); text != "" {
+			revision, err := strconv.Atoi(text)
+			if err != nil {
+				http.Error(w, "bad revision", http.StatusBadRequest)
+				return
+			}
+			if err := s.core.CheckRevision(r.PathValue("id"), revision); err != nil {
+				fail(w, err)
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 type server struct {
@@ -366,14 +386,14 @@ func (s *server) discardEdit(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) addBudget(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AmountUSD float64 `json:"amount_usd"`
+		Amount core.Pico `json:"amount_pico"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
 	if err := json.UnmarshalRead(r.Body, &body); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.core.AllowBudget(r.PathValue("id"), body.AmountUSD); err != nil {
+	if err := s.core.AllowBudget(r.PathValue("id"), body.Amount); err != nil {
 		fail(w, err)
 		return
 	}
@@ -508,6 +528,9 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, core.ErrStale):
+		w.Header().Set("X-Tack-Stale", "1")
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrRestarting):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:

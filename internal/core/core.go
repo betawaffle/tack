@@ -71,6 +71,9 @@ type conversation struct {
 	created time.Time
 	items   []*item
 	busy    bool
+	// revision counts the events that have changed it, so a page can say which state of
+	// it an action was based on.
+	revision int
 
 	tools    store.Ref       // the exact definitions it sends, if it has any
 	workdir  string          // where its tools' relative paths start
@@ -80,16 +83,16 @@ type conversation struct {
 	pendingSettings     *pendingSettings
 
 	// Spending, derived from the record.
-	spent, budgetAdded float64
-	spentByPeriod      map[string]float64
-	recentCosts        []float64
+	spent, budgetAdded Pico
+	spentByPeriod      map[string]Pico
+	recentCosts        []Pico
 	lastRequestBytes   int
 	budgetStopped      bool
-	stoppedEstimate    float64
+	stoppedEstimate    Pico
 	// The allowance from the last time a person set things going, which applies from
 	// allowanceBase on. Older conversations have none until then, and use budgetAdded.
 	allowanceSet             bool
-	allowanceBase, allowance float64
+	allowanceBase, allowance Pico
 	// freshAllowance says no call has used it yet. That call goes whatever it's expected
 	// to cost, because someone just asked for it.
 	freshAllowance bool
@@ -131,7 +134,7 @@ type item struct {
 	// Calls.
 	callID       string
 	requestBytes int
-	cost         float64 // what it counted as
+	cost         Pico // what it counted as
 	finished     *store.Event
 	calls        []*toolCall // what a usable reply asked for
 }
@@ -227,6 +230,7 @@ func (c *Core) apply(ev *store.Event) {
 	if conv == nil {
 		return
 	}
+	conv.revision++
 	switch ev.Type {
 	case store.UserMessage:
 		conv.paused = false
@@ -754,7 +758,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	asked := conv.freshAllowance
 	c.mu.Unlock()
 	if !asked && (spent >= limit || spent+estimate > limit) {
-		err := c.record(&store.Event{Type: store.BudgetStopped, Conversation: conv.id, SpentUSD: spent, EstimateUSD: estimate, LimitUSD: limit})
+		err := c.record(&store.Event{Type: store.BudgetStopped, Conversation: conv.id, SpentUSD: spent.USD(), EstimateUSD: estimate.USD(), LimitUSD: limit.USD()})
 		if err != nil {
 			return err
 		}

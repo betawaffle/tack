@@ -33,9 +33,10 @@ func (conv *conversation) addNote(n *store.Note) {
 }
 
 // NoteTools are the tools that only write to a conversation's own record. They don't
-// reach anything outside it, so they don't need approval. A reply whose only calls
-// are notes ends the turn, and the results go out with the next message, which saves
-// a model call. keep_going is how a model says it isn't finished.
+// reach anything outside it, so they don't need approval. A reply with notes and text
+// ends the turn, and the results go out with the next message, which saves a model
+// call. A reply with only notes carries on, since it hasn't said anything to anyone yet.
+// keep_going is retired: it was how a model asked for that.
 func NoteTools() []Tool {
 	return []Tool{
 		{
@@ -64,6 +65,7 @@ func NoteTools() []Tool {
 			Definition:  jsontext.Value(`{"type":"function","function":{"name":"keep_going","description":"Say you have more to do after these results. Without this, a reply whose only tool calls are notes ends your turn.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}`),
 			NoApproval:  true,
 			TackWritten: true,
+			Retired:     true,
 			Inspect: func(call Call) ([]string, error) {
 				if len(call.Args) > 0 {
 					return nil, errors.New("keep_going takes no arguments")

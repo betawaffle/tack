@@ -53,7 +53,7 @@ const TOOL_CALLS = {
   list: [["list_files", "{}"], ["search_files", '{"pattern":"hel+o"}']],
   wrong: [["read_file", '{"file":"hello.txt"}']],
   note: [["note", JSON.stringify({ kind: "plan", key: "first", text: "Do the <b>thing</b>", status: "doing" })], ["note", JSON.stringify({ kind: "tool_wish", key: "w", text: "A tool for go test" })]],
-  notego: [["note", JSON.stringify({ kind: "concern", key: "c", text: "This looks odd" })], ["keep_going", "{}"]],
+  notego: [["note", JSON.stringify({ kind: "concern", key: "c", text: "This looks odd" })]],
   sleep: [["run_command", JSON.stringify({ command: "sleep 2; echo finished" })]],
   long: [["run_command", JSON.stringify({ command: "echo begun; sleep 30" })]],
   edit: [["edit_file", JSON.stringify({ path: "hello.txt", old_string: "hello", new_string: "goodbye" })]],

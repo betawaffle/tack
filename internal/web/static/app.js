@@ -65,6 +65,13 @@ class Unreachable extends Error {
   }
 }
 
+// Stale means tack refused because this page was showing something out of date.
+class Stale extends Error {
+  constructor() {
+    super("This conversation had changed, so that wasn't done. It's up to date now, so check it and try again.");
+  }
+}
+
 // Requests that haven't had an answer yet, so they can stop waiting if tack is gone.
 const unanswered = new Set();
 
@@ -84,16 +91,31 @@ async function api(path, options) {
   } finally {
     unanswered.delete(controller);
   }
+  if (res.headers.get("X-Tack-Stale")) throw new Stale();
   if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
   return res;
 }
 
-function postJSON(path, body) {
+function postJSON(path, body, headers) {
   return api(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body || {}),
   });
+}
+
+// What the page last showed of the open conversation. What someone sees is what they're
+// acting on, so actions say which revision that was, and tack refuses if it's moved on.
+// While something's running the revision keeps moving, and tack refuses anything that
+// needs it to stop first, so those don't say.
+let shown = { id: null, revision: 0, busy: false, conv: null };
+
+function expectHeaders(id) {
+  return shown.id === id && !shown.busy && streaming !== id ? { "X-Tack-Revision": String(shown.revision) } : {};
+}
+
+function postConversation(id, path, body) {
+  return postJSON(`/api/conversations/${id}/${path}`, body, expectHeaders(id));
 }
 
 // copyText works over plain HTTP too, where navigator.clipboard doesn't exist.
@@ -263,12 +285,12 @@ function setMarkdown(node, text) {
 
 const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
 const count = (n) => n.toLocaleString("en-US");
-const dollars = (n) => "$" + n.toFixed(n >= 0.01 ? 4 : 6);
+const money = tackMoney.format;
 
 // What a run of calls cost, for after the last of them.
 function chainNode(item) {
   const calls = item.chain_calls > 1 ? ` across ${item.chain_calls} calls` : "";
-  const node = el("div", "chain-total", `+ ${dollars(item.chain_usd)}${calls} since you stepped in`);
+  const node = el("div", "chain-total", `+ ${money(item.chain_pico)}${calls} since you stepped in`);
   node.title = "What the model spent from your last action until it stopped";
   return node;
 }
@@ -286,7 +308,7 @@ function ledger(s, controls) {
   row.append(cache);
   const out = el("span", "", `${count(s.completion_tokens)} out`);
   out.title = `${count(s.reasoning_tokens)} of these were reasoning`;
-  row.append(out, el("span", "", dollars(s.cost_usd)));
+  row.append(out, el("span", "", money(s.cost_pico)));
   const time = el("span", "", `${seconds(s.ttft_ms)} first, ${seconds(s.duration_ms)} total`);
   row.append(time);
   if (controls) row.append(controls);
@@ -317,7 +339,7 @@ function renderReply(item, key, decision) {
   if (!item.text) r.text.hidden = true;
   for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
   if (item.stats) r.node.append(ledger(item.stats, controls));
-  if (item.chain_usd) r.node.append(chainNode(item));
+  if (item.chain_pico) r.node.append(chainNode(item));
   const fork = el("div", "fork-row");
   fork.append(button("Fork from here", "mini net", () => beginFork(item.index + 1, "")));
   r.node.append(fork);
@@ -456,7 +478,52 @@ function markRunning(callID) {
 
 // What's left of the budget. It's soft, so spending can pass it.
 function left(budget) {
-  return Math.max(budget.limit - budget.spent, 0);
+  return Math.max(budget.limit_pico - budget.spent_pico, 0);
+}
+
+// A box for an amount, in cents unless switched. Switching converts what's in the box, so
+// the value stays the same.
+function moneyInput(pico, label) {
+  let unit = "cents";
+  const node = el("span", "money");
+  const input = el("input", "money-amount");
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.autocomplete = "off";
+  input.value = tackMoney.toText(pico, unit);
+  input.setAttribute("aria-label", label);
+  const switches = new Map();
+  const paint = () => {
+    input.dataset.unit = unit;
+    for (const [name, b] of switches) b.setAttribute("aria-pressed", String(name === unit));
+  };
+  const switchTo = (next) => {
+    const value = tackMoney.parse(input.value, unit);
+    unit = next;
+    if (value !== null) input.value = tackMoney.toText(value, unit);
+    paint();
+  };
+  for (const [name, symbol, title] of [["cents", "¢", "In cents"], ["dollars", "$", "In dollars"]]) {
+    const b = button(symbol, "mini view", () => switchTo(name));
+    b.title = title;
+    switches.set(name, b);
+  }
+  paint();
+  node.append(input, ...switches.values());
+  input.restore = (text, savedUnit) => {
+    unit = savedUnit === "dollars" ? "dollars" : "cents";
+    input.value = text;
+    paint();
+  };
+  return {
+    node,
+    input,
+    read() {
+      const value = tackMoney.parse(input.value, unit);
+      if (value === null || value <= 0) throw new Error(`"${input.value}" isn't an amount tack can use. It needs to be more than zero, and no finer than a millionth of a millionth of a dollar.`);
+      return value;
+    },
+  };
 }
 
 function budgetCard(conv) {
@@ -464,31 +531,50 @@ function budgetCard(conv) {
   const node = el("div", "budget-card");
   node.append(
     el("strong", "", "Budget reached"),
-    el("div", "hint", `${dollars(left(b))} of what you allowed is left, and the next call looks like about ${dollars(b.estimate)}, so tack didn't start it.`),
-    el("div", "hint", `Spent this month: ${dollars(b.period_here)} in this conversation, ${dollars(b.period_all)} across all of tack.`),
+    el("div", "hint", `${money(left(b))} of what you allowed is left, and the next call looks like about ${tackMoney.rough(b.estimate_pico)}, so tack didn't start it.`),
+    el("div", "hint", `Spent this month: ${money(b.period_here_pico)} in this conversation, ${money(b.period_all_pico)} across all of tack.`),
   );
   const row = el("div", "row");
-  const amount = el("input");
-  amount.id = "budget-amount";
-  amount.type = "number";
-  amount.step = "any";
-  amount.min = "0";
   // Enough for this call, if the usual amount wouldn't be.
-  amount.value = String(Math.max(b.top_up, b.estimate));
-  amount.setAttribute("aria-label", "Dollars to allow from here");
-  row.append(el("span", "hint", "Allow, from here:"), amount, button("Allow and continue", "mini spends", async () => {
-    await postJSON(`/api/conversations/${conv.id}/budget`, { amount_usd: Number(amount.value) });
+  const amount = moneyInput(Math.max(b.top_up_pico, b.estimate_pico), "How much to allow from here");
+  amount.input.id = "budget-amount";
+  row.append(el("span", "hint", "Allow, from here:"), amount.node, button("Allow and continue", "mini spends", async () => {
+    await postConversation(conv.id, "budget", { amount_pico: amount.read() });
+    await show(conv.id);
     await call(conv.id);
   }));
   node.append(row);
   return node;
 }
 
-// What the model has written for this page. It's labelled, and never approves anything.
+// What the model has written for this page, kept up to date. It's labelled, and never
+// approves anything. It stays open or closed from one conversation to the next.
+const NOTES_CLOSED_KEY = "tack-notes-closed";
+
+function notesStartClosed() {
+  try {
+    return localStorage.getItem(NOTES_CLOSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function notesPanel(notes) {
   const node = el("details", "notes");
-  node.open = true;
-  node.append(el("summary", "", "From the model"));
+  node.open = !notesStartClosed();
+  const summary = el("summary", "", `From the model (${notes.length})`);
+  // On the click, because drawing the panel open fires the toggle event too.
+  summary.addEventListener("click", () => {
+    try {
+      localStorage.setItem(NOTES_CLOSED_KEY, node.open ? "1" : "0");
+    } catch {
+      // It just won't be remembered.
+    }
+  });
+  // A concern shouldn't get missed because the panel is closed.
+  const concerns = notes.filter((note) => note.kind === "concern").length;
+  if (concerns) summary.append(el("span", "tag note-alert", concerns === 1 ? "1 concern" : `${concerns} concerns`));
+  node.append(summary);
   const kinds = new Map();
   for (const note of notes) {
     if (!kinds.has(note.kind)) kinds.set(note.kind, []);
@@ -497,18 +583,41 @@ function notesPanel(notes) {
   for (const [kind, items] of kinds) {
     const group = el("div", `note-group note-${kind.replace(/[^a-z_]/g, "")}`);
     group.append(el("div", "note-kind", kind.replaceAll("_", " ")));
+    const list = el("div", "note-list");
     for (const item of items) {
       const row = el("div", "note");
       if (item.status) row.append(el("span", "tag", item.status));
-      row.append(exact(item.text, "note-text"));
-      group.append(row);
+      const text = exact(item.text, "note-text");
+      // Long ones show a couple of lines until clicked.
+      text.addEventListener("click", () => text.classList.toggle("whole"));
+      row.append(text);
+      list.append(row);
     }
+    group.append(list);
     node.append(group);
   }
   return node;
 }
 
+// Bookkeeping like a note gets one line where it happened, since the panel has what it said.
+function compactCall(call) {
+  const node = el("details", "tool-compact");
+  node.dataset.call = call.id;
+  let label = call.name;
+  try {
+    const args = JSON.parse(call.arguments);
+    if (args && args.kind && args.key) label = `${call.name}: ${args.kind}, ${args.key}${args.status ? `, ${args.status}` : ""}`;
+  } catch {
+    // The name will do.
+  }
+  const summary = el("summary");
+  summary.append(exact(label, "tool-compact-label"));
+  node.append(summary, ...argumentRows(call));
+  return node;
+}
+
 function renderToolCall(call, decision) {
+  if (call.compact && !call.invalid && !call.error && !call.decidable) return compactCall(call);
   const node = el("div", `tool state-${call.state}`);
   node.dataset.call = call.id;
   const head = el("div", "tool-head");
@@ -674,7 +783,7 @@ function renderSystem(item) {
         node.replaceWith(renderSystem(stagedItem(item)));
         return;
       }
-      await postJSON(`/api/conversations/${id}/system/${item.message}/edits`, { text });
+      await postConversation(id, `system/${item.message}/edits`, { text });
       await show(id);
     }, () => form.remove(), draft);
     node.append(form);
@@ -693,11 +802,11 @@ function renderSystem(item) {
     const row = el("div", "row");
     row.append(
       button("Apply", "mini primary net", async () => {
-        await postJSON(`/api/conversations/${id}/edits/${item.pending.id}/apply`);
+        await postConversation(id, `edits/${item.pending.id}/apply`);
         await show(id);
       }),
       button("Discard", "mini net", async () => {
-        await postJSON(`/api/conversations/${id}/edits/${item.pending.id}/discard`);
+        await postConversation(id, `edits/${item.pending.id}/discard`);
         await show(id);
       }),
     );
@@ -721,7 +830,7 @@ function renderItem(item, index, decision) {
     actions.append(button("Edit", "mini net", () => beginFork(item.index, item.text)));
     node.append(actions);
   }
-  if (item.chain_usd) node.append(chainNode(item));
+  if (item.chain_pico) node.append(chainNode(item));
   return node;
 }
 
@@ -735,6 +844,7 @@ async function beginFork(items, text, edits) {
   clearTimeout(pollTimer);
   streaming = null;
   current = null;
+  spendEditing = false;
   draftFork = { from, items, conv, edits: new Map(edits) };
   history.replaceState(null, "", location.pathname);
   setOpenMode(true);
@@ -805,7 +915,7 @@ function settingsPanel(conv) {
       area.value = JSON.stringify(conv.config_settings, null, 2);
     }),
     button("Hold change", "mini primary net", async () => {
-      await postJSON(`/api/conversations/${conv.id}/settings`, JSON.parse(area.value));
+      await postConversation(conv.id, "settings", JSON.parse(area.value));
       await show(conv.id);
     }),
   );
@@ -823,12 +933,12 @@ function settingsPanel(conv) {
     const actions = el("div", "row");
     actions.append(
       button("Apply", "mini primary net", async () => {
-        await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/apply`);
+        await postConversation(conv.id, `settings/${conv.pending_settings.id}/apply`);
         definitionsShown.delete(conv.id);
         await show(conv.id);
       }),
       button("Discard", "mini net", async () => {
-        await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/discard`);
+        await postConversation(conv.id, `settings/${conv.pending_settings.id}/discard`);
         await show(conv.id);
       }),
     );
@@ -927,6 +1037,7 @@ function setBusy(busy) {
 // What's known for estimating the next call: the conversation's budget, or for a new
 // conversation only the allowance.
 let spendInfo = null;
+let spendEditing = false;
 
 function bytesOf(text) {
   return new TextEncoder().encode(JSON.stringify(text)).length;
@@ -935,52 +1046,130 @@ function bytesOf(text) {
 // The same sum the server does, with what's being typed. It doesn't know what's unsent
 // in a fork, so that uses recent costs as they are.
 function estimateNext(budget) {
-  const base = budget.recent_cost;
+  const base = budget.recent_cost_pico;
   if (!base) return null;
   if (draftFork || !budget.last_bytes) return base;
   const typed = $("input").value;
   const next = budget.next_bytes + (typed ? bytesOf(typed) : 0);
-  return next > budget.last_bytes ? (base * next) / budget.last_bytes : base;
+  return next > budget.last_bytes ? Math.round((base * next) / budget.last_bytes) : base;
 }
 
 function refreshSpend() {
   const line = $("spend");
-  line.replaceChildren();
-  if (!spendInfo) return;
-  const parts = [];
-  if (spendInfo.running) {
-    parts.push(`${dollars(left(spendInfo.budget))} of what you allowed is left.`);
-  } else if (spendInfo.budget) {
-    const estimate = estimateNext(spendInfo.budget);
-    parts.push(estimate === null ? "No estimate yet for the next call." : `Next call about ${dollars(estimate)}.`);
-    parts.push(`Up to ${dollars(spendInfo.allowance)} before tack asks you again.`);
-  } else {
-    parts.push(`Up to ${dollars(spendInfo.allowance)} before tack asks you again.`);
+  if (!spendInfo) {
+    spendEditing = false;
+    line.replaceChildren();
+    return;
   }
-  line.append(el("span", "spend-mark"), parts.join(" "));
+  if (spendInfo.running) {
+    spendEditing = false;
+    line.replaceChildren(el("span", "spend-mark"), `${money(left(spendInfo.budget))} of what you allowed is left.`);
+    return;
+  }
+  let text = "";
+  if (spendInfo.budget) {
+    const estimate = estimateNext(spendInfo.budget);
+    text = estimate === null ? "No estimate yet for the next call. " : `Next call about ${tackMoney.rough(estimate)}. `;
+  }
+  if (spendEditing) {
+    line.querySelector(".spend-estimate").textContent = text;
+    return;
+  }
+  const change = button(money(spendInfo.allowance), "link-button", openSpendEditor);
+  change.id = "spend-change";
+  change.title = "Change how much the model can spend each time before tack asks you";
+  line.replaceChildren(el("span", "spend-mark"), el("span", "spend-estimate", text), "Up to ", change, " before tack asks you again.");
 }
 
+function openSpendEditor() {
+  spendEditing = true;
+  const amount = moneyInput(spendInfo.allowance, "How much the model can spend before tack asks you");
+  amount.input.id = "spend-amount";
+  const close = () => {
+    spendEditing = false;
+    refreshSpend();
+  };
+  const set = button("Set", "mini primary", async () => {
+    await setAllowance(amount.read());
+    close();
+  });
+  amount.input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      set.click();
+    } else if (event.key === "Escape") {
+      close();
+    }
+  });
+  $("spend").replaceChildren(el("span", "spend-mark"), el("span", "spend-estimate", ""), "Up to ", amount.node, " ", set, " ", button("Cancel", "mini", close));
+  refreshSpend();
+  amount.input.focus();
+  amount.input.select();
+}
+
+// The settings box this page would start a conversation from, if it's about to.
+function stagedSettingsBox() {
+  if (draftFork) return $("settings-text");
+  return current ? null : $("start-settings");
+}
+
+async function setAllowance(pico) {
+  const usd = pico / 1e12;
+  const box = stagedSettingsBox();
+  if (box) {
+    let settings;
+    try {
+      settings = JSON.parse(box.value);
+    } catch (err) {
+      throw new Error(`The settings below aren't valid JSON, so this can't change them: ${err.message}`);
+    }
+    box.value = JSON.stringify({ ...settings, budget_usd: usd }, null, 2);
+    spendInfo.allowance = pico;
+    return;
+  }
+  const conv = shown.conv;
+  if (conv.pending_settings) throw new Error("There's a settings change being held. Apply or discard it first.");
+  const res = await postConversation(conv.id, "settings", { ...conv.settings, budget_usd: usd });
+  const proposal = (await res.json()).proposal;
+  await postJSON(`/api/conversations/${conv.id}/settings/${proposal}/apply`);
+  await show(conv.id, true, true);
+}
+
+// Whatever a settings box being set up says, the line under the message box follows.
+document.addEventListener("input", (event) => {
+  if (event.target !== stagedSettingsBox()) return;
+  try {
+    const usd = JSON.parse(event.target.value).budget_usd;
+    if (usd > 0) spendInfo.allowance = Math.round(usd * 1e12);
+    refreshSpend();
+  } catch {
+    // It's still being typed.
+  }
+});
+
 function showMeta(conv) {
-  spendInfo = { budget: conv.budget, allowance: conv.budget.allowance, running: conv.busy };
+  spendInfo = { budget: conv.budget, allowance: conv.budget.allowance_pico, running: conv.busy && !draftFork };
   refreshSpend();
   const stats = conv.items.filter((i) => i.stats).map((i) => i.stats);
   const parts = [conv.model.replace(/^.*\//, "")];
   if (conv.host) parts.push(conv.host);
   if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
-  parts.push(`this month: ${dollars(conv.budget.period_here)} here, ${dollars(conv.budget.period_all)} all of tack`);
+  parts.push(`this month: ${money(conv.budget.period_here_pico)} here, ${money(conv.budget.period_all_pico)} all of tack`);
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
 }
 
-async function show(id, polling) {
+async function show(id, polling, force) {
   clearTimeout(pollTimer);
   const res = await api(`/api/conversations/${id}`);
   const conv = await res.json();
   if (id !== current) return;
   // Don't throw away something being typed just because a poll came round.
   const live = streaming === id;
-  const typing = polling && document.querySelector("#list .editor, #settings-text:focus");
+  const typing = polling && !force && document.querySelector("#list .editor, #settings-text:focus");
+  shown.busy = conv.busy;
   if (!typing) {
+    shown = { id, revision: conv.revision, busy: conv.busy, conv };
     const nodes = conv.items.map((item) => renderItem(item, item.index, conv.decision));
     if (conv.forked_from) {
       const mark = el("div", "fork-mark", "Forked from ");
@@ -1023,6 +1212,7 @@ function closeDrawer() {
 
 async function open(id) {
   draftFork = null;
+  spendEditing = false;
   if (id !== current) {
     unfolded.clear();
     views.clear();
@@ -1039,6 +1229,7 @@ async function open(id) {
 
 async function startNew() {
   draftFork = null;
+  spendEditing = false;
   unfolded.clear();
   views.clear();
   streaming = null;
@@ -1055,7 +1246,7 @@ async function startNew() {
   const res = await api("/api/defaults");
   const defaults = await res.json();
   setupStart(defaults);
-  spendInfo = { allowance: defaults.settings?.budget_usd ?? 0 };
+  spendInfo = { allowance: Math.round((defaults.settings?.budget_usd ?? 0) * 1e12) };
   refreshSpend();
   await refreshList();
 }
@@ -1298,6 +1489,11 @@ function reportError(err) {
     flash(err.message);
     return;
   }
+  if (err instanceof Stale) {
+    flash(err.message);
+    catchUp().catch(ignoreUnreachable);
+    return;
+  }
   $("list").append(el("div", "notice", String(err.message || err)));
   scrollDown();
 }
@@ -1356,11 +1552,35 @@ async function consume(res, id, reply) {
   }
 }
 
+let lastCallFailure = null;
+
+// A message that went out just as tack stopped answering may or may not have arrived.
+// Once back in touch, the record says which, so it doesn't get sent twice by accident.
+let uncertain = null;
+
+function maybeArrived(text) {
+  uncertain = { id: current, text, revision: shown.revision };
+}
+
+function settleUncertain() {
+  if (!uncertain || uncertain.id !== current) return;
+  const { text, revision } = uncertain;
+  uncertain = null;
+  const last = shown.conv.items.findLast((item) => item.role === "user");
+  if (shown.revision !== revision && last?.text === text && $("input").value === text) {
+    setInput("");
+    flash("That message did reach tack, so it's been taken out of the box.");
+  }
+}
+
 // call runs one model call and redraws afterwards. A user message is optional:
 // without one, the model responds to the conversation as it stands. It reports
 // whether the server took the request. A decision moves things along the same way.
 async function call(id, userText, decision) {
   if (streaming === id) return false;
+  const expected = expectHeaders(id);
+  const staged = captureConversation();
+  lastCallFailure = null;
   streaming = id;
   setBusy(true);
   let accepted = false;
@@ -1380,11 +1600,11 @@ async function call(id, userText, decision) {
     scrollDown();
     let res;
     if (decision) {
-      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, denial_text: decision.denial_text });
+      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, denial_text: decision.denial_text }, expected);
     } else if (userText !== undefined) {
-      res = await postJSON(`/api/conversations/${id}/messages`, { text: userText });
+      res = await postJSON(`/api/conversations/${id}/messages`, { text: userText }, expected);
     } else {
-      res = await postJSON(`/api/conversations/${id}/reply`);
+      res = await postJSON(`/api/conversations/${id}/reply`, undefined, expected);
     }
     accepted = true;
     refreshList().catch(() => {});
@@ -1403,7 +1623,9 @@ async function call(id, userText, decision) {
     }
     // The record is the truth, so redraw from it, whatever happened.
     await show(id).catch(ignoreUnreachable);
+    if (!accepted) restoreConversation(staged);
   }
+  lastCallFailure = failure;
   await refreshList().catch(ignoreUnreachable);
   // A stream that breaks partway is only the page losing touch. The call carries on.
   if (failure instanceof TypeError && accepted) {
@@ -1456,7 +1678,7 @@ async function startFork() {
       throw new Error(`The fork's settings aren't valid JSON, so nothing was recorded: ${err.message}`);
     }
   }
-  const res = await postJSON(`/api/conversations/${from}/fork`, { items });
+  const res = await postJSON(`/api/conversations/${from}/fork`, { items }, conv.busy ? {} : { "X-Tack-Revision": String(conv.revision) });
   const id = (await res.json()).id;
   draftFork = null;
   current = id;
@@ -1487,7 +1709,10 @@ $("form").addEventListener("submit", async (event) => {
   try {
     await ensureConversation();
     // If the server refused it, nothing was recorded, so don't lose the text.
-    if (!(await call(current, text))) setInput(text);
+    if (!(await call(current, text))) {
+      setInput(text);
+      if (lastCallFailure instanceof Unreachable) maybeArrived(text);
+    }
   } catch (err) {
     setInput(text);
     reportError(err);
@@ -1499,7 +1724,12 @@ $("hold").addEventListener("click", async () => {
   if (!text.trim()) return;
   await pendingWhile($("hold"), async () => {
     await ensureConversation();
-    await postJSON(`/api/conversations/${current}/held`, { text });
+    try {
+      await postConversation(current, "held", { text });
+    } catch (err) {
+      if (err instanceof Unreachable) maybeArrived(text);
+      throw err;
+    }
     setInput("");
     if (streaming !== current) await show(current);
     await refreshList();
@@ -1512,7 +1742,7 @@ $("add-system").addEventListener("click", async () => {
   if (!text.trim() || (!current && !draftFork)) return;
   await pendingWhile($("add-system"), async () => {
     await ensureConversation();
-    await postJSON(`/api/conversations/${current}/system`, { text });
+    await postConversation(current, "system", { text });
     setInput("");
     await show(current);
   }).catch(reportError);
@@ -1766,8 +1996,9 @@ async function catchUp() {
   await refreshList();
   if (!current || streaming === current) return;
   const staged = captureConversation();
-  await show(current, true);
+  await show(current, true, true);
   restoreConversation(staged);
+  settleUncertain();
 }
 
 async function checkStatus() {
@@ -1811,7 +2042,7 @@ function captureConversation() {
       allow: [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice),
       network: [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network),
     },
-    budget: $("budget-amount")?.value,
+    budget: $("budget-amount") && { value: $("budget-amount").value, unit: $("budget-amount").dataset.unit },
   };
 }
 
@@ -1835,7 +2066,7 @@ function restoreConversation(staged) {
     tick("network", staged.decision.network);
     card.dispatchEvent(new Event("refresh"));
   }
-  if ($("budget-amount") && staged.budget !== undefined) $("budget-amount").value = staged.budget;
+  if ($("budget-amount") && staged.budget) $("budget-amount").restore(staged.budget.value, staged.budget.unit);
 }
 
 function captureStart() {
@@ -1906,6 +2137,8 @@ async function restoreStaging(staging) {
   if (staging.start) restoreStart(staging.start);
   restoreConversation(staging.conversation);
   setInput(staging.composer);
+  const box = stagedSettingsBox();
+  if (box) box.dispatchEvent(new Event("input", { bubbles: true }));
   refreshSpend();
 }
 

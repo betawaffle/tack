@@ -145,7 +145,7 @@ func show(w io.Writer, conv core.Conversation, limit int) {
 	if conv.Tools {
 		fmt.Fprint(w, ", tools")
 	}
-	fmt.Fprintf(w, ", spent $%.6f of $%.6f\n", conv.Budget.Spent, conv.Budget.Limit)
+	fmt.Fprintf(w, ", spent $%.6f of $%.6f\n", conv.Budget.Spent.USD(), conv.Budget.Limit.USD())
 	if conv.ForkedFrom != "" {
 		fmt.Fprintf(w, "forked from %s, keeping its first %d items\n", conv.ForkedFrom, conv.ForkItems)
 	}
@@ -205,7 +205,7 @@ func show(w io.Writer, conv core.Conversation, limit int) {
 			}
 		}
 		if s := item.Stats; s != nil {
-			fmt.Fprintf(w, "[%s, %d in, %d cached, %d out, $%.6f]\n", s.Host, s.PromptTokens, s.CachedTokens, s.CompletionTokens, s.CostUSD)
+			fmt.Fprintf(w, "[%s, %d in, %d cached, %d out, $%.6f]\n", s.Host, s.PromptTokens, s.CachedTokens, s.CompletionTokens, s.CostPico.USD())
 		}
 	}
 }

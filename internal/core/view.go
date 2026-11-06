@@ -20,14 +20,14 @@ type Summary struct {
 
 // Stats are the facts about a call worth showing next to its reply.
 type Stats struct {
-	Host             string  `json:"host,omitzero"`
-	PromptTokens     int     `json:"prompt_tokens"`
-	CachedTokens     int     `json:"cached_tokens"`
-	CompletionTokens int     `json:"completion_tokens"`
-	ReasoningTokens  int     `json:"reasoning_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
-	TTFTMillis       int64   `json:"ttft_ms"`
-	DurationMillis   int64   `json:"duration_ms"`
+	Host             string `json:"host,omitzero"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CachedTokens     int    `json:"cached_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	ReasoningTokens  int    `json:"reasoning_tokens"`
+	CostPico         Pico   `json:"cost_pico"`
+	TTFTMillis       int64  `json:"ttft_ms"`
+	DurationMillis   int64  `json:"duration_ms"`
 }
 
 // PendingEdit is a system message edit that's being held. An empty Text
@@ -60,8 +60,8 @@ type Item struct {
 	ToolCalls []ToolCallView `json:"tool_calls,omitzero"`
 
 	// The last call since someone set things going: what those calls cost in all.
-	ChainUSD   float64 `json:"chain_usd,omitzero"`
-	ChainCalls int     `json:"chain_calls,omitzero"`
+	ChainPico  Pico `json:"chain_pico,omitzero"`
+	ChainCalls int  `json:"chain_calls,omitzero"`
 }
 
 // ToolCallView is a tool call as the UI shows it. Arguments are the exact text
@@ -81,26 +81,28 @@ type ToolCallView struct {
 	Decidable     bool     `json:"decidable,omitzero"`
 	NetworkOption bool     `json:"network_option,omitzero"`
 	Network       bool     `json:"network,omitzero"`
+	// Compact says it's only bookkeeping, like a note, which doesn't need a full card.
+	Compact bool `json:"compact,omitzero"`
 }
 
 // BudgetView is a conversation's spending. Stopped says a call wasn't started because
 // of it, and then Estimate is what that call looked like it would cost. TopUp is what
 // the add box starts with. The period totals are for the current billing period.
 type BudgetView struct {
-	Limit      float64 `json:"limit"`
-	Spent      float64 `json:"spent"`
-	Estimate   float64 `json:"estimate"`
-	TopUp      float64 `json:"top_up"`
-	Stopped    bool    `json:"stopped,omitzero"`
-	PeriodHere float64 `json:"period_here"`
-	PeriodAll  float64 `json:"period_all"`
+	Limit      Pico `json:"limit_pico"`
+	Spent      Pico `json:"spent_pico"`
+	Estimate   Pico `json:"estimate_pico"`
+	TopUp      Pico `json:"top_up_pico"`
+	Stopped    bool `json:"stopped,omitzero"`
+	PeriodHere Pico `json:"period_here_pico"`
+	PeriodAll  Pico `json:"period_all_pico"`
 	// For estimating the next call while it's being written: the most expensive recent
 	// call, the size of the last request, and the size of the next if nothing's added.
 	// Allowance is what someone setting things going next would allow.
-	RecentCost float64 `json:"recent_cost"`
-	LastBytes  int     `json:"last_bytes"`
-	NextBytes  int     `json:"next_bytes"`
-	Allowance  float64 `json:"allowance"`
+	RecentCost Pico `json:"recent_cost_pico"`
+	LastBytes  int  `json:"last_bytes"`
+	NextBytes  int  `json:"next_bytes"`
+	Allowance  Pico `json:"allowance_pico"`
 }
 
 // NoteView is an item on the page, written by the model.
@@ -134,7 +136,10 @@ type DecisionView struct {
 
 // Conversation is a conversation as the UI shows it.
 type Conversation struct {
-	ID       string `json:"id"`
+	ID string `json:"id"`
+	// Revision changes with everything recorded in it. An action can name the one it
+	// was based on, and it's refused if that's no longer the current one.
+	Revision int    `json:"revision"`
 	Model    string `json:"model"`
 	Host     string `json:"host,omitzero"` // the pinned host, if any
 	Busy     bool   `json:"busy"`
@@ -216,15 +221,15 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	if conv == nil {
 		return Conversation{}, ErrNotFound
 	}
-	out := Conversation{ID: id, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}, ForkedFrom: conv.forkedFrom, ForkItems: conv.forkItems}
+	out := Conversation{ID: id, Revision: conv.revision, Busy: conv.busy, CanReply: !conv.busy && conv.canReply(), Tools: conv.tools != "", Workdir: conv.workdir, Items: []Item{}, ForkedFrom: conv.forkedFrom, ForkItems: conv.forkItems}
 	effective := conv.effectiveSettings(c.settings)
 	out.Model, out.Host = effective.Model, effective.Host
 	full := effective.WithDefaults()
 	period := billingPeriod(time.Now())
 	out.Budget = BudgetView{
-		Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: full.BudgetTopUpUSD, Stopped: conv.budgetStopped,
+		Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: picoFromUSD(full.BudgetTopUpUSD), Stopped: conv.budgetStopped,
 		PeriodHere: conv.spentByPeriod[period], PeriodAll: c.spentInPeriod(period),
-		RecentCost: conv.maxRecentCost(), LastBytes: conv.lastRequestBytes, Allowance: full.BudgetUSD,
+		RecentCost: conv.maxRecentCost(), LastBytes: conv.lastRequestBytes, Allowance: picoFromUSD(full.BudgetUSD),
 	}
 	// Only for an estimate, so one that can't be worked out just goes without.
 	if definitions, err := c.definitions(conv.tools); err == nil {
@@ -283,7 +288,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		}
 		if len(out.Items) > shown {
 			out.Items[shown].Index = i
-			out.Items[shown].ChainUSD, out.Items[shown].ChainCalls = chains[i].cost, chains[i].calls
+			out.Items[shown].ChainPico, out.Items[shown].ChainCalls = chains[i].cost, chains[i].calls
 		}
 	}
 	return out, nil
@@ -338,7 +343,7 @@ func statsFrom(ev *store.Event) *Stats {
 		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
 		CompletionTokens: usage.CompletionTokens,
 		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
-		CostUSD:          usage.Cost,
+		CostPico:         picoFromUSD(usage.Cost),
 		TTFTMillis:       ev.TTFTMillis,
 		DurationMillis:   ev.DurationMillis,
 	}

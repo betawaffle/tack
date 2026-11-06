@@ -31,6 +31,10 @@ which makes tack exit with code 75 once it's clear, and the service treats that 
 start again rather than a failure. `tack-deploy` also installs `tack.service` if it's changed.
 Logs are in `journalctl --user -u tack`.
 
+Every action on a conversation says which revision of it the page was showing, and tack refuses
+it if that's out of date, so nothing happens based on a page that was behind. Stopping what's
+running is the exception, because it has to work while things are moving.
+
 A light in the page's header shows whether it can reach tack. While it can't, or while a restart
 is coming, buttons that couldn't work are off, and what you've typed stays where it is. Reloading
 keeps what you've typed or set up but haven't recorded yet, in that tab. After an update, the page
@@ -82,7 +86,6 @@ These are only defaults, copied into each new conversation, which owns them afte
 | `max_read_bytes` | 16 MiB | For `read_file`, `edit_file` and command output |
 | `max_listed`, `max_matches` | `10000`, `1000` | |
 | `max_search_file_bytes`, `max_line_shown` | 2 MiB, `500` | |
-| `notes_without_text_continue` | `false` | Carry on after a reply with notes and no text, instead of ending the turn |
 
 Paths have to be absolute. To apply changes, press **Reload config** in the page,
 which tells you if the file has a problem and leaves the running settings alone if
@@ -175,6 +178,8 @@ before asking for a reply. A held message can't be edited or removed yet.
 A budget says how much the model can spend without you getting involved. Brass buttons call the
 model, and each time you press one, `budget_usd` starts again from there. That first call
 always goes, and the line under the message box says what it looks likely to cost as you type.
+Click the amount on that line to change it for this conversation. Amounts are in cents unless you
+switch them to dollars, and tack counts money in whole picodollars, so nothing drifts.
 After that the budget is soft: tack doesn't start another call if the allowance is spent or
 that call looks likely to go over, and it offers a box to allow more from there, but it never
 interrupts a call for it. Estimates come from recent calls scaled by how much the request has
@@ -197,11 +202,10 @@ While something is running:
 ## Notes
 
 `note` writes to a panel on the conversation's page, labelled as coming from the model. It
-doesn't need approval, and nothing reads it back. A reply whose only tool calls are notes
-ends the turn without another model call, and the results go out with your next message.
-`keep_going` is how a model says it has more to do. These are offered even with no working
-directory. With `notes_without_text_continue` on, a reply with notes and no text carries on
-by itself, so only text ends the turn.
+doesn't need approval, and nothing reads it back. A reply with only notes carries on by itself
+unless you've paused the conversation, so only text ends the turn. A reply with notes and text
+ends it, and the results go out with your next message. These are offered even with no working
+directory. `keep_going` is retired: older conversations still have it, and it still works there.
 
 ## Forking
 

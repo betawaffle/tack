@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1129,10 +1128,10 @@ func costStream(cost string) string {
 		`data: {"id":"g","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"cost":` + cost + `}}` + "\n\n"
 }
 
-// chainStream replies with a keep_going call that has a cost, so the model carries on.
+// chainStream replies with only a note that has a cost, so the model carries on.
 func chainStream(n *int, cost string) string {
 	*n++
-	stream := toolStream(wireCall{fmt.Sprintf("call-%d", *n), "keep_going", `{}`})
+	stream := toolStream(wireCall{fmt.Sprintf("call-%d", *n), "note", fmt.Sprintf(`{"kind":"plan","key":"k%d","text":"More"}`, *n)})
 	usage := `data: {"id":"g","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"cost":` + cost + `}}` + "\n\n"
 	return strings.Replace(stream, "data: [DONE]", usage+"data: [DONE]", 1)
 }
@@ -1154,23 +1153,23 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 		t.Fatalf("%d calls", n)
 	}
 	conv, _ := c.Conversation(id)
-	if !conv.Budget.Stopped || conv.Budget.Spent != 0.002 || !conv.CanReply || conv.Budget.Estimate <= 0.001 {
+	if !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.002) || !conv.CanReply || conv.Budget.Estimate <= picoFromUSD(0.001) {
 		t.Errorf("budget = %+v", conv.Budget)
 	}
 
 	// It survives a restart, and allowing more starts from what's been spent.
 	c = f.open()
-	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != 0.002 {
+	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.002) {
 		t.Errorf("after a restart: %+v", conv.Budget)
 	}
 	if err := c.AllowBudget(id, 0); !errors.Is(err, ErrBadSettings) {
 		t.Errorf("zero = %v", err)
 	}
-	if err := c.AllowBudget(id, 0.0001); err != nil {
+	if err := c.AllowBudget(id, picoFromUSD(0.0001)); err != nil {
 		t.Fatal(err)
 	}
 	conv, _ = c.Conversation(id)
-	if conv.Budget.Stopped || conv.Budget.Limit != 0.0021 {
+	if conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0021) {
 		t.Errorf("allowed = %+v", conv.Budget)
 	}
 
@@ -1181,7 +1180,7 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 		t.Errorf("%d calls", n)
 	}
 	conv, _ = c.Conversation(id)
-	if !conv.Budget.Stopped || conv.Budget.Limit != 0.0021 {
+	if !conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0021) {
 		t.Errorf("budget = %+v", conv.Budget)
 	}
 
@@ -1190,7 +1189,7 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 	updates, err = c.Send(id, "two")
 	mustFinish(t, updates, err)
 	conv, _ = c.Conversation(id)
-	if conv.Budget.Stopped || math.Abs(conv.Budget.Limit-0.0055) > 1e-9 {
+	if conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0055) {
 		t.Errorf("after a message: %+v", conv.Budget)
 	}
 }
@@ -1233,15 +1232,15 @@ func TestChainsAddUpWhatRanWithoutYou(t *testing.T) {
 	check := func(c *Core) {
 		t.Helper()
 		conv, _ := c.Conversation(id)
-		var totals []float64
+		var totals []Pico
 		var calls []int
 		for _, item := range conv.Items {
-			if item.ChainUSD != 0 {
-				totals = append(totals, item.ChainUSD)
+			if item.ChainPico != 0 {
+				totals = append(totals, item.ChainPico)
 				calls = append(calls, item.ChainCalls)
 			}
 		}
-		if !slices.Equal(totals, []float64{0.375, 0.375}) || !slices.Equal(calls, []int{2, 2}) {
+		if !slices.Equal(totals, []Pico{picoFromUSD(0.375), picoFromUSD(0.375)}) || !slices.Equal(calls, []int{2, 2}) {
 			t.Errorf("totals = %v, calls = %v, in %+v", totals, calls, conv.Items)
 		}
 	}
@@ -1263,23 +1262,23 @@ func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
 }
 
 func TestBudgetEstimatesGrowWithTheRequest(t *testing.T) {
-	conv := &conversation{recentCosts: []float64{0.001, 0.002}, lastRequestBytes: 100}
-	if got := conv.estimate(100); got != 0.002 {
+	conv := &conversation{recentCosts: []Pico{picoFromUSD(0.001), picoFromUSD(0.002)}, lastRequestBytes: 100}
+	if got := conv.estimate(100); got != picoFromUSD(0.002) {
 		t.Errorf("same size = %v", got)
 	}
-	if got := conv.estimate(200); got != 0.004 {
+	if got := conv.estimate(200); got != picoFromUSD(0.004) {
 		t.Errorf("twice the size = %v", got)
 	}
 }
 
 func TestAFailedRequestCostsNothingButACutOffOneCounts(t *testing.T) {
-	conv := &conversation{recentCosts: []float64{0.003}}
+	conv := &conversation{recentCosts: []Pico{picoFromUSD(0.003)}}
 	conv.addCost(&store.Event{Status: 502})
 	if conv.spent != 0 {
 		t.Errorf("refused: %v", conv.spent)
 	}
 	conv.addCost(&store.Event{Status: 200})
-	if conv.spent != 0.003 {
+	if conv.spent != picoFromUSD(0.003) {
 		t.Errorf("cut off: %v", conv.spent)
 	}
 }
@@ -1422,40 +1421,76 @@ func (f *toolFake) noteTools() {
 	f.tools = append(f.tools, NoteTools()...)
 }
 
+// olderNoteTools offers keep_going to new conversations, as it used to be, because
+// older conversations still send its definition.
+func (f *toolFake) olderNoteTools() {
+	f.noteTools()
+	for i := range f.tools {
+		f.tools[i].Retired = false
+	}
+}
+
+// noteWithText replies with a note and some text, which ends the turn.
+func noteWithText() string {
+	return strings.Replace(toolStream(noteCall), `data: {"id":"gen-1","choices":[{"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+		`data: {"id":"gen-1","choices":[{"delta":{"content":"Noted."},"finish_reason":"tool_calls"}]}`, 1)
+}
+
 var (
 	noteCall = wireCall{"call-n", "note", `{"kind":"plan","key":"first","text":"Do it","status":"pending"}`}
 	goCall   = wireCall{"call-g", "keep_going", `{}`}
 )
 
-func TestNotesDontNeedApprovalAndEndTheTurn(t *testing.T) {
+func TestNotesDontNeedApprovalAndCarryOn(t *testing.T) {
 	f := newToolFake(t)
 	f.noteTools()
 	c := f.open()
-	id := f.askForTools(c, noteCall)
+	id, _ := c.NewConversation("Be brief.")
+	replies := 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies == 1 {
+			io.WriteString(w, toolStream(noteCall))
+			return
+		}
+		io.WriteString(w, replyStream)
+	}
+	updates, err := c.Send(id, "Use your tools.")
+	mustFinish(t, updates, err)
 	conv, _ := c.Conversation(id)
 	if conv.Decision != nil {
 		t.Fatalf("decision = %+v", conv.Decision)
 	}
-	if n := len(f.bodies); n != 1 {
-		t.Fatalf("a follow-up call was made: %d", n)
+	if n := len(f.bodies); n != 2 {
+		t.Fatalf("%d calls", n)
+	}
+	// The note's result went out straight away.
+	m := f.messagesIn(1)
+	if len(m) < 1 || m[len(m)-1].Role != "tool" || m[len(m)-1].Content != "ok" {
+		t.Errorf("messages = %+v", m)
 	}
 	if len(conv.Notes) != 1 || conv.Notes[0].Text != "Do it" || conv.Notes[0].Status != "pending" {
 		t.Errorf("notes = %+v", conv.Notes)
 	}
-
-	// The result goes out with the next message.
-	updates, err := c.Send(id, "Thanks.")
-	mustFinish(t, updates, err)
-	m := f.messagesIn(1)
-	if len(m) < 2 || m[len(m)-2].Role != "tool" || m[len(m)-2].Content != "ok" || m[len(m)-1].Content != "Thanks." {
-		t.Errorf("messages = %+v", m)
+	if conv.Items[len(conv.Items)-1].Text != "Hello there" {
+		t.Errorf("items = %+v", conv.Items)
+	}
+	if !conv.Items[len(conv.Items)-2].ToolCalls[0].Compact {
+		t.Errorf("a note should be compact: %+v", conv.Items[len(conv.Items)-2])
 	}
 
 	// Notes survive a restart, and the same key updates the item.
-	f.replyWith(toolStream(wireCall{"call-n2", "note", `{"kind":"plan","key":"first","text":"Did it","status":"done"}`}))
+	replies = 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies == 1 {
+			io.WriteString(w, toolStream(wireCall{"call-n2", "note", `{"kind":"plan","key":"first","text":"Did it","status":"done"}`}))
+			return
+		}
+		io.WriteString(w, replyStream)
+	}
 	updates, err = c.Send(id, "Next.")
 	mustFinish(t, updates, err)
-	f.replyWith(replyStream)
 	c = f.open()
 	conv, _ = c.Conversation(id)
 	if len(conv.Notes) != 1 || conv.Notes[0].Text != "Did it" || conv.Notes[0].Status != "done" {
@@ -1463,9 +1498,154 @@ func TestNotesDontNeedApprovalAndEndTheTurn(t *testing.T) {
 	}
 }
 
-func TestKeepGoingContinuesAfterNotes(t *testing.T) {
+func TestNotesWithTextEndTheTurn(t *testing.T) {
 	f := newToolFake(t)
 	f.noteTools()
+	c := f.open()
+	id, _ := c.NewConversation("Be brief.")
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, noteWithText()) }
+	updates, err := c.Send(id, "Use your tools.")
+	mustFinish(t, updates, err)
+	if n := len(f.bodies); n != 1 {
+		t.Fatalf("%d calls", n)
+	}
+	// The result goes out with the next message.
+	f.replyWith(replyStream)
+	updates, err = c.Send(id, "Thanks.")
+	mustFinish(t, updates, err)
+	m := f.messagesIn(1)
+	if len(m) < 2 || m[len(m)-2].Role != "tool" || m[len(m)-1].Content != "Thanks." {
+		t.Errorf("messages = %+v", m)
+	}
+}
+
+func TestPauseStopsNotesFromCarryingOn(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	id, _ := c.NewConversation("Be brief.")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.handler = func(w http.ResponseWriter) {
+		close(started)
+		<-release
+		io.WriteString(w, toolStream(noteCall))
+	}
+	updates, err := c.Send(id, "Use your tools.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := c.Pause(id); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	mustFinish(t, updates, nil)
+	if n := len(f.bodies); n != 1 {
+		t.Fatalf("called the model while paused: %d", n)
+	}
+	if conv, _ := c.Conversation(id); !conv.Paused || !conv.CanReply {
+		t.Errorf("view = %+v", conv)
+	}
+}
+
+func TestKeepGoingIsRetired(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	for _, tool := range c.ToolInfo() {
+		if tool.Name == "keep_going" {
+			t.Error("offered in the start panel")
+		}
+	}
+	id, _ := c.NewConversation("Be brief.")
+	data, err := c.Definitions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "keep_going") {
+		t.Errorf("offered to a new conversation: %s", data)
+	}
+}
+
+func TestRevisionsMoveWithTheRecord(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	revision := func() int {
+		t.Helper()
+		conv, err := c.Conversation(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conv.Revision
+	}
+	start := revision()
+	if err := c.CheckRevision(id, start); err != nil {
+		t.Errorf("current: %v", err)
+	}
+	if err := c.HoldMessage(id, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if revision() == start {
+		t.Error("holding didn't move it")
+	}
+	if err := c.CheckRevision(id, start); !errors.Is(err, ErrStale) {
+		t.Errorf("stale: %v", err)
+	}
+	if err := c.CheckRevision("nope", 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing: %v", err)
+	}
+	// A rebuild gets the same revision.
+	before := revision()
+	c = f.open()
+	if revision() != before {
+		t.Errorf("after a restart %d, was %d", revision(), before)
+	}
+}
+
+func TestBudgetCanChangeWhileADecisionWaits(t *testing.T) {
+	f := newToolFake(t)
+	c := f.open()
+	id := f.askForTools(c, callA)
+	conv, _ := c.Conversation(id)
+	settings := conv.Settings
+	settings.BudgetUSD = 0.5
+	proposal, err := c.ProposeSettings(id, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplySettings(id, proposal); err != nil {
+		t.Errorf("budget: %v", err)
+	}
+	settings.Model = "something/else"
+	proposal, err = c.ProposeSettings(id, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplySettings(id, proposal); !errors.Is(err, ErrAwaiting) {
+		t.Errorf("model: %v", err)
+	}
+}
+
+func TestMoneyAddsUpExactly(t *testing.T) {
+	conv := &conversation{}
+	for range 10 {
+		conv.addCost(&store.Event{Usage: []byte(`{"cost":0.1}`)})
+	}
+	if conv.spent != picoFromUSD(1) {
+		t.Errorf("spent = %d", conv.spent)
+	}
+	for _, usd := range []float64{0.000292608, 0.000000006, 0.0021, 1.01} {
+		if got := picoFromUSD(picoFromUSD(usd).USD()); got != picoFromUSD(usd) {
+			t.Errorf("%v came back as %d", usd, got)
+		}
+	}
+}
+
+func TestKeepGoingContinuesAfterNotes(t *testing.T) {
+	f := newToolFake(t)
+	f.olderNoteTools()
 	c := f.open()
 	id, _ := c.NewConversation("Be brief.")
 	replies := 0
@@ -1487,38 +1667,9 @@ func TestKeepGoingContinuesAfterNotes(t *testing.T) {
 	}
 }
 
-func TestNotesWithoutTextContinueWithTheSetting(t *testing.T) {
-	f := newToolFake(t)
-	f.noteTools()
-	c := f.open()
-	settings := store.Settings{Model: "test/model", NotesWithoutTextContinue: true}
-	id, err := c.NewConversationWith(Options{System: "Be brief.", Tools: true, Settings: &settings, LeaveOut: []string{"keep_going"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replies := 0
-	f.handler = func(w http.ResponseWriter) {
-		replies++
-		if replies == 1 {
-			io.WriteString(w, toolStream(noteCall))
-			return
-		}
-		io.WriteString(w, replyStream)
-	}
-	updates, err := c.Send(id, "Use your tools.")
-	mustFinish(t, updates, err)
-	if n := len(f.bodies); n != 2 {
-		t.Fatalf("%d calls", n)
-	}
-	// The note's result went out straight away.
-	if !strings.Contains(string(f.bodies[1]), noteCall.id) || strings.Contains(string(f.bodies[1]), `"keep_going"`) {
-		t.Errorf("second call = %s", f.bodies[1])
-	}
-}
-
 func TestToolDefinitionsCanBeEditedAndLeftOut(t *testing.T) {
 	f := newToolFake(t)
-	f.noteTools()
+	f.olderNoteTools()
 	c := f.open()
 	edited := jsontext.Value(`{"type":"function","function":{"name":"keep_going","description":"Changed.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}`)
 	id, err := c.NewConversationWith(Options{Tools: true, Definitions: map[string]jsontext.Value{"keep_going": edited}, LeaveOut: []string{"note"}})
@@ -1569,7 +1720,7 @@ func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
 	f.handler = func(w http.ResponseWriter) {
 		replies++
 		if replies == 1 {
-			io.WriteString(w, toolStream(noteCall))
+			io.WriteString(w, noteWithText())
 			return
 		}
 		io.WriteString(w, replyStream)
@@ -1675,7 +1826,7 @@ func TestForkRefusesWhatItCantKeep(t *testing.T) {
 
 func TestKeepGoingWithRealToolsIsIgnored(t *testing.T) {
 	f := newToolFake(t)
-	f.noteTools()
+	f.olderNoteTools()
 	c := f.open()
 	id := f.askForTools(c, callA, goCall)
 	d := f.decision(c, id, store.DecideCalls)
@@ -1790,7 +1941,7 @@ func TestSpendingIsCountedByBillingPeriod(t *testing.T) {
 		mustFinish(t, updates, err)
 	}
 	conv, _ := c.Conversation(one)
-	if conv.Budget.PeriodHere != 0.5 || conv.Budget.PeriodAll != 0.75 {
+	if conv.Budget.PeriodHere != picoFromUSD(0.5) || conv.Budget.PeriodAll != picoFromUSD(0.75) {
 		t.Errorf("budget = %+v", conv.Budget)
 	}
 
@@ -1800,24 +1951,24 @@ func TestSpendingIsCountedByBillingPeriod(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv, _ = c.Conversation(fork)
-	if conv.Budget.PeriodHere != 0 || conv.Budget.PeriodAll != 0.75 {
+	if conv.Budget.PeriodHere != 0 || conv.Budget.PeriodAll != picoFromUSD(0.75) {
 		t.Errorf("fork budget = %+v", conv.Budget)
 	}
 
 	// Last month's doesn't count.
 	c.mu.Lock()
 	last := billingPeriod(time.Now().AddDate(0, -1, -1))
-	c.convs[one].spentByPeriod = map[string]float64{last: 0.5}
+	c.convs[one].spentByPeriod = map[string]Pico{last: picoFromUSD(0.5)}
 	c.mu.Unlock()
 	conv, _ = c.Conversation(one)
-	if conv.Budget.PeriodHere != 0 || conv.Budget.PeriodAll != 0.25 || conv.Budget.Spent != 0.5 {
+	if conv.Budget.PeriodHere != 0 || conv.Budget.PeriodAll != picoFromUSD(0.25) || conv.Budget.Spent != picoFromUSD(0.5) {
 		t.Errorf("next month = %+v", conv.Budget)
 	}
 
 	// All of it survives a restart.
 	c = f.open()
 	conv, _ = c.Conversation(two)
-	if conv.Budget.PeriodHere != 0.25 || conv.Budget.PeriodAll != 0.75 {
+	if conv.Budget.PeriodHere != picoFromUSD(0.25) || conv.Budget.PeriodAll != picoFromUSD(0.75) {
 		t.Errorf("after a restart = %+v", conv.Budget)
 	}
 }

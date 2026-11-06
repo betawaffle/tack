@@ -11,6 +11,9 @@ import (
 // ErrRestarting says tack is finishing up to restart, so nothing new can start.
 var ErrRestarting = errors.New("tack is restarting for an update, so this wasn't started. Try again in a moment")
 
+// ErrStale says an action was based on an out-of-date view of the conversation.
+var ErrStale = errors.New("this conversation has changed since this page last showed it, so that wasn't done")
+
 // A restart waits for a clean stopping point: every running turn finishes, so none
 // needs someone to press Continue afterwards. What's waiting on a person isn't running
 // and the record keeps it. Nothing new that would call the model or run a tool starts
@@ -26,6 +29,22 @@ type Status struct {
 	// Restarting says a restart is waiting for the conversations in Waiting.
 	Restarting bool      `json:"restarting,omitzero"`
 	Waiting    []Summary `json:"waiting,omitzero"`
+}
+
+// CheckRevision refuses if a conversation isn't at the revision an action was based on.
+// What's on someone's page is what they're acting on, so if that's out of date, the action
+// isn't what they meant.
+func (c *Core) CheckRevision(convID string, revision int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conv := c.convs[convID]
+	if conv == nil {
+		return ErrNotFound
+	}
+	if conv.revision != revision {
+		return ErrStale
+	}
+	return nil
 }
 
 // Started records that this process is the one running. It's separate from New so that

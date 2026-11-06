@@ -270,16 +270,30 @@ button.pending { cursor: progress; animation: pending 1s ease-in-out infinite al
   margin: 10px 0; padding: 11px 13px; background: var(--warn-soft);
   border: 1px solid var(--warn); border-radius: 8px;
 }
-#budget-amount {
+.notes { margin: 0 0 10px; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 12.5px; }
+.notes summary { cursor: pointer; color: var(--muted); }
+.note-alert { margin-left: 8px; color: var(--warn); border-color: var(--warn); }
+.note-group { display: grid; grid-template-columns: 76px 1fr; gap: 8px; margin-top: 4px; }
+.note-kind { padding-top: 1px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.note-list { min-width: 0; }
+.note { display: flex; gap: 6px; align-items: baseline; }
+.note + .note { margin-top: 2px; }
+.note .tag { flex: none; }
+.note-text {
+  min-width: 0; margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.note-text.whole { display: block; }
+.note-concern .note-text { color: var(--warn); }
+.tool-compact { margin: 2px 0; color: var(--muted); font-size: 12px; }
+.tool-compact summary { cursor: pointer; }
+.tool-compact-label { display: inline; margin: 0; font: 12px var(--mono); white-space: normal; overflow-wrap: anywhere; }
+.money { display: inline-flex; align-items: center; gap: 3px; }
+.money-amount {
   width: 110px; padding: 3px 7px; background: var(--surface); color: inherit;
   border: 1px solid var(--line); border-radius: 6px; font: 12.5px var(--mono);
 }
-.notes { margin: 0 0 12px; padding: 7px 11px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; }
-.notes summary { cursor: pointer; color: var(--muted); }
-.note-kind { margin-top: 7px; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
-.note { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; }
-.note-text { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
-.note-concern .note-text { color: var(--warn); }
+.link-button { padding: 0; border: 0; background: none; color: var(--link); font: inherit; text-decoration: underline; cursor: pointer; }
 
 .user-actions { margin-top: 5px; text-align: right; }
 .fork-row { margin-top: 4px; }

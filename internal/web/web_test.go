@@ -299,3 +299,38 @@ func TestThePageKnowsItsVersion(t *testing.T) {
 		t.Errorf("status = %+v", got)
 	}
 }
+
+func TestAnActionBasedOnAnOldRevisionIsRefused(t *testing.T) {
+	s := site(t)
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(post(t, s.URL+"/api/conversations", "{}", http.StatusOK)), &created); err != nil {
+		t.Fatal(err)
+	}
+	hold := func(revision string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, s.URL+"/api/conversations/"+created.ID+"/held", strings.NewReader(`{"text":"hi"}`))
+		if revision != "" {
+			req.Header.Set("X-Tack-Revision", revision)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	if got := hold("0"); got.StatusCode != http.StatusOK {
+		t.Errorf("current: %d", got.StatusCode)
+	}
+	got := hold("0")
+	if got.StatusCode != http.StatusConflict || got.Header.Get("X-Tack-Stale") == "" {
+		t.Errorf("stale: %d, %v", got.StatusCode, got.Header)
+	}
+	if got := hold(""); got.StatusCode != http.StatusOK {
+		t.Errorf("not saying: %d", got.StatusCode)
+	}
+	if got := hold("nonsense"); got.StatusCode != http.StatusBadRequest {
+		t.Errorf("nonsense: %d", got.StatusCode)
+	}
+}

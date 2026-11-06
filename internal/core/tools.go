@@ -44,6 +44,9 @@ type Tool struct {
 	// HoldsResults means that if a reply's only calls are to tools like this, the turn
 	// ends, and the results go out with the next message.
 	HoldsResults bool
+	// Retired means new conversations aren't offered it. Older ones still send its
+	// definition, byte for byte, so it has to keep working for them.
+	Retired bool
 
 	// TackWritten says a successful output is tack's own message, not anything read
 	// from the system, so there's nothing for a person to vet before the model sees it.
@@ -116,10 +119,12 @@ type ToolInfo struct {
 // ToolInfo lists the configured tools.
 func (c *Core) ToolInfo() []ToolInfo {
 	settings := c.currentSettings()
-	out := make([]ToolInfo, len(c.cfg.Tools))
+	out := make([]ToolInfo, 0, len(c.cfg.Tools))
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		out[i] = ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval, Definition: tool.define(settings)}
+		if !tool.Retired {
+			out = append(out, ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval, Definition: tool.define(settings)})
+		}
 	}
 	return out
 }
@@ -222,16 +227,16 @@ func (conv *conversation) unanswered() bool { return len(conv.openCalls()) > 0 }
 func (conv *conversation) applyTool(ev *store.Event) {
 	switch ev.Type {
 	case store.BudgetAdded:
-		conv.budgetAdded += ev.AmountUSD
+		conv.budgetAdded += picoFromUSD(ev.AmountUSD)
 		conv.budgetStopped = false
 	case store.AllowanceStarted:
-		conv.allowanceSet, conv.allowanceBase, conv.allowance = true, ev.SpentUSD, ev.AmountUSD
+		conv.allowanceSet, conv.allowanceBase, conv.allowance = true, picoFromUSD(ev.SpentUSD), picoFromUSD(ev.AmountUSD)
 		conv.freshAllowance = true
 		conv.budgetStopped = false
 		conv.chainStarts = append(conv.chainStarts, len(conv.items))
 	case store.BudgetStopped:
 		conv.budgetStopped = true
-		conv.stoppedEstimate = ev.EstimateUSD
+		conv.stoppedEstimate = picoFromUSD(ev.EstimateUSD)
 	case store.PauseRequested:
 		conv.paused = true
 	case store.PauseCleared:
@@ -304,7 +309,7 @@ func (c *Core) storeDefinitions(settings store.Settings, opts Options) (store.Re
 	var definitions []jsontext.Value
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		if (tool.NeedsWorkdir && opts.Workdir == "") || slices.Contains(opts.LeaveOut, tool.Name) {
+		if tool.Retired || (tool.NeedsWorkdir && opts.Workdir == "") || slices.Contains(opts.LeaveOut, tool.Name) {
 			continue
 		}
 		definition := tool.define(settings)
@@ -617,11 +622,8 @@ func (c *Core) turnEnded(conv *conversation) bool {
 				return false
 			}
 		}
-		// With this setting, ending the turn takes something for the person to read.
-		if len(it.calls) > 0 && conv.effectiveSettings(c.settings).NotesWithoutTextContinue && !c.hasText(it) {
-			return false
-		}
-		return true
+		// Ending the turn takes something for the person to read.
+		return len(it.calls) == 0 || c.hasText(it)
 	}
 	return true
 }
@@ -839,6 +841,17 @@ func (c *Core) ProposeSettings(convID string, settings store.Settings) (string, 
 	return id, c.record(&store.Event{Type: store.SettingsProposed, Conversation: convID, Edit: id, Settings: &settings})
 }
 
+func (c *Core) isCompact(name string) bool {
+	tool := c.findTool(name)
+	return tool != nil && tool.NoApproval
+}
+
+func onlyBudgetDiffers(a, b store.Settings) bool {
+	a, b = a.WithDefaults(), b.WithDefaults()
+	a.BudgetUSD, a.BudgetTopUpUSD = b.BudgetUSD, b.BudgetTopUpUSD
+	return reflect.DeepEqual(a, b)
+}
+
 // ApplySettings makes held settings the conversation's own. Tool definitions come
 // first in every request, so if they change, the next call misses the whole cache.
 func (c *Core) ApplySettings(convID, id string) error {
@@ -848,11 +861,12 @@ func (c *Core) ApplySettings(convID, id string) error {
 		if conv.pendingSettings == nil || conv.pendingSettings.id != id {
 			return ErrNoEdit
 		}
-		if conv.decision != nil || conv.unanswered() {
-			return ErrAwaiting
-		}
 		pending = conv.pendingSettings.settings
 		before, current = conv.effectiveSettings(c.settings), conv.tools
+		// A budget has nothing to do with whatever's waiting.
+		if (conv.decision != nil || conv.unanswered()) && !onlyBudgetDiffers(before, pending) {
+			return ErrAwaiting
+		}
 		return nil
 	})
 	if err != nil {
@@ -993,6 +1007,7 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		Invalid:   call.Invalid,
 		Flags:     call.Flags,
 		Error:     call.failure,
+		Compact:   c.isCompact(call.Name),
 		// Only the newest call with an ID can be the one a decision means.
 		Decidable: conv.decision != nil && slices.Contains(conv.decision.calls, call.ID) &&
 			conv.tool(call.ID) == call && !call.resolved() && call.Invalid == "",

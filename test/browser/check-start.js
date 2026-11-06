@@ -89,7 +89,7 @@ let page;
   await idle();
   b = await bodies();
   ok(b[0].messages[0].content === "Written by hand.", "hand edit is what gets sent");
-  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command,note,keep_going", "tools are offered");
+  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command,note", "tools are offered");
 
   // A bad directory is refused, and nothing is lost.
   await fresh();
@@ -239,7 +239,7 @@ let page;
   await p.waitForSelector(".ledger", { timeout: 15000 });
   await idle();
   b = await bodies();
-  ok(b[0].tools.map((t) => t.function.name).join() === "note,keep_going", "no working directory leaves only notes");
+  ok(b[0].tools.map((t) => t.function.name).join() === "note", "no working directory leaves only notes");
   ok(b[0].messages[0].content.includes("can't access files"), "and the model is told");
   fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
 
@@ -258,27 +258,14 @@ let page;
   await send("tools note");
   await p.waitForSelector(".notes", { timeout: 15000 });
   await idle();
-  ok((await bodies()).length === 1, "notes alone don't make another model call");
+  ok((await bodies()).length === 2, "a reply with only notes carries on");
   ok((await p.locator(".decision-card").count()) === 0, "and need no approval");
-  ok((await p.locator(".notes summary").textContent()) === "From the model", "they're labelled as coming from the model");
+  ok((await p.locator(".notes summary").textContent()) === "From the model (2)", "they're labelled as coming from the model");
   ok((await p.locator(".note-plan .note-text").textContent()) === "Do the <b>thing</b>", "their text is inert");
   ok((await p.locator(".note-plan .tag").textContent()) === "doing", "with a status");
   ok((await p.locator(".note-tool_wish .note-text").textContent()) === "A tool for go test", "and a wish list");
   ok((await p.locator(".notes button, .notes input").count()) === 0, "with nothing to approve");
   await p.screenshot({ path: "shots/notes.png" });
-  await send("short after notes");
-  await p.waitForSelector(".prose:has-text('A short reply')", { timeout: 15000 });
-  await idle();
-  b = await bodies();
-  const sent = b[1].messages;
-  ok(sent[sent.length - 2].role === "tool" && sent[sent.length - 2].content === "ok" && sent[sent.length - 1].content === "short after notes", "results go out with the next message");
-
-  await reset();
-  await send("tools notego");
-  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
-  await idle();
-  ok((await bodies()).length === 2, "keep_going continues");
-
   // Pause.
   await fresh();
   await reset();
@@ -345,9 +332,13 @@ let page;
   await send("tools notego");
   await p.waitForSelector(".budget-card", { timeout: 15000 });
   ok((await bodies()).length === 1, "the call you asked for goes, and the one after it doesn't, over budget");
-  ok((await p.inputValue("#budget-amount")) === "0.5", "the box starts with the top-up");
-  ok(/\+ \$\S+ since you stepped in/.test(await p.locator(".chain-total").last().innerText()), "it shows what the run cost");
-  ok(/this month: \$\S+ here/.test(await p.locator("#meta").innerText()), "and what's been spent this month");
+  ok((await p.inputValue("#budget-amount")) === "50", "the box starts with the top-up, in cents");
+  await p.locator(".budget-card .money button", { hasText: "$" }).click();
+  ok((await p.inputValue("#budget-amount")) === "0.5", "switching to dollars keeps the value");
+  await p.locator(".budget-card .money button", { hasText: "¢" }).click();
+  ok((await p.inputValue("#budget-amount")) === "50", "and so does switching back");
+  ok(/\+ \S+¢ since you stepped in/.test(await p.locator(".chain-total").last().innerText()), "it shows what the run cost");
+  ok(/this month: \S+¢ here/.test(await p.locator("#meta").innerText()), "and what's been spent this month");
   await p.screenshot({ path: "shots/budget.png" });
   await reset();
   await p.click(".budget-card button.spends");
@@ -362,11 +353,10 @@ let page;
   await p.locator("#start-details summary", { hasText: "Tools" }).click();
   await p.fill("textarea[data-description=note]", "A rewritten note description.");
   await p.fill("textarea[aria-label='note: key']", "A rewritten key description.");
-  await p.locator("input[data-tool=keep_going]").uncheck();
+  await p.locator("input[data-tool=list_files]").uncheck();
   await p.locator("#start-details summary", { hasText: "Settings" }).click();
   const started = JSON.parse(await p.inputValue("#start-settings"));
-  ok(started.notes_without_text_continue === false, "the notes setting is there to change");
-  await p.fill("#start-settings", JSON.stringify({ ...started, notes_without_text_continue: true }));
+  await p.fill("#start-settings", JSON.stringify({ ...started, budget_top_up_usd: 0.125 }));
   await p.fill("#system-prompt", "A prompt written for this test.");
   await p.screenshot({ path: "shots/start-tools.png", fullPage: true });
   await send("short try the edits");
@@ -377,7 +367,7 @@ let page;
   ok(sentNote.function.description === "A rewritten note description.", "the edited description is sent");
   ok(sentNote.function.parameters.properties.key.description === "A rewritten key description.", "and the edited parameter");
   ok(Object.keys(sentNote.function.parameters.properties).join() === "kind,key,text,status", "with the parameters in the same order");
-  ok(!sentTools.some((t) => t.function.name === "keep_going"), "a tool left out isn't offered");
+  ok(!sentTools.some((t) => t.function.name === "list_files"), "a tool left out isn't offered");
   ok(sentTools.some((t) => t.function.name === "read_file"), "and the others still are");
 
   await p.locator(".conv-settings > summary").click();
@@ -392,7 +382,7 @@ let page;
   });
   await p.getByRole("button", { name: "Start another like this" }).click();
   await p.waitForFunction(() => document.getElementById("system-prompt").value === "A prompt written for this test.", null, { timeout: 5000 });
-  ok(!(await p.locator("input[data-tool=keep_going]").isChecked()), "starting another keeps a tool left out");
+  ok(!(await p.locator("input[data-tool=list_files]").isChecked()), "starting another keeps a tool left out");
   await reset();
   await send("short run it again");
   await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
@@ -401,7 +391,7 @@ let page;
   ok(JSON.stringify(again.tools) === JSON.stringify(sentTools), "and sends the same definitions");
   ok(again.messages[0].content === "A prompt written for this test.", "and the same prompt");
   await p.waitForSelector("#settings-text", { state: "attached", timeout: 15000 });
-  ok(JSON.parse(await p.inputValue("#settings-text")).notes_without_text_continue === true, "and the same settings");
+  ok(JSON.parse(await p.inputValue("#settings-text")).budget_top_up_usd === 0.125, "and the same settings");
 
   // Forking: try other first messages without setting anything up again.
   await fresh();
@@ -447,12 +437,28 @@ let page;
 
   // Spending, against what tack really reports.
   const spend = await p.locator("#spend").innerText();
-  ok(/Next call about \$\S+\. Up to \$\S+ before tack asks you again/.test(spend), "the composer says what the next call looks like: " + spend);
-  const estimate = (text) => Number(/about \$(\S+)\./.exec(text)[1]);
+  ok(/Next call about \S+¢\. Up to \S+ before tack asks you again/.test(spend), "the composer says what the next call looks like: " + spend);
+  const estimate = (text) => Number(/about (\S+)¢\./.exec(text)[1]);
   await p.fill("#input", "x".repeat(200000));
   const typed = await p.locator("#spend").innerText();
   ok(estimate(typed) > estimate(spend), "and the estimate grows while typing: " + typed);
   await p.fill("#input", "");
+
+  // Changing the budget from there. A settings box can't drift from it.
+  await p.click("#spend-change");
+  ok(await p.locator("#spend-amount").isVisible(), "clicking the amount lets you change it");
+  await p.fill("#spend-amount", "0.75");
+  await p.locator("#spend .money button", { hasText: "$" }).click();
+  ok((await p.inputValue("#spend-amount")) === "0.0075", "and it converts between cents and dollars");
+  await p.locator("#spend button", { hasText: "Set" }).click();
+  await p.waitForFunction(() => document.getElementById("spend-change")?.innerText === "0.75¢", null, { timeout: 5000 });
+  ok(JSON.parse(await p.inputValue("#settings-text")).budget_usd === 0.0075, "and that changes the conversation's budget");
+  await p.click("#spend-change");
+  await p.fill("#spend-amount", "nonsense");
+  await p.locator("#spend button", { hasText: "Set" }).click();
+  await p.waitForSelector(".notice:has-text('nonsense')");
+  ok(true, "something that isn't an amount is refused");
+  await p.locator("#spend button", { hasText: "Cancel" }).click();
   ok((await p.locator("#send").getAttribute("class")).includes("spends"), "Send is marked as spending");
   ok(await p.locator("#hold:not(.spends)").count(), "and Hold isn't");
 
@@ -494,7 +500,7 @@ let page;
   ok(forkSent.messages[0].content === "The forked prompt.", "the fork sends the changed system message");
   ok(forkSent.messages[1].content === "short still typing this", "and the message");
   ok(JSON.parse(await p.locator("#settings-text").inputValue()).budget_usd === 0.25, "and has the changed settings");
-  await p.waitForFunction(() => document.getElementById("spend").innerText.includes("$0.2500"), null, { timeout: 5000 });
+  await p.waitForFunction(() => document.getElementById("spend").innerText.includes("25¢"), null, { timeout: 5000 });
   ok(true, "which the composer's allowance follows");
 
   // Holding creates a fork without calling the model.
@@ -504,6 +510,42 @@ let page;
   await p.click("#hold");
   await p.waitForFunction(() => !document.querySelector(".fork-banner") && document.querySelector(".user.is-waiting"), null, { timeout: 5000 });
   ok((await bodies()).length === 0, "holding starts a fork without a model call");
+
+  // A page that's behind can't act: another tab holds a message, and this one's send is
+  // refused, with the text kept and the conversation brought up to date.
+  await p.fill("#input", "short from the stale tab");
+  const openId = await p.evaluate(() => location.hash.slice(1));
+  const otherTab = await fetch(`${B}/api/conversations/${openId}/held`, { method: "POST", body: JSON.stringify({ text: "from another tab" }) });
+  ok(otherTab.ok, "another tab holds a message");
+  await reset();
+  await p.press("#input", "Enter");
+  await p.waitForFunction(() => document.getElementById("toast").innerText.includes("had changed"), null, { timeout: 5000 });
+  ok((await bodies()).length === 0, "a page that's behind can't call the model");
+  ok((await p.inputValue("#input")) === "short from the stale tab", "and keeps the text");
+  await p.waitForSelector(".user:has-text('from another tab')", { timeout: 5000 });
+  ok(true, "and catches up");
+  await p.press("#input", "Enter");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  const caughtUp = (await bodies())[0].messages;
+  ok(caughtUp.at(-1).content === "short from the stale tab" && caughtUp.at(-2).content === "from another tab", "then it goes, with both messages");
+
+  // Notes: one line where they happened, a panel that collapses, and it stays that way.
+  await fresh();
+  await reset();
+  await send("tools note");
+  await p.waitForSelector(".notes", { timeout: 15000 });
+  await idle();
+  ok((await p.locator(".tool-compact").count()) === 2, "notes get one line where they happened");
+  ok((await p.locator(".tool-name", { hasText: "note" }).count()) === 0, "rather than a card");
+  ok(/\(2\)/.test(await p.locator(".notes summary").innerText()), "the panel says how many");
+  await p.screenshot({ path: "shots/notes.png" });
+  await p.locator(".notes summary").click();
+  ok(!(await p.locator(".notes").evaluate((n) => n.open)), "the panel collapses");
+  await p.reload();
+  await p.waitForSelector(".notes");
+  ok(!(await p.locator(".notes").evaluate((n) => n.open)), "and stays collapsed");
+  await p.locator(".notes summary").click();
 
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
 

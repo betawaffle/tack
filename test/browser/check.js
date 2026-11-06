@@ -350,7 +350,7 @@ const msgs = (b) => JSON.parse(b).messages;
   await page2.waitForTimeout(400);
   await page2.fill("#input", "do not lose me");
   await page2.press("#input", "Enter");
-  await page2.waitForSelector('.notice:has-text("already in progress")', { timeout: 5000 });
+  await page2.waitForFunction(() => document.getElementById("toast").innerText.includes("had changed"), null, { timeout: 5000 });
   ok(
     (await page2.inputValue("#input")) === "do not lose me",
     "refused message goes back in the box",

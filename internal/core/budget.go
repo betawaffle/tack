@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json/v2"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 // recentCostsKept is how many calls the estimate looks at.
 const recentCostsKept = 3
 
-func usageCost(ev *store.Event) (float64, bool) {
+func usageCost(ev *store.Event) (Pico, bool) {
 	if len(ev.Usage) == 0 {
 		return 0, false
 	}
@@ -28,13 +29,13 @@ func usageCost(ev *store.Event) (float64, bool) {
 	if json.Unmarshal(ev.Usage, &usage) != nil || usage.Cost == nil {
 		return 0, false
 	}
-	return *usage.Cost, true
+	return picoFromUSD(*usage.Cost), true
 }
 
 // addCost counts a finished call. A call that was cancelled or cut off doesn't report
 // its cost, and the host may charge for it anyway, so it counts as the most expensive
 // recent call. A refused request costs nothing.
-func (conv *conversation) addCost(ev *store.Event) float64 {
+func (conv *conversation) addCost(ev *store.Event) Pico {
 	if cost, ok := usageCost(ev); ok {
 		conv.count(ev, cost)
 		conv.recentCosts = append(conv.recentCosts, cost)
@@ -51,10 +52,10 @@ func (conv *conversation) addCost(ev *store.Event) float64 {
 	return 0
 }
 
-func (conv *conversation) count(ev *store.Event, cost float64) {
+func (conv *conversation) count(ev *store.Event, cost Pico) {
 	conv.spent += cost
 	if conv.spentByPeriod == nil {
-		conv.spentByPeriod = map[string]float64{}
+		conv.spentByPeriod = map[string]Pico{}
 	}
 	conv.spentByPeriod[billingPeriod(ev.Time)] += cost
 }
@@ -66,15 +67,15 @@ func billingPeriod(t time.Time) string {
 }
 
 // spentInPeriod is what all of tack has spent in a period. The caller holds mu.
-func (c *Core) spentInPeriod(period string) float64 {
-	var total float64
+func (c *Core) spentInPeriod(period string) Pico {
+	var total Pico
 	for _, conv := range c.convs {
 		total += conv.spentByPeriod[period]
 	}
 	return total
 }
 
-func (conv *conversation) maxRecentCost() float64 {
+func (conv *conversation) maxRecentCost() Pico {
 	if len(conv.recentCosts) == 0 {
 		return 0
 	}
@@ -84,20 +85,21 @@ func (conv *conversation) maxRecentCost() float64 {
 // estimate guesses the next call's cost from recent ones, scaled by how much the
 // request has grown. A cache miss or a long reply can cost more, which is part of why
 // the budget is soft. The first call has nothing to go on.
-func (conv *conversation) estimate(requestBytes int) float64 {
+func (conv *conversation) estimate(requestBytes int) Pico {
 	estimate := conv.maxRecentCost()
 	if conv.lastRequestBytes > 0 && requestBytes > conv.lastRequestBytes {
-		estimate *= float64(requestBytes) / float64(conv.lastRequestBytes)
+		// It's only a guess, so a float is fine here, and multiplying first could overflow.
+		estimate = Pico(math.Round(float64(estimate) * float64(requestBytes) / float64(conv.lastRequestBytes)))
 	}
 	return estimate
 }
 
 // budgetLimit is the total spending that the next call shouldn't go past.
-func (conv *conversation) budgetLimit(settings store.Settings) float64 {
+func (conv *conversation) budgetLimit(settings store.Settings) Pico {
 	if conv.allowanceSet {
 		return conv.allowanceBase + conv.allowance
 	}
-	return settings.WithDefaults().BudgetUSD + conv.budgetAdded
+	return picoFromUSD(settings.WithDefaults().BudgetUSD) + conv.budgetAdded
 }
 
 // startAllowance marks that a person has set things going. If the allowance they chose
@@ -110,12 +112,12 @@ func (c *Core) startAllowance(conv *conversation) error {
 	}
 	amount, spent := conv.effectiveSettings(c.settings).WithDefaults().BudgetUSD, conv.spent
 	c.mu.Unlock()
-	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: conv.id, AmountUSD: amount, SpentUSD: spent, By: "user"})
+	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: conv.id, AmountUSD: amount, SpentUSD: spent.USD(), By: "user"})
 }
 
 // AllowBudget lets the model spend this much more from here, whatever was left before.
 // It's allowed at any time.
-func (c *Core) AllowBudget(convID string, amount float64) error {
+func (c *Core) AllowBudget(convID string, amount Pico) error {
 	c.mu.Lock()
 	conv := c.convs[convID]
 	if conv == nil {
@@ -127,12 +129,12 @@ func (c *Core) AllowBudget(convID string, amount float64) error {
 	if amount <= 0 {
 		return fmt.Errorf("%w: the amount has to be positive", ErrBadSettings)
 	}
-	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: convID, AmountUSD: amount, SpentUSD: spent, By: "user"})
+	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: convID, AmountUSD: amount.USD(), SpentUSD: spent.USD(), By: "user"})
 }
 
 // chainTotal is what the calls since someone last set things going cost.
 type chainTotal struct {
-	cost  float64
+	cost  Pico
 	calls int
 }
 
