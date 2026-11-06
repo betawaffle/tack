@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/betawaffle/tack/internal/openrouter"
 	"github.com/betawaffle/tack/internal/store"
@@ -1282,11 +1281,11 @@ func TestCancelEndsTheCallAndKeepsWhatArrived(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-wrote
-	for range 200 {
-		if conv, _ := c.Conversation(id); conv.Running.Reply {
+	// Wait until the text has actually arrived, so there's something to keep.
+	for u := range updates {
+		if u.Kind == "content" {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 	if err := c.CancelReply(id); err != nil {
 		t.Fatal(err)

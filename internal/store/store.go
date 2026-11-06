@@ -337,11 +337,14 @@ type Event struct {
 	Artifacts []Artifact `json:"artifacts,omitzero"`
 }
 
+var errReadOnly = errors.New("this store was opened read-only")
+
 // Store is the single writer for a data directory.
 type Store struct {
 	dir      string
 	tripwire *secret.Tripwire
 	lock     *os.File
+	readOnly bool
 
 	mu   sync.Mutex
 	day  string
@@ -372,11 +375,23 @@ func Open(dir string, tripwire *secret.Tripwire) (*Store, error) {
 	return &Store{dir: dir, tripwire: tripwire, lock: lock}, nil
 }
 
+// OpenReadOnly reads a data directory that a running tack may be using. It takes no
+// lock and creates nothing, so it can't get in the way, and anything that writes fails.
+func OpenReadOnly(dir string) (*Store, error) {
+	if _, err := os.Stat(filepath.Join(dir, "events")); err != nil {
+		return nil, err
+	}
+	return &Store{dir: dir, readOnly: true}, nil
+}
+
 // Close releases the directory.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeEvents()
+	if s.lock == nil {
+		return nil
+	}
 	return s.lock.Close()
 }
 
@@ -451,6 +466,9 @@ type Partial struct {
 
 // NewPartial starts a blob. The name only has to be unique within partial/.
 func (s *Store) NewPartial(name string) (*Partial, error) {
+	if s.readOnly {
+		return nil, errReadOnly
+	}
 	f, err := os.OpenFile(filepath.Join(s.dir, "partial", name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
@@ -512,6 +530,9 @@ func (p *Partial) Commit() (Ref, error) {
 
 // Append records an event durably. It sets the event's time if it's unset.
 func (s *Store) Append(ev *Event) error {
+	if s.readOnly {
+		return errReadOnly
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ev.Time.IsZero() {

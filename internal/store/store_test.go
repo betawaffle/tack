@@ -349,3 +349,36 @@ func TestFailedAppendCantSwallowTheNextEvent(t *testing.T) {
 		t.Errorf("got %v, torn %d", got, torn)
 	}
 }
+
+func TestReadOnlyWorksBesideAWriterAndCantWrite(t *testing.T) {
+	var fired string
+	s, dir := open(t, &fired)
+	ref, err := s.Put([]byte("abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(&Event{Type: UserMessage, Conversation: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, err := r.Get(ref); err != nil || string(got) != "abc" {
+		t.Errorf("Get = %q, %v", got, err)
+	}
+	count := 0
+	if err := r.Replay(func(*Event) error { count++; return nil }, nil); err != nil || count != 1 {
+		t.Errorf("Replay = %d, %v", count, err)
+	}
+	if err := r.Append(&Event{Type: UserMessage}); err == nil {
+		t.Error("Append worked")
+	}
+	if _, err := r.Put([]byte("x")); err == nil {
+		t.Error("Put worked")
+	}
+	if _, err := OpenReadOnly(filepath.Join(dir, "nope")); err == nil {
+		t.Error("a missing directory should fail")
+	}
+}

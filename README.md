@@ -174,6 +174,21 @@ ends the turn without another model call, and the results go out with your next 
 `keep_going` is how a model says it has more to do. These are offered even with no working
 directory.
 
+## Reading the record
+
+`tack-show` prints conversations from the record. It only reads, so it's safe beside a
+running tack:
+
+```
+go build -o ~/.local/bin/tack-show ./cmd/tack-show
+tack-show                 # list conversations
+tack-show last            # the newest
+tack-show teapot          # by part of its first message, or its ID
+tack-show -full teapot    # without shortening anything
+tack-show -sent teapot    # also what each call sent, with the real roles
+tack-show -events teapot  # also its raw events
+```
+
 ## Testing
 
 `go test ./...` covers the server, including a record in the first event format
