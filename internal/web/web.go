@@ -47,6 +47,7 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations", s.create)
 	mux.HandleFunc("GET /api/conversations/{id}", s.get)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", s.send)
+	mux.HandleFunc("POST /api/conversations/{id}/held", s.hold)
 	mux.HandleFunc("POST /api/conversations/{id}/reply", s.reply)
 	mux.HandleFunc("POST /api/conversations/{id}/system", s.addSystem)
 	mux.HandleFunc("POST /api/conversations/{id}/system/{message}/edits", s.proposeEdit)
@@ -189,6 +190,22 @@ func (s *server) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stream(w, r, updates)
+}
+
+func (s *server) hold(w http.ResponseWriter, r *http.Request) {
+	text, ok := readText(w, r, "text")
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		http.Error(w, "empty message", http.StatusBadRequest)
+		return
+	}
+	if err := s.core.HoldMessage(r.PathValue("id"), text); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (s *server) reply(w http.ResponseWriter, r *http.Request) {

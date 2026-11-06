@@ -45,9 +45,11 @@ type Item struct {
 	Reasoning string `json:"reasoning,omitzero"`
 	Stats     *Stats `json:"stats,omitzero"`
 
+	// User and system messages: no call has included this text yet.
+	Queued bool `json:"queued,omitzero"`
+
 	// System messages only.
 	Message string       `json:"message,omitzero"`
-	Queued  bool         `json:"queued,omitzero"` // no call has included this text yet
 	Edited  bool         `json:"edited,omitzero"`
 	Removed bool         `json:"removed,omitzero"`
 	Pending *PendingEdit `json:"pending,omitzero"`
@@ -220,7 +222,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	for i, it := range conv.items {
 		switch {
 		case it.role == "user":
-			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.parts)})
+			out.Items = append(out.Items, Item{Role: "user", Text: c.text(it.parts), Queued: !it.sent})
 		case it.role == "system":
 			out.Items = append(out.Items, c.systemItem(it))
 		case it.finished == nil:

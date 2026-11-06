@@ -231,3 +231,16 @@ func TestOnlyKnownHostnamesGetIn(t *testing.T) {
 		}
 	}
 }
+
+func TestHoldingAMessageMakesNoCall(t *testing.T) {
+	s := site(t)
+	id := field(t, post(t, s.URL+"/api/conversations", `{}`, 200), "id")
+	base := s.URL + "/api/conversations/" + id
+	post(t, base+"/held", `{"text":"  "}`, http.StatusBadRequest)
+	post(t, s.URL+"/api/conversations/nope/held", `{"text":"x"}`, http.StatusNotFound)
+	post(t, base+"/held", `{"text":"Wait for it."}`, 200)
+	got := get(t, base)
+	if !strings.Contains(got, `"queued":true`) || !strings.Contains(got, `"can_reply":true`) || strings.Contains(got, `"assistant"`) {
+		t.Errorf("conversation = %s", got)
+	}
+}

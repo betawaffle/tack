@@ -626,6 +626,11 @@ function renderSystem(item) {
 function renderItem(item, index, decision) {
   if (item.role === "system") return renderSystem(item);
   if (item.role === "assistant") return renderReply(item, `reply-${index}`, decision);
+  if (item.role === "user" && item.queued) {
+    const node = el("div", "user is-waiting", item.text);
+    node.append(el("div", "user-waiting", "Goes with the next call"));
+    return node;
+  }
   return el("div", item.role, item.text);
 }
 
@@ -1041,25 +1046,43 @@ function setInput(text) {
   resizeInput();
 }
 
+async function ensureConversation() {
+  if (current) return;
+  const res = await postJSON("/api/conversations", newConversationBody());
+  current = (await res.json()).id;
+  location.hash = current;
+  setOpenMode(true);
+  await show(current);
+}
+
 $("form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("input").value;
   if (!text.trim() || (current && streaming === current)) return;
   setInput("");
   try {
-    if (!current) {
-      const res = await postJSON("/api/conversations", newConversationBody());
-      current = (await res.json()).id;
-      location.hash = current;
-      setOpenMode(true);
-      await show(current);
-    }
+    await ensureConversation();
     // If the server refused it, nothing was recorded, so don't lose the text.
     if (!(await call(current, text))) setInput(text);
   } catch (err) {
     setInput(text);
     reportError(err);
   }
+});
+
+$("hold").addEventListener("click", async () => {
+  const text = $("input").value;
+  if (!text.trim()) return;
+  try {
+    await ensureConversation();
+    await postJSON(`/api/conversations/${current}/held`, { text });
+    setInput("");
+    if (streaming !== current) await show(current);
+    await refreshList();
+  } catch (err) {
+    reportError(err);
+  }
+  $("input").focus();
 });
 
 $("add-system").addEventListener("click", async () => {

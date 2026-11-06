@@ -471,6 +471,19 @@ func (c *Core) release(conv *conversation) {
 	c.mu.Unlock()
 }
 
+// HoldMessage adds a user message without calling the model. Like a system message, it
+// goes with the next call, whichever call that is, in the order it was added.
+func (c *Core) HoldMessage(convID, text string) error {
+	if err := c.exists(convID); err != nil {
+		return err
+	}
+	parts, err := c.parts(text)
+	if err != nil {
+		return err
+	}
+	return c.record(&store.Event{Type: store.UserMessage, Conversation: convID, Parts: parts})
+}
+
 // Send adds a user message and asks the model to reply. Any system messages
 // waiting in the conversation go with it. The call runs to completion even if
 // nobody reads the updates, so closing the browser loses nothing.

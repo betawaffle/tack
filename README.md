@@ -143,6 +143,12 @@ the directories named by `search_skip`.
 Arguments and output are stored as blocks, not in event lines. A conversation
 keeps sending the tool definitions it started with, byte for byte.
 
+## Holding a message
+
+**Hold** adds what you've typed as your message without calling the model. It goes with
+the next call, in the order you added it, so you can follow it with a system message
+before asking for a reply. A held message can't be edited or removed yet.
+
 ## Budgets and stopping
 
 Each conversation has a soft budget. tack doesn't start a call if the budget is spent

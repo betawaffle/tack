@@ -290,6 +290,25 @@ const msgs = (b) => JSON.parse(b).messages;
   );
   ok((await p.locator(".reply-control").count()) === 0, "retry gone after success");
 
+  // Holding a message.
+  await fetch(F + "/reset");
+  await p.fill("#input", "short held message");
+  await p.click("#hold");
+  await p.waitForSelector(".user.is-waiting");
+  ok((await bodies()).length === 0, "holding a message makes no call");
+  ok((await p.inputValue("#input")) === "", "and clears the box");
+  await p.fill("#input", "Answer in French.");
+  await p.click("#add-system");
+  await p.waitForSelector(".tag.waiting");
+  ok((await p.locator(".reply-control button").textContent()).includes("respond now"), "a reply can then be asked for");
+  await p.locator(".reply-control button").click();
+  await idle();
+  {
+    const held = msgs((await bodies())[0]);
+    ok(held[held.length - 2].role === "user" && held[held.length - 2].content === "short held message" && held[held.length - 1].role === "system" && held[held.length - 1].content === "Answer in French.", "they go in the order they were added");
+  }
+  ok((await p.locator(".user.is-waiting").count()) === 0, "and stop showing as waiting");
+
   // Newlines and composer
   await p.fill("#input", "");
   await p.press("#input", "a");

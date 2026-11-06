@@ -1461,3 +1461,60 @@ func TestNotesWithNoWorkdirAreStillOffered(t *testing.T) {
 		t.Errorf("request = %s", body)
 	}
 }
+
+func TestHeldMessagesGoWithTheNextCallInOrder(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("Be brief.")
+	if err := c.HoldMessage("nope", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v", err)
+	}
+	if err := c.HoldMessage(id, "Held."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddSystemMessage(id, "A rule after it."); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.bodies); n != 0 {
+		t.Fatalf("called the model: %d", n)
+	}
+	conv, _ := c.Conversation(id)
+	if !conv.CanReply || !conv.Items[1].Queued || conv.Items[1].Role != "user" {
+		t.Errorf("view = %+v", conv.Items)
+	}
+	// It survives a restart, and a reply sends it where it is.
+	c = f.open()
+	updates, err := c.Reply(id)
+	mustFinish(t, updates, err)
+	f.wantMessages(0, sys("Be brief."), user("Held."), sys("A rule after it."))
+	conv, _ = c.Conversation(id)
+	if conv.Items[1].Queued {
+		t.Error("still shown as waiting")
+	}
+}
+
+func TestSendingAfterAHeldMessageKeepsTheOrder(t *testing.T) {
+	f := newFake(t)
+	c := f.open()
+	id, _ := c.NewConversation("")
+	if err := c.HoldMessage(id, "First."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddSystemMessage(id, "Middle."); err != nil {
+		t.Fatal(err)
+	}
+	updates, err := c.Send(id, "Last.")
+	mustFinish(t, updates, err)
+	f.wantMessages(0, user("First."), sys("Middle."), user("Last."))
+}
+
+func TestAMessageCanBeHeldWhileADecisionWaits(t *testing.T) {
+	f := newToolFake(t)
+	c := f.open()
+	id := f.askForTools(c, callA)
+	if err := c.HoldMessage(id, "Before you go on."); err != nil {
+		t.Fatal(err)
+	}
+	f.decide(c, id, store.DecideCalls, "")
+	f.wantMessages(1, sys("Be brief."), user("Use your tools."), assistantCalls(callA), toolMsg("call-a", DefaultCallDenial), user("Before you go on."))
+}

@@ -243,6 +243,15 @@ let page;
   ok(b[0].messages[0].content.includes("can't access files"), "and the model is told");
   fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
 
+  // Holding the very first message starts the conversation.
+  await fresh();
+  await reset();
+  await p.fill("#input", "short first and held");
+  await p.click("#hold");
+  await p.waitForSelector(".user.is-waiting");
+  ok((await bodies()).length === 0 && !(await p.isVisible("#start")), "holding a first message starts the conversation without a call");
+  ok(!(await p.isDisabled("#add-system")), "and a system message can follow it");
+
   // Notes.
   await fresh();
   await reset();
