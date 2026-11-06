@@ -109,7 +109,7 @@ const msgs = (b) => JSON.parse(b).messages;
     (await p.locator(".thinking-text strong", { hasText: "moment" }).count()) === 1,
     "reasoning renders as markdown",
   );
-  await p.locator(".thinking summary").click();
+  ok(await p.locator(".thinking").evaluate((n) => n.open), "reasoning that came in open stays open");
   await p.locator(".thinking button", { hasText: "Raw" }).click();
   ok(
     (await p.locator(".thinking-text pre.raw").textContent()).includes("**moment**"),
@@ -117,7 +117,6 @@ const msgs = (b) => JSON.parse(b).messages;
   );
   ok((await p.locator(".assistant > .prose h2").count()) === 1, "the reply's view stays as it was");
   await p.locator(".thinking button", { hasText: "Markdown" }).click();
-  await p.locator(".thinking summary").click();
   await p.locator(".codeblock button").click();
   ok(
     await p

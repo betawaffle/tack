@@ -336,6 +336,11 @@ function replyNode() {
   return { node, thinking, reasoning, text };
 }
 
+// Which replies have their reasoning open, kept across redraws, so it never closes on
+// someone reading it. A reply that came in with its reasoning open stays that way.
+const reasoningOpen = new Set();
+let keepReasoningFrom = null;
+
 function renderReply(item, key, decision) {
   const r = replyNode();
   const controls = item.text ? viewed(`${key}-text`, item.text, ["markdown", "raw", "json"], r.text, "raw") : null;
@@ -346,6 +351,14 @@ function renderReply(item, key, decision) {
     r.thinking.hidden = false;
   }
   if (!item.text) r.text.hidden = true;
+  if (item.reasoning && item.call) {
+    if (keepReasoningFrom !== null && item.index >= keepReasoningFrom) reasoningOpen.add(item.call);
+    r.thinking.open = reasoningOpen.has(item.call);
+    r.thinking.addEventListener("toggle", () => {
+      if (r.thinking.open) reasoningOpen.add(item.call);
+      else reasoningOpen.delete(item.call);
+    });
+  }
   for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
   if (item.stats) r.node.append(ledger(item.stats, controls));
   if (item.chain_pico) r.node.append(chainNode(item));
@@ -1253,14 +1266,65 @@ function replyControl(conv) {
 
 // Page state.
 
-function nearBottom() {
-  const box = $("items");
-  return box.scrollHeight - box.scrollTop - box.clientHeight < 100;
-}
-
 function scrollDown() {
   const box = $("items");
   box.scrollTop = box.scrollHeight;
+  refreshJump();
+}
+
+// How far the end of the conversation is below what's showing, whatever space is
+// being kept after it.
+function belowFold() {
+  const list = $("list");
+  const last = [...list.children].findLast((node) => !node.classList.contains("tail-space"));
+  if (!last) return 0;
+  return last.getBoundingClientRect().bottom - $("items").getBoundingClientRect().bottom;
+}
+
+function refreshJump() {
+  const jump = $("jump");
+  const below = belowFold();
+  jump.hidden = below < 40;
+  const conv = shown.conv;
+  const waiting = !streaming && (conv?.decision || conv?.budget.stopped);
+  jump.textContent = waiting ? "Waiting for you below ↓" : "More below ↓";
+}
+
+// While a reply comes in, the page stays put: the message that started it goes to the
+// top, and there's room below for the reply to fill. Scrolling is up to the reader.
+let tailAnchor = null;
+
+function sizeTail() {
+  const tail = $("list").querySelector(":scope > .tail-space");
+  if (!tail || !tailAnchor?.isConnected) return;
+  const box = $("items");
+  tail.style.height = "0";
+  const used = tail.getBoundingClientRect().top - tailAnchor.getBoundingClientRect().top;
+  tail.style.height = `${Math.max(box.clientHeight - used - 24, 0)}px`;
+}
+
+function pinToTop(node) {
+  tailAnchor = node;
+  $("list").querySelector(":scope > .tail-space")?.remove();
+  $("list").append(el("div", "tail-space"));
+  sizeTail();
+  const box = $("items");
+  box.scrollTop += node.getBoundingClientRect().top - box.getBoundingClientRect().top - 12;
+  refreshJump();
+}
+
+// Redraws without moving anything, even if the redraw is shorter than what it replaces.
+async function redrawInPlace(id) {
+  const box = $("items");
+  const top = box.scrollTop;
+  await show(id, true, true);
+  if (id !== current) return;
+  tailAnchor = null;
+  const tail = el("div", "tail-space");
+  $("list").append(tail);
+  tail.style.height = `${Math.max(top + box.clientHeight - box.scrollHeight, 0)}px`;
+  box.scrollTop = top;
+  refreshJump();
 }
 
 function when(iso) {
@@ -1459,6 +1523,7 @@ async function show(id, polling, force) {
   else if (polling) refreshList().catch(reportError);
   setBusy(conv.busy || Boolean(conv.decision));
   if (!polling) scrollDown();
+  else refreshJump();
 }
 
 function setOpenMode(isOpen) {
@@ -1761,57 +1826,110 @@ function reportError(err) {
   scrollDown();
 }
 
-// consume shows a call's updates as they arrive. They're only a preview: the
-// page redraws from the record once the call has finished. Markdown is parsed
-// at most once a frame, however fast the text comes in.
+// Text arrives in tiny pieces, but it's read in whole units, so it's only drawn when one
+// is complete. In Markdown, that's a blank line. Text with none for a while shows what
+// it has so far, up to the last line or word, so it's clear that it's moving.
+const HOLD_MS = 1500;
+
+function completeTo(text) {
+  return text.lastIndexOf("\n\n") + 2;
+}
+
+function wholeWordsTo(text) {
+  return Math.max(text.lastIndexOf("\n"), text.lastIndexOf(" ")) + 1;
+}
+
+// Draws a block only if it changed, so what's already there isn't disturbed. Whatever
+// someone has selected in it stays selected.
+function updateBlocks(node, text) {
+  const fragment = document.createDocumentFragment();
+  renderBlocks(tackMarkdown.parse(text), fragment);
+  const next = [...fragment.childNodes];
+  const old = [...node.childNodes];
+  let same = 0;
+  while (same < old.length && same < next.length && old[same].isEqualNode(next[same])) same++;
+  for (const child of old.slice(same)) child.remove();
+  node.append(...next.slice(same));
+}
+
+function heldText(node, drawn) {
+  let text = "";
+  let shownTo = 0;
+  let timer = null;
+  let frame = null;
+  const draw = () => {
+    frame = null;
+    updateBlocks(node, text.slice(0, shownTo));
+    drawn();
+  };
+  const showTo = (end) => {
+    clearTimeout(timer);
+    timer = null;
+    if (end <= shownTo) return;
+    shownTo = end;
+    frame ??= requestAnimationFrame(draw);
+  };
+  return {
+    add(piece) {
+      text += piece;
+      const end = completeTo(text);
+      if (end > shownTo) showTo(end);
+      else timer ??= setTimeout(() => {
+        timer = null;
+        showTo(wholeWordsTo(text));
+      }, HOLD_MS);
+    },
+    flush() {
+      showTo(text.length);
+    },
+  };
+}
+
+// consume shows a call's updates as they arrive. They're only a preview: the page redraws
+// from the record once the call has finished.
 async function consume(res, id, reply) {
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffered = "";
-  let text = "";
-  let reasoning = "";
-  let scheduled = false;
-  const draw = () => {
-    scheduled = false;
-    const follow = nearBottom();
-    setMarkdown(reply.text, text);
-    setMarkdown(reply.reasoning, reasoning);
-    reply.reasoning.scrollTop = reply.reasoning.scrollHeight;
-    if (follow) scrollDown();
+  const drawn = () => {
+    sizeTail();
+    refreshJump();
   };
-  const schedule = () => {
-    if (!scheduled) {
-      scheduled = true;
-      requestAnimationFrame(draw);
-    }
+  const text = heldText(reply.text, drawn);
+  const reasoning = heldText(reply.reasoning, drawn);
+  const flush = () => {
+    text.flush();
+    reasoning.flush();
   };
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffered += value;
-    const lines = buffered.split("\n");
-    buffered = lines.pop();
-    for (const line of lines) {
-      if (!line || streaming !== id) continue;
-      const update = JSON.parse(line);
-      reply.node.querySelector(".waiting-note")?.remove();
-      if (update.kind === "call") setControls(id, { reply: true });
-      if (update.kind === "tool") {
-        setControls(id, { tool: update.id });
-        markRunning(update.id);
-      }
-      if (update.kind === "tool_done") setControls(id, {});
-      if (update.kind === "content") {
-        text += update.text;
-        if (!reply.thinking.hidden) reply.thinking.open = false;
-        schedule();
-      }
-      if (update.kind === "reasoning") {
-        reasoning += update.text;
-        reply.thinking.hidden = false;
-        reply.thinking.open = true;
-        schedule();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += value;
+      const lines = buffered.split("\n");
+      buffered = lines.pop();
+      for (const line of lines) {
+        if (!line || streaming !== id) continue;
+        const update = JSON.parse(line);
+        if (update.kind === "call") setControls(id, { reply: true });
+        if (update.kind === "tool") {
+          flush();
+          setControls(id, { tool: update.id });
+          markRunning(update.id);
+        }
+        if (update.kind === "tool_done") setControls(id, {});
+        if (update.kind === "content") text.add(update.text);
+        if (update.kind === "reasoning") {
+          // Only the first time, so it stays closed if someone closes it.
+          if (reply.thinking.hidden) {
+            reply.thinking.hidden = false;
+            reply.thinking.open = true;
+          }
+          reasoning.add(update.text);
+        }
       }
     }
+  } finally {
+    flush();
   }
 }
 
@@ -1844,6 +1962,7 @@ async function call(id, message, decision) {
   const expected = expectHeaders(id);
   const staged = captureConversation();
   lastCallFailure = null;
+  const nextIndex = (shown.conv?.items.at(-1)?.index ?? -1) + 1;
   streaming = id;
   setBusy(true);
   let accepted = false;
@@ -1860,7 +1979,7 @@ async function call(id, message, decision) {
     setControls(id, {});
     reply.node.append(waiting);
     $("list").append(reply.node);
-    scrollDown();
+    pinToTop(shownUser ?? reply.node);
     let res;
     if (decision) {
       res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, denial_text: decision.denial_text }, expected);
@@ -1885,8 +2004,14 @@ async function call(id, message, decision) {
       reply.node.remove();
     }
     // The record is the truth, so redraw from it, whatever happened.
-    await show(id).catch(ignoreUnreachable);
-    if (!accepted) restoreConversation(staged);
+    if (accepted) {
+      keepReasoningFrom = !reply.thinking.hidden && reply.thinking.open ? nextIndex : null;
+      await redrawInPlace(id).catch(ignoreUnreachable);
+      keepReasoningFrom = null;
+    } else {
+      await show(id).catch(ignoreUnreachable);
+      restoreConversation(staged);
+    }
   }
   lastCallFailure = failure;
   await refreshList().catch(ignoreUnreachable);
@@ -2558,6 +2683,12 @@ async function restoreStaging(staging) {
   if (box) box.dispatchEvent(new Event("input", { bubbles: true }));
   refreshSpend();
 }
+
+$("items").addEventListener("scroll", refreshJump, { passive: true });
+$("jump").addEventListener("click", () => {
+  $("items").scrollTop += belowFold() + 16;
+  refreshJump();
+});
 
 checkStatus();
 

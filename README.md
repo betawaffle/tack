@@ -210,6 +210,12 @@ A conversation keeps sending the tool definitions it started with, so a model ca
 tack no longer has. That call gets a failed result by itself, saying the tool is no longer
 available, so a tool can be removed without leaving anything behind.
 
+## Reading a reply as it comes in
+
+The page doesn't scroll by itself. The message that started a reply goes to the top, and the reply
+fills in below it, a block at a time, with **More below** to get to the end. Reasoning that opens
+as a reply comes in stays open until you close it.
+
 ## Messages of any role
 
 The selector beside the message box says who a message is from: user, system, assistant, tool,

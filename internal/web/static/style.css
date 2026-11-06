@@ -175,7 +175,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .thinking summary:hover { color: var(--text); }
 .thinking-text {
   margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--line);
-  overflow-wrap: anywhere; max-height: 340px; overflow-y: auto;
+  overflow-wrap: anywhere;
 }
 .thinking-text.prose { color: inherit; font: inherit; }
 .view-row .ledger-actions { margin-left: 0; font: 11.5px/1.5 var(--mono); }
@@ -429,3 +429,9 @@ button:disabled { opacity: .45; cursor: default; }
 .written-body.is-removed { color: var(--muted); font-style: italic; }
 .written-detail { margin-top: 5px; color: var(--muted); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-name { color: var(--muted); font-size: 11.5px; }
+
+/* Staying put while a reply comes in */
+.tail-space { pointer-events: none; }
+.jump-row { position: relative; height: 0; }
+#jump { position: absolute; bottom: 8px; left: 50%; translate: -50% 0; background: var(--surface); box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
+#jump[hidden] { display: none; }

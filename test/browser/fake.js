@@ -111,7 +111,7 @@ http
     else if (/^xss/.test(last)) text = XSS;
     else if (/^jsonreply/.test(last)) text = '{"big":12345678901234567890,"ok":true}';
     else if (/^notmd/.test(last)) text = "a *b* c";
-      else if (/^long/.test(last)) text = LONG;
+      else if (/^long|^paced/.test(last)) text = LONG;
       else if (/^short|^fail|^slow/.test(last)) text = "A short reply.";
       else if (/respond|Speak/.test(last)) text = "Speaking out of turn.";
       res.write(": OPENROUTER PROCESSING\n\n");
@@ -127,7 +127,7 @@ http
           provider: "FakeHost",
           choices: [{ delta: { content: text.slice(i, i + 40) } }],
         });
-        await new Promise((r) => setTimeout(r, 2));
+        await new Promise((r) => setTimeout(r, /^paced/.test(last) ? 40 : 2));
       }
       send({
         id: "g",

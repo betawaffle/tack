@@ -636,6 +636,50 @@ let page;
   await p.waitForFunction(() => !document.getElementById("refused-row").textContent.includes("message names"), null, { timeout: 5000 });
   ok(await p.locator("#name-row").isVisible(), "and it can be asked again");
 
+  // A reply coming in leaves the page alone, and only draws whole blocks.
+  await p.setViewportSize({ width: 1280, height: 500 });
+  await fresh();
+  await reset();
+  await p.fill("#input", "paced reply");
+  await p.press("#input", "Enter");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose h2"), null, { timeout: 15000 });
+  const watch = await p.evaluate(() => {
+    const prose = document.querySelector(".assistant > .prose");
+    window.__first = prose.firstElementChild;
+    window.__changes = 0;
+    new MutationObserver((records) => (window.__changes += records.length)).observe(prose, { childList: true });
+    window.__partial = false;
+    return document.getElementById("items").scrollTop;
+  });
+  await p.waitForFunction(() => document.querySelectorAll(".assistant > .prose h2").length >= 4, null, { timeout: 15000 });
+  const during = await p.evaluate(() => ({
+    top: document.getElementById("items").scrollTop,
+    same: document.querySelector(".assistant > .prose").firstElementChild === window.__first,
+    changes: window.__changes,
+    open: document.querySelector(".thinking").open,
+    pendingShown: document.querySelector(".waiting-note") !== null,
+  }));
+  ok(during.top === watch, "the page doesn't scroll while a reply comes in");
+  ok(during.same, "what's already drawn isn't redrawn");
+  ok(during.changes < 20, `and it draws in whole blocks (${during.changes} changes)`);
+  ok(during.open, "reasoning stays open once the reply starts");
+  ok(during.pendingShown, "and something shows it's still going");
+  await p.waitForSelector("#jump:not([hidden])", { timeout: 5000 });
+  ok(true, "there's a way to the end");
+  await p.screenshot({ path: "shots/streaming.png" });
+  await idle();
+  const after = await p.evaluate(() => ({ top: document.getElementById("items").scrollTop, open: document.querySelector(".thinking").open }));
+  ok(after.top === watch, "finishing doesn't move anything either");
+  ok(after.open, "or close the reasoning");
+  await p.click("#jump");
+  await p.waitForFunction(() => document.getElementById("jump").hidden, null, { timeout: 2000 });
+  ok(true, "and it gets there");
+  await p.locator(".thinking summary").click();
+  await p.locator(".assistant .fork-row button", { hasText: "Edit" }).click();
+  await p.locator(".assistant .editor button", { hasText: "Cancel" }).click();
+  ok(!(await p.locator(".thinking").evaluate((n) => n.open)), "closing the reasoning sticks");
+  await p.setViewportSize({ width: 1280, height: 860 });
+
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
 
   // Losing touch with tack.
