@@ -213,7 +213,7 @@ While something is running:
 ## Notes
 
 `scratch` keeps text for the model to read back, with a closed panel on the page so that nothing in it is hidden from you. `note` writes to a panel on the conversation's page, labelled as coming from the model. It
-doesn't need approval, and nothing reads it back. A reply with notes carries on by itself unless
+doesn't need approval, and the model has no tool to read it back, though code can. A reply with notes carries on by itself unless
 you've paused the conversation, so only a reply with no tool calls ends the turn. Notes are
 offered even with no working directory.
 

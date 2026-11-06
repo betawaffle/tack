@@ -82,7 +82,8 @@ def add(archive, path):
         return
     info.uid = info.gid = 0
     info.uname = info.gname = ""
-    info.mtime = int(info.mtime)
+    # Unpacking can't set a link's time, so keeping one would change the archive for nothing.
+    info.mtime = 0 if info.issym() else int(info.mtime)
     if info.isreg():
         with open(path, "rb") as f:
             archive.addfile(info, f)
