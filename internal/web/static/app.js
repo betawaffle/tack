@@ -1284,10 +1284,29 @@ function belowFold() {
 function refreshJump() {
   const jump = $("jump");
   const below = belowFold();
-  jump.hidden = below < 40;
+  jump.hidden = below < 40 || following;
+  const follow = $("follow");
+  follow.hidden = streaming === null || streaming !== current;
+  follow.setAttribute("aria-pressed", String(following));
+  follow.textContent = following ? "Following" : "Follow";
   const conv = shown.conv;
   const waiting = !streaming && (conv?.decision || conv?.budget.stopped);
   jump.textContent = waiting ? "Waiting for you below ↓" : "More below ↓";
+}
+
+// Following is only ever asked for, and anything suggesting the reader wants to be
+// somewhere else ends it. It also ends with the reply.
+let following = false;
+
+function setFollowing(on) {
+  following = on;
+  if (on) toEnd();
+  refreshJump();
+}
+
+function toEnd() {
+  const below = belowFold();
+  if (below > -16) $("items").scrollTop += below + 16;
 }
 
 // While a reply comes in, the page stays put: the message that started it goes to the
@@ -1537,6 +1556,7 @@ function closeDrawer() {
 }
 
 async function open(id) {
+  following = false;
   draftFork = null;
   spendEditing = false;
   if (id !== current) {
@@ -1554,6 +1574,7 @@ async function open(id) {
 }
 
 async function startNew() {
+  following = false;
   draftFork = null;
   spendEditing = false;
   unfolded.clear();
@@ -1893,6 +1914,7 @@ async function consume(res, id, reply) {
   let buffered = "";
   const drawn = () => {
     sizeTail();
+    if (following) toEnd();
     refreshJump();
   };
   const text = heldText(reply.text, drawn);
@@ -2009,7 +2031,10 @@ async function call(id, message, decision) {
       keepReasoningFrom = !reply.thinking.hidden && reply.thinking.open ? nextIndex : null;
       await redrawInPlace(id).catch(ignoreUnreachable);
       keepReasoningFrom = null;
+      if (following) toEnd();
+      setFollowing(false);
     } else {
+      setFollowing(false);
       await show(id).catch(ignoreUnreachable);
       restoreConversation(staged);
     }
@@ -2687,8 +2712,33 @@ async function restoreStaging(staging) {
 
 $("items").addEventListener("scroll", refreshJump, { passive: true });
 $("jump").addEventListener("click", () => {
-  $("items").scrollTop += belowFold() + 16;
+  toEnd();
   refreshJump();
+});
+$("follow").addEventListener("click", () => setFollowing(!following));
+
+// What ends following. These are what a person does, because a scroll event can't tell
+// them apart from the page's own scrolling: any wheel or touch, any press in the
+// conversation, including its scrollbar, and any key that scrolls it.
+const stopFollowing = () => {
+  if (following) setFollowing(false);
+};
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+$("items").addEventListener("wheel", stopFollowing, { passive: true });
+$("items").addEventListener("touchstart", stopFollowing, { passive: true });
+$("items").addEventListener("pointerdown", stopFollowing);
+document.addEventListener("keydown", (event) => {
+  if (SCROLL_KEYS.has(event.key) && !event.target.matches?.("input, textarea, select, button, summary")) stopFollowing();
+});
+
+// Moving to something else ends it too, but getting focus back doesn't count, which is
+// what happens when coming back to this tab. Typing in the box that already has focus
+// doesn't count either, so it's possible to write the next message while following.
+let lastFocused = null;
+document.addEventListener("focusin", (event) => {
+  if (event.target === lastFocused) return;
+  lastFocused = event.target;
+  if (event.target !== $("follow")) stopFollowing();
 });
 
 checkStatus();

@@ -680,6 +680,41 @@ let page;
   await p.locator(".assistant .fork-row button", { hasText: "Edit" }).click();
   await p.locator(".assistant .editor button", { hasText: "Cancel" }).click();
   ok(!(await p.locator(".thinking").evaluate((n) => n.open)), "closing the reasoning sticks");
+
+  // Following is only ever asked for, and anything else ends it.
+  const pacedAgain = async () => {
+    await fresh();
+    await p.fill("#input", "paced reply");
+    await p.press("#input", "Enter");
+    await p.waitForSelector("#follow:not([hidden])", { timeout: 5000 });
+  };
+  const followingNow = () => p.locator("#follow").getAttribute("aria-pressed");
+  const scrollNow = () => p.evaluate(() => document.getElementById("items").scrollTop);
+  await pacedAgain();
+  ok((await followingNow()) === "false", "following is off by default");
+  await p.click("#follow");
+  const startedAt = await scrollNow();
+  await p.waitForFunction((from) => document.getElementById("items").scrollTop > from, startedAt, { timeout: 15000 });
+  ok(true, "following keeps up with the reply");
+  await p.locator("#input").focus();
+  ok((await followingNow()) === "false", "moving to the message box ends it");
+  await pacedAgain();
+  await p.click("#follow");
+  await p.mouse.move(700, 150);
+  await p.mouse.wheel(0, 1);
+  await p.waitForFunction(() => document.getElementById("follow").getAttribute("aria-pressed") === "false", null, { timeout: 2000 });
+  ok(true, "the smallest scroll ends it");
+  const leftAt = await scrollNow();
+  await p.waitForTimeout(500);
+  ok((await scrollNow()) === leftAt, "and it stays where it was");
+  await p.click("#follow");
+  ok((await followingNow()) === "true", "it can be asked for again");
+  await p.click("#follow");
+  ok((await followingNow()) === "false", "and turned off with the same button");
+  await p.click("#follow");
+  await idle();
+  await p.waitForFunction(() => document.getElementById("follow").hidden, null, { timeout: 5000 });
+  ok(true, "it goes away when the reply ends");
   await p.setViewportSize({ width: 1280, height: 860 });
 
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));

@@ -433,5 +433,7 @@ button:disabled { opacity: .45; cursor: default; }
 /* Staying put while a reply comes in */
 .tail-space { pointer-events: none; }
 .jump-row { position: relative; height: 0; }
-#jump { position: absolute; bottom: 8px; left: 50%; translate: -50% 0; background: var(--surface); box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
-#jump[hidden] { display: none; }
+.jump-buttons { position: absolute; bottom: 8px; left: 50%; translate: -50% 0; display: flex; gap: 4px; white-space: nowrap; }
+.jump-buttons .mini { background: var(--surface); box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
+.jump-buttons .mini[hidden] { display: none; }
+#follow[aria-pressed="true"] { color: var(--text); border-color: var(--text); }

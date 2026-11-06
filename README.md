@@ -213,8 +213,9 @@ available, so a tool can be removed without leaving anything behind.
 ## Reading a reply as it comes in
 
 The page doesn't scroll by itself. The message that started a reply goes to the top, and the reply
-fills in below it, a block at a time, with **More below** to get to the end. Reasoning that opens
-as a reply comes in stays open until you close it.
+fills in below it, a block at a time, with **More below** to get to the end. **Follow** keeps the
+end in view until the reply ends, or until you scroll, click in the conversation, or move focus to
+something else. Reasoning that opens as a reply comes in stays open until you close it.
 
 ## Messages of any role
 
