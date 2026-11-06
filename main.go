@@ -109,7 +109,7 @@ func main() {
 	defaults := func() web.Defaults {
 		mu.Lock()
 		defer mu.Unlock()
-		return web.Defaults{Sections: prompt.Load(current.Prompts), Workdir: current.DefaultWorkdir, Tools: c.ToolInfo()}
+		return web.Defaults{Sections: prompt.Load(current.Prompts), Workdir: current.DefaultWorkdir, Tools: c.ToolInfo(), Settings: current.Settings}
 	}
 
 	hangup := make(chan os.Signal, 1)

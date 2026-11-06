@@ -1413,6 +1413,76 @@ func TestKeepGoingContinuesAfterNotes(t *testing.T) {
 	}
 }
 
+func TestNotesWithoutTextContinueWithTheSetting(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	settings := store.Settings{Model: "test/model", NotesWithoutTextContinue: true}
+	id, err := c.NewConversationWith(Options{System: "Be brief.", Tools: true, Settings: &settings, LeaveOut: []string{"keep_going"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies == 1 {
+			io.WriteString(w, toolStream(noteCall))
+			return
+		}
+		io.WriteString(w, replyStream)
+	}
+	updates, err := c.Send(id, "Use your tools.")
+	mustFinish(t, updates, err)
+	if n := len(f.bodies); n != 2 {
+		t.Fatalf("%d calls", n)
+	}
+	// The note's result went out straight away.
+	if !strings.Contains(string(f.bodies[1]), noteCall.id) || strings.Contains(string(f.bodies[1]), `"keep_going"`) {
+		t.Errorf("second call = %s", f.bodies[1])
+	}
+}
+
+func TestToolDefinitionsCanBeEditedAndLeftOut(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	c := f.open()
+	edited := jsontext.Value(`{"type":"function","function":{"name":"keep_going","description":"Changed.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}`)
+	id, err := c.NewConversationWith(Options{Tools: true, Definitions: map[string]jsontext.Value{"keep_going": edited}, LeaveOut: []string{"note"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := c.Definitions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), string(edited)) || strings.Contains(string(data), `"name":"note"`) {
+		t.Errorf("definitions = %s", data)
+	}
+
+	// Editing the settings later keeps the edit.
+	proposal, err := c.ProposeSettings(id, store.Settings{Model: "other/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplySettings(id, proposal); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := c.Definitions(id); !strings.Contains(string(data), `"Changed."`) {
+		t.Errorf("after settings = %s", data)
+	}
+
+	for name, opts := range map[string]Options{
+		"schema": {Tools: true, Definitions: map[string]jsontext.Value{"keep_going": jsontext.Value(`{"type":"function","function":{"name":"keep_going","parameters":{"type":"object","properties":{"x":{"type":"string"}},"additionalProperties":false}}}`)}},
+		"rename": {Tools: true, Definitions: map[string]jsontext.Value{"keep_going": jsontext.Value(`{"type":"function","function":{"name":"other","parameters":{"type":"object","properties":{},"additionalProperties":false}}}`)}},
+		"tool":   {Tools: true, Definitions: map[string]jsontext.Value{"nope": edited}},
+		"out":    {Tools: true, LeaveOut: []string{"nope"}},
+	} {
+		if _, err := c.NewConversationWith(opts); !errors.Is(err, ErrBadTools) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
 func TestKeepGoingWithRealToolsIsIgnored(t *testing.T) {
 	f := newToolFake(t)
 	f.noteTools()

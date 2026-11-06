@@ -3,6 +3,7 @@ package web
 
 import (
 	"embed"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"log"
@@ -29,6 +30,7 @@ type Defaults struct {
 	Sections []prompt.Section `json:"sections"`
 	Workdir  string           `json:"workdir"`
 	Tools    []core.ToolInfo  `json:"tools"`
+	Settings store.Settings   `json:"settings"`
 }
 
 // Reload is the result of reloading the config. NeedsRestart names settings that
@@ -46,6 +48,7 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("GET /api/conversations", s.list)
 	mux.HandleFunc("POST /api/conversations", s.create)
 	mux.HandleFunc("GET /api/conversations/{id}", s.get)
+	mux.HandleFunc("GET /api/conversations/{id}/tools", s.definitions)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", s.send)
 	mux.HandleFunc("POST /api/conversations/{id}/held", s.hold)
 	mux.HandleFunc("POST /api/conversations/{id}/reply", s.reply)
@@ -135,6 +138,10 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		Sections []string `json:"sections"`
 		Tools    bool     `json:"tools"`
 		Workdir  string   `json:"workdir"`
+
+		LeaveOut    []string                  `json:"leave_out"`
+		Definitions map[string]jsontext.Value `json:"definitions"`
+		Settings    *store.Settings           `json:"settings"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
 	if err := json.UnmarshalRead(r.Body, &body); err != nil {
@@ -153,7 +160,10 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	// If the text is exactly what the sections make, it's stored section by section.
 	// Otherwise it was edited, or a section file changed, and the text as sent wins.
 	blocks := prompt.Blocks(defaults.Sections, body.Sections, body.Workdir)
-	id, err := s.core.NewConversationWith(core.Options{System: body.System, Blocks: blocks, Tools: body.Tools, Workdir: body.Workdir})
+	id, err := s.core.NewConversationWith(core.Options{
+		System: body.System, Blocks: blocks, Tools: body.Tools, Workdir: body.Workdir,
+		LeaveOut: body.LeaveOut, Definitions: body.Definitions, Settings: body.Settings,
+	})
 	if err != nil {
 		fail(w, err)
 		return
@@ -168,6 +178,16 @@ func (s *server) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, conv)
+}
+
+func (s *server) definitions(w http.ResponseWriter, r *http.Request) {
+	data, err := s.core.Definitions(r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
@@ -405,7 +425,7 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings):
+	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		log.Printf("request failed: %v", err)

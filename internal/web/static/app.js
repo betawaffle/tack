@@ -15,6 +15,9 @@ const unfolded = new Set();
 const views = new Map();
 // Which conversations have their settings panel open.
 const settingsOpen = new Set();
+// Which conversations have their tool definitions showing, and those definitions.
+const definitionsOpen = new Set();
+const definitionsShown = new Map();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -661,6 +664,10 @@ function settingsPanel(conv) {
     }),
   );
   node.append(area, el("div", "hint", "Changes are held until you apply them."), row);
+  if (conv.tools) node.append(definitionsPanel(conv));
+  const again = el("div", "row");
+  again.append(button("Start another like this", "mini", () => startLike(conv).catch(reportError)));
+  node.append(again);
   if (conv.pending_settings) {
     const pending = el("div", "pending");
     pending.append(
@@ -671,6 +678,7 @@ function settingsPanel(conv) {
     actions.append(
       button("Apply", "mini primary", async () => {
         await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/apply`);
+        definitionsShown.delete(conv.id);
         await show(conv.id);
       }),
       button("Discard", "mini", async () => {
@@ -681,6 +689,36 @@ function settingsPanel(conv) {
     pending.append(actions);
     node.append(pending);
   }
+  return node;
+}
+
+// The exact definitions a conversation sends, fetched when they're opened.
+function definitionsPanel(conv) {
+  const node = el("details", "definitions");
+  node.open = definitionsOpen.has(conv.id);
+  const body = el("div");
+  const fill = () => {
+    body.replaceChildren(exact(definitionsShown.get(conv.id) ?? "Loading…"));
+  };
+  node.append(el("summary", "", "Tool definitions it sends"), body);
+  fill();
+  node.addEventListener("toggle", async () => {
+    if (!node.open) {
+      definitionsOpen.delete(conv.id);
+      definitionsShown.delete(conv.id);
+      return;
+    }
+    definitionsOpen.add(conv.id);
+    // A redrawn panel that's already open fires this too.
+    if (definitionsShown.has(conv.id)) return;
+    try {
+      const res = await api(`/api/conversations/${conv.id}/tools`);
+      definitionsShown.set(conv.id, JSON.stringify(await res.json(), null, 2));
+    } catch (err) {
+      definitionsShown.set(conv.id, String(err.message || err));
+    }
+    fill();
+  });
   return node;
 }
 
@@ -825,7 +863,7 @@ let start = null;
 // left does the conversation count as having no tools.
 function offersTools() {
   const workdir = $("workdir")?.value ?? "";
-  return start.tools && start.defaults.tools.some((t) => !t.no_approval && (workdir || !t.needs_workdir));
+  return start.tools && start.defaults.tools.some((t) => !t.no_approval && !start.leftOut.has(t.name) && (workdir || !t.needs_workdir));
 }
 
 function chosenSections() {
@@ -833,7 +871,7 @@ function chosenSections() {
     if (s.for === "tools") return offersTools();
     if (s.for === "no-tools") return !offersTools();
     if (s.for === "workdir") return offersTools() && Boolean($("workdir")?.value);
-    if (s.for === "notes") return start.tools && start.defaults.tools.some((t) => t.no_approval);
+    if (s.for === "notes") return start.tools && start.defaults.tools.some((t) => t.no_approval && !start.leftOut.has(t.name));
     return !start.off.has(s.name);
   });
 }
@@ -860,7 +898,8 @@ function markEdited() {
 
 function setupStart(defaults) {
   defaults.tools = defaults.tools || [];
-  start = { defaults, tools: defaults.tools.length > 0, off: new Set() };
+  start = { defaults, tools: defaults.tools.length > 0, off: new Set(), leftOut: new Set(), editors: new Map() };
+  setupStartDetails();
   const options = $("prompt-options");
   options.replaceChildren();
   if (start.tools) {
@@ -921,14 +960,128 @@ function setupStart(defaults) {
   refreshPrompt();
 }
 
+// The tools and settings a new conversation starts with. Each description gets its
+// own box, so editing one doesn't mean writing JSON, and the tool's definition is
+// otherwise left exactly as it came.
+function setupStartDetails() {
+  const area = $("start-details");
+  area.replaceChildren();
+  if (start.tools) {
+    const tools = el("details", "start-settings");
+    tools.append(el("summary", "", "Tools and their descriptions"));
+    for (const tool of start.defaults.tools) tools.append(toolEditor(tool));
+    tools.append(el("div", "hint", "This is what the model is told about each tool. An empty box sends no description."));
+    area.append(tools);
+  }
+  const settings = el("details", "start-settings");
+  settings.append(el("summary", "", "Settings"));
+  const text = el("textarea");
+  text.id = "start-settings";
+  text.rows = 12;
+  text.spellcheck = false;
+  text.setAttribute("aria-label", "Settings for this conversation");
+  text.value = JSON.stringify(start.defaults.settings, null, 2);
+  settings.append(text);
+  area.append(settings);
+}
+
+function toolEditor(tool) {
+  const fn = tool.definition.function;
+  const node = el("div", "tool-editor");
+  const offer = el("label", "check");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = true;
+  box.dataset.tool = tool.name;
+  box.addEventListener("change", () => setToolOffered(tool.name, box.checked));
+  offer.append(box, tool.name);
+  node.append(offer);
+  const describe = (label, value) => {
+    const area = el("textarea");
+    area.value = value ?? "";
+    area.rows = Math.max(2, Math.ceil(area.value.length / 80) + 1);
+    area.spellcheck = false;
+    area.setAttribute("aria-label", label);
+    node.append(el("div", "hint", label), area);
+    return area;
+  };
+  const editor = { tool, box, description: describe(`${tool.name} description`, fn.description), parameters: new Map() };
+  editor.description.dataset.description = tool.name;
+  for (const [name, property] of Object.entries(fn.parameters?.properties ?? {})) {
+    editor.parameters.set(name, describe(`${tool.name}: ${name}`, property.description));
+  }
+  start.editors.set(tool.name, editor);
+  return node;
+}
+
+function setToolOffered(name, offered) {
+  const edited = isEdited();
+  if (offered) start.leftOut.delete(name);
+  else start.leftOut.add(name);
+  if (!edited) refreshPrompt();
+  else markEdited();
+}
+
+// editedDefinition is the tool's definition with what's in the boxes, or null if
+// that's no different. Keys keep their order, so nothing else about it changes.
+function editedDefinition(editor) {
+  const next = structuredClone(editor.tool.definition);
+  const place = (holder, value) => {
+    if (value === "") delete holder.description;
+    else holder.description = value;
+  };
+  place(next.function, editor.description.value);
+  for (const [name, area] of editor.parameters) place(next.function.parameters.properties[name], area.value);
+  return JSON.stringify(next) === JSON.stringify(editor.tool.definition) ? null : next;
+}
+
 function newConversationBody() {
   const edited = isEdited();
+  const definitions = {};
+  for (const [name, editor] of start.editors) {
+    const definition = editedDefinition(editor);
+    if (definition && !start.leftOut.has(name)) definitions[name] = definition;
+  }
   return {
     system: $("system-prompt").value,
     sections: edited ? [] : chosenSections().map((s) => s.name),
     tools: start.tools,
     workdir: start.tools ? $("workdir").value : "",
+    leave_out: [...start.leftOut],
+    definitions,
+    // Left alone, the config decides when the conversation starts, not when the
+    // page was loaded.
+    settings: $("start-settings").value === JSON.stringify(start.defaults.settings, null, 2) ? undefined : JSON.parse($("start-settings").value),
   };
+}
+
+// startLike opens the start panel set up the way a conversation was, to run it again.
+async function startLike(conv) {
+  const res = await api(`/api/conversations/${conv.id}/tools`);
+  const definitions = await res.json();
+  await startNew();
+  const first = conv.items[0];
+  if (start.tools) {
+    const offered = conv.tools;
+    if ($("offer-tools").checked !== offered) $("offer-tools").click();
+    if (conv.workdir) {
+      $("workdir").value = conv.workdir;
+      $("workdir").dispatchEvent(new Event("input"));
+    }
+    for (const [name, editor] of start.editors) {
+      const used = definitions.find((d) => d.function.name === name);
+      const absent = offered && !used && (conv.workdir || !editor.tool.needs_workdir);
+      if (editor.box.checked === Boolean(absent)) editor.box.click();
+      if (!used) continue;
+      editor.description.value = used.function.description ?? "";
+      for (const [parameter, area] of editor.parameters) {
+        area.value = used.function.parameters?.properties?.[parameter]?.description ?? "";
+      }
+    }
+  }
+  $("start-settings").value = JSON.stringify(conv.settings, null, 2);
+  $("system-prompt").value = first && first.role === "system" ? first.text : "";
+  markEdited();
 }
 
 function reportError(err) {

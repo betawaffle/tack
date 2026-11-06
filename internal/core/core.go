@@ -5,6 +5,7 @@ package core
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ var (
 	ErrNoDecision     = errors.New("no such open decision")
 	ErrBadChoice      = errors.New("that choice isn't possible for this decision")
 	ErrBadSettings    = errors.New("those settings can't work")
+	ErrBadTools       = errors.New("those tools can't work")
 	ErrNothingRunning = errors.New("that isn't running")
 )
 
@@ -305,6 +307,12 @@ type Options struct {
 	// Tools says whether to offer the configured tools.
 	Tools   bool
 	Workdir string
+	// LeaveOut names tools not to offer.
+	LeaveOut []string
+	// Definitions replace those of the named tools. Only descriptions can differ.
+	Definitions map[string]jsontext.Value
+	// Settings replace what the config says a conversation starts with.
+	Settings *store.Settings
 }
 
 // NewConversation records a new conversation offering every configured tool.
@@ -314,15 +322,21 @@ func (c *Core) NewConversation(systemPrompt string) (string, error) {
 
 // NewConversationWith records a new conversation.
 func (c *Core) NewConversationWith(opts Options) (string, error) {
+	settings := c.currentSettings()
+	if opts.Settings != nil {
+		settings = opts.Settings.WithDefaults()
+		if err := settings.Validate(); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrBadSettings, err)
+		}
+	}
 	var tools store.Ref
 	if opts.Tools {
 		var err error
-		if tools, err = c.storeDefinitions(c.currentSettings(), opts.Workdir); err != nil {
+		if tools, err = c.storeDefinitions(settings, opts); err != nil {
 			return "", err
 		}
 	}
 	id := store.NewID()
-	settings := c.currentSettings()
 	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools, Settings: &settings}
 	if tools != "" {
 		event.Workdir = opts.Workdir

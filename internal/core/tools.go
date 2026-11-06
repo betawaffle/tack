@@ -1,11 +1,13 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -105,16 +107,19 @@ var (
 
 // ToolInfo describes a tool for the page.
 type ToolInfo struct {
-	Name         string `json:"name"`
-	NeedsWorkdir bool   `json:"needs_workdir,omitzero"`
-	NoApproval   bool   `json:"no_approval,omitzero"`
+	Name         string         `json:"name"`
+	NeedsWorkdir bool           `json:"needs_workdir,omitzero"`
+	NoApproval   bool           `json:"no_approval,omitzero"`
+	Definition   jsontext.Value `json:"definition"`
 }
 
 // ToolInfo lists the configured tools.
 func (c *Core) ToolInfo() []ToolInfo {
+	settings := c.currentSettings()
 	out := make([]ToolInfo, len(c.cfg.Tools))
-	for i, tool := range c.cfg.Tools {
-		out[i] = ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval}
+	for i := range c.cfg.Tools {
+		tool := &c.cfg.Tools[i]
+		out[i] = ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval, Definition: tool.define(settings)}
 	}
 	return out
 }
@@ -278,14 +283,36 @@ func (conv *conversation) applyTool(ev *store.Event) {
 // storeDefinitions writes the offered tools as a block. A conversation keeps
 // sending these exact bytes, so changing a tool can't alter its cached prefix or
 // what its earlier calls appear to have seen.
-func (c *Core) storeDefinitions(settings store.Settings, workdir string) (store.Ref, error) {
+func (c *Core) storeDefinitions(settings store.Settings, opts Options) (store.Ref, error) {
+	for _, name := range opts.LeaveOut {
+		if c.findTool(name) == nil {
+			return "", fmt.Errorf("%w: there's no tool called %q", ErrBadTools, name)
+		}
+	}
+	for name := range opts.Definitions {
+		if c.findTool(name) == nil {
+			return "", fmt.Errorf("%w: there's no tool called %q", ErrBadTools, name)
+		}
+	}
 	var definitions []jsontext.Value
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		if !tool.NeedsWorkdir || workdir != "" {
-			definitions = append(definitions, tool.define(settings))
+		if (tool.NeedsWorkdir && opts.Workdir == "") || slices.Contains(opts.LeaveOut, tool.Name) {
+			continue
 		}
+		definition := tool.define(settings)
+		if edited, ok := opts.Definitions[tool.Name]; ok {
+			if !sameExceptDescriptions(definition, edited) {
+				return "", fmt.Errorf("%w: only the descriptions of %s can change", ErrBadTools, tool.Name)
+			}
+			definition = edited
+		}
+		definitions = append(definitions, definition)
 	}
+	return c.putDefinitions(definitions)
+}
+
+func (c *Core) putDefinitions(definitions []jsontext.Value) (store.Ref, error) {
 	if len(definitions) == 0 {
 		return "", nil
 	}
@@ -294,6 +321,73 @@ func (c *Core) storeDefinitions(settings store.Settings, workdir string) (store.
 		return "", err
 	}
 	return c.cfg.Store.Put(data)
+}
+
+// sameExceptDescriptions says two definitions differ at most in the tool's description
+// and its parameters' descriptions. The rest is what the tool's code relies on.
+func sameExceptDescriptions(a, b jsontext.Value) bool {
+	strip := func(data jsontext.Value) (map[string]any, bool) {
+		var tool map[string]any
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, false
+		}
+		function, _ := tool["function"].(map[string]any)
+		delete(function, "description")
+		parameters, _ := function["parameters"].(map[string]any)
+		properties, _ := parameters["properties"].(map[string]any)
+		for _, property := range properties {
+			if p, ok := property.(map[string]any); ok {
+				delete(p, "description")
+			}
+		}
+		return tool, true
+	}
+	x, ok := strip(a)
+	y, ok2 := strip(b)
+	return ok && ok2 && reflect.DeepEqual(x, y)
+}
+
+// refreshDefinitions updates a conversation's definitions for new settings. Only a
+// definition that depends on settings can change, and only if it's still what those
+// settings made: anything else, including a description someone edited, stays as it is.
+func (c *Core) refreshDefinitions(block store.Ref, before, after store.Settings) (store.Ref, error) {
+	data, err := c.cfg.Store.Get(block)
+	if err != nil {
+		return "", err
+	}
+	var definitions []jsontext.Value
+	if err := json.Unmarshal(data, &definitions); err != nil {
+		return "", err
+	}
+	names, err := definedNames(data)
+	if err != nil {
+		return "", err
+	}
+	for i, name := range names {
+		tool := c.findTool(name)
+		if tool != nil && tool.Define != nil && bytes.Equal(definitions[i], tool.define(before)) {
+			definitions[i] = tool.define(after)
+		}
+	}
+	return c.putDefinitions(definitions)
+}
+
+// Definitions returns the exact tool definitions a conversation sends.
+func (c *Core) Definitions(convID string) ([]byte, error) {
+	c.mu.Lock()
+	conv := c.convs[convID]
+	var block store.Ref
+	if conv != nil {
+		block = conv.tools
+	}
+	c.mu.Unlock()
+	if conv == nil {
+		return nil, ErrNotFound
+	}
+	if block == "" {
+		return []byte("[]"), nil
+	}
+	return c.cfg.Store.Get(block)
 }
 
 func (c *Core) findTool(name string) *Tool {
@@ -516,9 +610,20 @@ func (c *Core) turnEnded(conv *conversation) bool {
 				return false
 			}
 		}
+		// With this setting, ending the turn takes something for the person to read.
+		if len(it.calls) > 0 && conv.effectiveSettings(c.settings).NotesWithoutTextContinue && !c.hasText(it) {
+			return false
+		}
 		return true
 	}
 	return true
+}
+
+func (c *Core) hasText(it *item) bool {
+	if it.finished == nil || it.finished.Text == "" {
+		return false
+	}
+	return strings.TrimSpace(c.text([]store.Part{{Block: it.finished.Text}})) != ""
 }
 
 // approveAutomatic allows the calls that don't need a person.
@@ -730,9 +835,8 @@ func (c *Core) ProposeSettings(convID string, settings store.Settings) (string, 
 // ApplySettings makes held settings the conversation's own. Tool definitions come
 // first in every request, so if they change, the next call misses the whole cache.
 func (c *Core) ApplySettings(convID, id string) error {
-	var pending store.Settings
-	var hasTools bool
-	var workdir string
+	var pending, before store.Settings
+	var current store.Ref
 	conv, err := c.reserve(convID, func(conv *conversation) error {
 		if conv.pendingSettings == nil || conv.pendingSettings.id != id {
 			return ErrNoEdit
@@ -741,7 +845,7 @@ func (c *Core) ApplySettings(convID, id string) error {
 			return ErrAwaiting
 		}
 		pending = conv.pendingSettings.settings
-		hasTools, workdir = conv.tools != "", conv.workdir
+		before, current = conv.effectiveSettings(c.settings), conv.tools
 		return nil
 	})
 	if err != nil {
@@ -749,8 +853,8 @@ func (c *Core) ApplySettings(convID, id string) error {
 	}
 	defer c.release(conv)
 	var tools store.Ref
-	if hasTools {
-		if tools, err = c.storeDefinitions(pending, workdir); err != nil {
+	if current != "" {
+		if tools, err = c.refreshDefinitions(current, before, pending); err != nil {
 			return err
 		}
 	}

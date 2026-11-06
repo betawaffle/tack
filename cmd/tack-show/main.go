@@ -10,6 +10,7 @@
 package main
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"flag"
@@ -226,6 +227,7 @@ func itemTags(item core.Item) string {
 // showSent prints what went over the wire, which is the truth about roles and order.
 func showSent(w io.Writer, st *store.Store, id string, limit int) error {
 	n := 0
+	lastDefinitions := ""
 	return st.Replay(func(ev *store.Event) error {
 		if ev.Conversation != id || ev.Type != store.CallStarted {
 			return nil
@@ -248,20 +250,31 @@ func showSent(w io.Writer, st *store.Store, id string, limit int) error {
 					} `json:"function"`
 				} `json:"tool_calls"`
 			} `json:"messages"`
-			Tools []struct {
-				Function struct {
-					Name string `json:"name"`
-				} `json:"function"`
-			} `json:"tools"`
+			Tools []jsontext.Value `json:"tools"`
 		}
 		if err := json.Unmarshal(data, &request); err != nil {
 			return err
 		}
 		var tools []string
+		var definitions strings.Builder
 		for _, tool := range request.Tools {
-			tools = append(tools, tool.Function.Name)
+			var named struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			}
+			if err := json.Unmarshal(tool, &named); err != nil {
+				return err
+			}
+			tools = append(tools, named.Function.Name)
+			fmt.Fprintf(&definitions, "tool: %s\n", tool)
 		}
 		fmt.Fprintf(w, "\n=== call %d, %s, %d bytes, tools %v\n", n, request.Model, len(data), slices.Clip(tools))
+		// They rarely change, so they only show when they do.
+		if definitions.String() != lastDefinitions {
+			lastDefinitions = definitions.String()
+			fmt.Fprint(w, lastDefinitions)
+		}
 		for _, m := range request.Messages {
 			fmt.Fprintf(w, "%s", m.Role)
 			if m.ToolCallID != "" {

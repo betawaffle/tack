@@ -353,6 +353,54 @@ let page;
   await idle();
   ok((await bodies()).length === 1, "adding to it lets the call go");
 
+  // Everything a test of how tools are explained needs: descriptions, which tools are
+  // offered, settings, and running it again.
+  await fresh();
+  await reset();
+  await p.locator("#start-details summary", { hasText: "Tools" }).click();
+  await p.fill("textarea[data-description=note]", "A rewritten note description.");
+  await p.fill("textarea[aria-label='note: key']", "A rewritten key description.");
+  await p.locator("input[data-tool=keep_going]").uncheck();
+  await p.locator("#start-details summary", { hasText: "Settings" }).click();
+  const started = JSON.parse(await p.inputValue("#start-settings"));
+  ok(started.notes_without_text_continue === false, "the notes setting is there to change");
+  await p.fill("#start-settings", JSON.stringify({ ...started, notes_without_text_continue: true }));
+  await p.fill("#system-prompt", "A prompt written for this test.");
+  await p.screenshot({ path: "shots/start-tools.png", fullPage: true });
+  await send("short try the edits");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  const sentTools = (await bodies())[0].tools;
+  const sentNote = sentTools.find((t) => t.function.name === "note");
+  ok(sentNote.function.description === "A rewritten note description.", "the edited description is sent");
+  ok(sentNote.function.parameters.properties.key.description === "A rewritten key description.", "and the edited parameter");
+  ok(Object.keys(sentNote.function.parameters.properties).join() === "kind,key,text,status", "with the parameters in the same order");
+  ok(!sentTools.some((t) => t.function.name === "keep_going"), "a tool left out isn't offered");
+  ok(sentTools.some((t) => t.function.name === "read_file"), "and the others still are");
+
+  await p.locator(".conv-settings > summary").click();
+  await p.locator(".definitions summary").click();
+  await p.waitForFunction(() => document.querySelector(".definitions pre").textContent.includes("A rewritten note"), null, { timeout: 5000 });
+  ok(true, "the conversation shows the definitions it sends");
+  await p.screenshot({ path: "shots/definitions.png", fullPage: true });
+
+  // The hidden panel still holds the old text, so clear it to see it filled in again.
+  await p.evaluate(() => {
+    document.getElementById("system-prompt").value = "";
+  });
+  await p.getByRole("button", { name: "Start another like this" }).click();
+  await p.waitForFunction(() => document.getElementById("system-prompt").value === "A prompt written for this test.", null, { timeout: 5000 });
+  ok(!(await p.locator("input[data-tool=keep_going]").isChecked()), "starting another keeps a tool left out");
+  await reset();
+  await send("short run it again");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  const again = (await bodies())[0];
+  ok(JSON.stringify(again.tools) === JSON.stringify(sentTools), "and sends the same definitions");
+  ok(again.messages[0].content === "A prompt written for this test.", "and the same prompt");
+  await p.waitForSelector("#settings-text", { state: "attached", timeout: 15000 });
+  ok(JSON.parse(await p.inputValue("#settings-text")).notes_without_text_continue === true, "and the same settings");
+
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
   await br.close();
   console.log(fails ? `\n${fails} FAILED` : "\nall passed");

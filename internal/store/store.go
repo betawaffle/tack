@@ -145,6 +145,11 @@ type Settings struct {
 	MaxMatches            int `json:"max_matches,omitzero"`
 	MaxSearchFileBytes    int `json:"max_search_file_bytes,omitzero"`
 	MaxLineShown          int `json:"max_line_shown,omitzero"`
+
+	// NotesWithoutTextContinue carries on after a reply with notes and no text, instead
+	// of ending the turn. Absent means false, which is how older conversations behave.
+	// It's always written so that it shows up where settings are edited.
+	NotesWithoutTextContinue bool `json:"notes_without_text_continue"`
 }
 
 // DefaultSandboxReadOnly is what a sandboxed command can read, unless the config says

@@ -225,13 +225,18 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .sidebar-foot { margin-top: auto; padding: 8px; }
 #reload-note { overflow-wrap: anywhere; }
 #reload-note.bad { color: var(--warn); }
-.conv-settings { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
-.conv-settings summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; width: fit-content; }
-.conv-settings textarea {
+.conv-settings, .start-settings { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
+.conv-settings summary, .start-settings summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; width: fit-content; }
+.conv-settings textarea, .start-settings textarea {
   display: block; width: 100%; margin-top: 6px; padding: 6px 8px; resize: vertical; background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px; font: 12px/1.45 var(--mono);
 }
 .tool-network { margin-top: 5px; font-weight: 400; }
+.tool-editor { margin-top: 12px; }
+.tool-editor .hint { margin-top: 6px; }
+.definitions { margin-top: 10px; }
+.definitions pre { max-height: 360px; overflow: auto; }
+#start-details { align-self: stretch; margin-top: 10px; }
 
 #controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 740px; width: 100%; margin: 0 auto; padding: 0 16px; font-size: 12.5px; }
 #controls:empty { display: none; }
