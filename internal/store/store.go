@@ -109,6 +109,7 @@ const (
 	SettingsApplied    = "settings_applied"
 	SettingsDiscarded  = "settings_discarded"
 	BudgetAdded        = "budget_added"
+	AllowanceStarted   = "allowance_started"
 	BudgetStopped      = "budget_stopped"
 	PauseRequested     = "pause_requested"
 	PauseCleared       = "pause_cleared"
@@ -258,7 +259,7 @@ func Known(eventType string) bool {
 	case TackStarted, RestartRequested, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
-		BudgetAdded, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
+		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
 		return true
 	}
 	return false
@@ -291,7 +292,9 @@ type Event struct {
 	ForkedFrom string `json:"forked_from,omitzero"`
 	ForkItems  int    `json:"fork_items,omitzero"`
 
-	// budget_added, budget_stopped.
+	// budget_added, budget_stopped, allowance_started. allowance_started means someone
+	// let the model spend up to amount_usd more, from when spent_usd had been spent.
+	// It replaces the budget so far, and budget_added no longer gets written.
 	AmountUSD   float64 `json:"amount_usd,omitzero"`
 	SpentUSD    float64 `json:"spent_usd,omitzero"`
 	EstimateUSD float64 `json:"estimate_usd,omitzero"`

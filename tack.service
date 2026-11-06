@@ -11,10 +11,12 @@ Delegate=yes
 ExecStart=%h/.local/bin/tack
 Restart=on-failure
 RestartSec=2
-# 75 is tack asking to be restarted, which on-failure covers.
 # 70 is the secret tripwire, and 78 is a config or record tack can't read. Both have
 # to stay down until someone looks.
 RestartPreventExitStatus=70 78
+# 75 is tack asking to be restarted once it's finished what it was doing. It isn't a failure.
+SuccessExitStatus=75
+RestartForceExitStatus=75
 NoNewPrivileges=true
 
 [Install]

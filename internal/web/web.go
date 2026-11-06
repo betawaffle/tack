@@ -2,7 +2,9 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -12,7 +14,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/prompt"
@@ -23,6 +27,47 @@ import (
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
+
+// pageRequired changes when a page that's already open would do the wrong thing with
+// this server, so that it has to be reloaded. Any other change to the page's files only
+// offers a reload. Pages send it with every request, and it's checked there too, since
+// they might not have heard yet.
+const pageRequired = 1
+
+const pageRequiredHeader = "X-Tack-Page-Required"
+
+// pageVersion identifies the page's files, so an open page can tell if it's out of date.
+var pageVersion = sync.OnceValue(func() string {
+	hash := sha256.New()
+	entries, err := static.ReadDir("static")
+	if err != nil {
+		panic(err)
+	}
+	for _, entry := range entries {
+		data, err := static.ReadFile("static/" + entry.Name())
+		if err != nil {
+			panic(err)
+		}
+		hash.Write(data)
+	}
+	return hex.EncodeToString(hash.Sum(nil))[:16]
+})
+
+// indexPage is the page, told what it is.
+var indexPage = sync.OnceValue(func() []byte {
+	data, err := static.ReadFile("static/index.html")
+	if err != nil {
+		panic(err)
+	}
+	return []byte(strings.NewReplacer("{{page_version}}", pageVersion(), "{{page_required}}", strconv.Itoa(pageRequired)).Replace(string(data)))
+})
+
+// siteStatus is core.Status, plus what the page needs to tell if it's out of date.
+type siteStatus struct {
+	core.Status
+	PageVersion  string `json:"page_version"`
+	PageRequired int    `json:"page_required"`
+}
 
 // Defaults are what the page offers for a new conversation. Sections are read each
 // time, so editing them doesn't need a restart.
@@ -69,7 +114,20 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
-	return knownHost(hosts, security(http.NewCrossOriginProtection().Handler(mux)))
+	return knownHost(hosts, security(http.NewCrossOriginProtection().Handler(currentPage(mux))))
+}
+
+// currentPage refuses changes from a page that would get them wrong. Anything that
+// doesn't say which page it is, like curl, isn't a page.
+func currentPage(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		required := r.Header.Get(pageRequiredHeader)
+		if r.Method == http.MethodPost && required != "" && required != strconv.Itoa(pageRequired) {
+			http.Error(w, "This page is out of date, so that wasn't done. Reload it, and what you've typed will still be there.", http.StatusConflict)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // knownHost refuses requests for hostnames it doesn't know. Without this, a website
@@ -127,7 +185,8 @@ func readText(w http.ResponseWriter, r *http.Request, field string) (string, boo
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFileFS(w, r, static, "static/index.html")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexPage())
 }
 
 func (s *server) list(w http.ResponseWriter, _ *http.Request) {
@@ -209,7 +268,7 @@ func (s *server) definitions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) status(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, s.core.CurrentStatus())
+	writeJSON(w, siteStatus{Status: s.core.CurrentStatus(), PageVersion: pageVersion(), PageRequired: pageRequired})
 }
 
 func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
@@ -314,7 +373,7 @@ func (s *server) addBudget(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.core.AddBudget(r.PathValue("id"), body.AmountUSD); err != nil {
+	if err := s.core.AllowBudget(r.PathValue("id"), body.AmountUSD); err != nil {
 		fail(w, err)
 		return
 	}

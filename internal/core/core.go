@@ -86,6 +86,15 @@ type conversation struct {
 	lastRequestBytes   int
 	budgetStopped      bool
 	stoppedEstimate    float64
+	// The allowance from the last time a person set things going, which applies from
+	// allowanceBase on. Older conversations have none until then, and use budgetAdded.
+	allowanceSet             bool
+	allowanceBase, allowance float64
+	// freshAllowance says no call has used it yet. That call goes whatever it's expected
+	// to cost, because someone just asked for it.
+	freshAllowance bool
+	// chainStarts is how many items there were when each allowance started.
+	chainStarts []int
 
 	paused bool // don't call the model until a message or Continue
 	notes  []*noteItem
@@ -122,6 +131,7 @@ type item struct {
 	// Calls.
 	callID       string
 	requestBytes int
+	cost         float64 // what it counted as
 	finished     *store.Event
 	calls        []*toolCall // what a usable reply asked for
 }
@@ -230,6 +240,7 @@ func (c *Core) apply(ev *store.Event) {
 		conv.lastModel = ev.Model
 		conv.lastRequestBytes = ev.RequestBytes
 		conv.budgetStopped = false
+		conv.freshAllowance = false
 		var routing openrouter.Routing
 		if json.Unmarshal(ev.Routing, &routing) == nil && len(routing.Order) > 0 {
 			conv.lastHost = routing.Order[0]
@@ -239,7 +250,7 @@ func (c *Core) apply(ev *store.Event) {
 		for _, it := range conv.items {
 			if it.callID == ev.Call {
 				it.finished = ev
-				conv.addCost(ev)
+				it.cost = conv.addCost(ev)
 				if usable(ev) {
 					for _, call := range ev.ToolCalls {
 						it.calls = append(it.calls, &toolCall{ToolCall: call})
@@ -468,6 +479,11 @@ func (conv *conversation) fork(ev *store.Event) *conversation {
 		out.items = append(out.items, &kept)
 	}
 	out.spent, out.spentByPeriod = 0, nil
+	for _, start := range conv.chainStarts {
+		if start < ev.ForkItems {
+			out.chainStarts = append(out.chainStarts, start)
+		}
+	}
 	for _, entry := range conv.noteHistory {
 		if entry.items <= ev.ForkItems {
 			out.noteHistory = append(out.noteHistory, entry)
@@ -684,7 +700,11 @@ func (c *Core) start(conv *conversation) <-chan Update {
 	go func() {
 		defer close(updates)
 		defer c.release(conv)
-		if err := c.advance(conv, send); err != nil {
+		err := c.startAllowance(conv)
+		if err == nil {
+			err = c.advance(conv, send)
+		}
+		if err != nil {
 			log.Printf("call in conversation %s: %v", conv.id, err)
 			final(Update{Kind: "error", Text: err.Error()})
 			return
@@ -719,23 +739,11 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		return errors.New("refusing to send a tool call with no result")
 	}
 
-	messages, err := c.renderMessages(entries)
+	definitions, err := c.definitions(tools)
 	if err != nil {
 		return err
 	}
-	var definitions []byte
-	if tools != "" {
-		if definitions, err = c.cfg.Store.Get(tools); err != nil {
-			return err
-		}
-	}
-	body, err := openrouter.Render(openrouter.Request{
-		Model:     model,
-		Routing:   routingChoice,
-		Messages:  messages,
-		SessionID: conv.sessionID(),
-		Tools:     definitions,
-	})
+	body, err := c.renderRequest(conv, entries, definitions, settings)
 	if err != nil {
 		return err
 	}
@@ -743,8 +751,9 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	c.mu.Lock()
 	limit := conv.budgetLimit(settings)
 	spent, estimate := conv.spent, conv.estimate(len(body))
+	asked := conv.freshAllowance
 	c.mu.Unlock()
-	if spent >= limit || spent+estimate > limit {
+	if !asked && (spent >= limit || spent+estimate > limit) {
 		err := c.record(&store.Event{Type: store.BudgetStopped, Conversation: conv.id, SpentUSD: spent, EstimateUSD: estimate, LimitUSD: limit})
 		if err != nil {
 			return err
@@ -857,6 +866,29 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		return fmt.Errorf("the model returned no text (finish reason %q)", finished.FinishReason)
 	}
 	return nil
+}
+
+// definitions reads a conversation's tool definitions, if it has any.
+func (c *Core) definitions(tools store.Ref) ([]byte, error) {
+	if tools == "" {
+		return nil, nil
+	}
+	return c.cfg.Store.Get(tools)
+}
+
+// renderRequest makes the bytes a call would send.
+func (c *Core) renderRequest(conv *conversation, entries []store.Entry, definitions []byte, settings store.Settings) ([]byte, error) {
+	messages, err := c.renderMessages(entries)
+	if err != nil {
+		return nil, err
+	}
+	return openrouter.Render(openrouter.Request{
+		Model:     settings.Model,
+		Routing:   routingFor(settings.Host),
+		Messages:  messages,
+		SessionID: conv.sessionID(),
+		Tools:     definitions,
+	})
 }
 
 func (c *Core) renderMessages(entries []store.Entry) ([]openrouter.Message, error) {

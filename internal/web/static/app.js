@@ -28,15 +28,62 @@ function el(tag, className, text) {
   return node;
 }
 
+// A button shows that it's working on something, and can't be pressed twice. A button
+// that talks to tack has the class "net", and one that calls the model "spends". Those
+// are what get turned off when they couldn't work.
 function button(label, className, onClick) {
   const b = el("button", className, label);
   b.type = "button";
-  b.addEventListener("click", () => Promise.resolve(onClick(b)).catch(reportError));
+  if (b.classList.contains("spends")) b.title = "Calls the model";
+  b.addEventListener("click", () => pendingWhile(b, () => onClick(b)).catch(reportError));
   return b;
 }
 
+async function pendingWhile(b, work) {
+  if (b.dataset.pending) return;
+  b.dataset.pending = "1";
+  b.classList.add("pending");
+  b.disabled = true;
+  try {
+    await work();
+  } finally {
+    delete b.dataset.pending;
+    b.classList.remove("pending");
+    b.disabled = false;
+    applyLocks();
+  }
+}
+
+// The page's own version, and what it needs from the server.
+const pageVersion = document.querySelector('meta[name="tack-page"]').content;
+const pageRequired = document.querySelector('meta[name="tack-page"]').dataset.required;
+
+// Unreachable means a request never got an answer, so tack may not have seen it.
+class Unreachable extends Error {
+  constructor() {
+    super("Couldn't reach tack, so that may not have happened. Anything you typed is still here.");
+  }
+}
+
+// Requests that haven't had an answer yet, so they can stop waiting if tack is gone.
+const unanswered = new Set();
+
 async function api(path, options) {
-  const res = await fetch(path, options);
+  const controller = new AbortController();
+  unanswered.add(controller);
+  let res;
+  try {
+    res = await fetch(path, {
+      ...options,
+      signal: controller.signal,
+      headers: { ...options?.headers, "X-Tack-Page-Required": pageRequired },
+    });
+  } catch {
+    checkStatus();
+    throw new Unreachable();
+  } finally {
+    unanswered.delete(controller);
+  }
   if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
   return res;
 }
@@ -218,6 +265,14 @@ const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
 const count = (n) => n.toLocaleString("en-US");
 const dollars = (n) => "$" + n.toFixed(n >= 0.01 ? 4 : 6);
 
+// What a run of calls cost, for after the last of them.
+function chainNode(item) {
+  const calls = item.chain_calls > 1 ? ` across ${item.chain_calls} calls` : "";
+  const node = el("div", "chain-total", `+ ${dollars(item.chain_usd)}${calls} since you stepped in`);
+  node.title = "What the model spent from your last action until it stopped";
+  return node;
+}
+
 function ledger(s, controls) {
   const row = el("div", "ledger");
   if (s.host) row.append(el("span", "", s.host));
@@ -262,8 +317,9 @@ function renderReply(item, key, decision) {
   if (!item.text) r.text.hidden = true;
   for (const call of item.tool_calls || []) r.node.append(renderToolCall(call, decision));
   if (item.stats) r.node.append(ledger(item.stats, controls));
+  if (item.chain_usd) r.node.append(chainNode(item));
   const fork = el("div", "fork-row");
-  fork.append(button("Fork from here", "mini", () => beginFork(item.index + 1, "").catch(reportError)));
+  fork.append(button("Fork from here", "mini net", () => beginFork(item.index + 1, "")));
   r.node.append(fork);
   return r.node;
 }
@@ -373,17 +429,17 @@ function setControls(id, running) {
   const box = $("controls");
   box.replaceChildren();
   if (!running) return;
-  box.append(button("Pause", "mini", async () => {
+  box.append(button("Pause", "mini net", async () => {
     await postJSON(`/api/conversations/${id}/pause`);
     box.append(el("span", "hint", "Pausing: what's running will finish, and the model won't be called again."));
   }));
   if (running.reply) {
-    const cancel = button("Cancel reply", "mini", () => postJSON(`/api/conversations/${id}/cancel`));
+    const cancel = button("Cancel reply", "mini net", () => postJSON(`/api/conversations/${id}/cancel`));
     cancel.title = "Closes the connection. Some hosts stop charging, but others finish and charge in full.";
     box.append(cancel);
   }
   if (running.tool) {
-    box.append(button("Stop command", "mini", () => postJSON(`/api/conversations/${id}/tools/${running.tool}/stop`)));
+    box.append(button("Stop command", "mini net", () => postJSON(`/api/conversations/${id}/tools/${running.tool}/stop`)));
   }
 }
 
@@ -408,7 +464,7 @@ function budgetCard(conv) {
   const node = el("div", "budget-card");
   node.append(
     el("strong", "", "Budget reached"),
-    el("div", "hint", `${dollars(left(b))} left, and the next call looks like about ${dollars(b.estimate)}, so tack didn't start it.`),
+    el("div", "hint", `${dollars(left(b))} of what you allowed is left, and the next call looks like about ${dollars(b.estimate)}, so tack didn't start it.`),
     el("div", "hint", `Spent this month: ${dollars(b.period_here)} in this conversation, ${dollars(b.period_all)} across all of tack.`),
   );
   const row = el("div", "row");
@@ -417,10 +473,10 @@ function budgetCard(conv) {
   amount.type = "number";
   amount.step = "any";
   amount.min = "0";
-  // Enough to get this call started, if the usual amount wouldn't be.
-  amount.value = String(Math.max(b.top_up, b.spent + b.estimate - b.limit));
-  amount.setAttribute("aria-label", "Dollars to add");
-  row.append(amount, button("Add and continue", "mini primary", async () => {
+  // Enough for this call, if the usual amount wouldn't be.
+  amount.value = String(Math.max(b.top_up, b.estimate));
+  amount.setAttribute("aria-label", "Dollars to allow from here");
+  row.append(el("span", "hint", "Allow, from here:"), amount, button("Allow and continue", "mini spends", async () => {
     await postJSON(`/api/conversations/${conv.id}/budget`, { amount_usd: Number(amount.value) });
     await call(conv.id);
   }));
@@ -535,7 +591,8 @@ function decisionCard(conv) {
   label.append(area);
   const row = el("div", "row");
   const ticked = () => [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice);
-  const go = button("", "mini primary", async () => {
+  card.dataset.decision = decision.id;
+  const go = button("", "mini spends", async () => {
     const allow = ticked();
     const network = [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network).filter((id) => allow.includes(id));
     await call(conv.id, undefined, { id: decision.id, allow, network, denial_text: area.value });
@@ -557,17 +614,19 @@ function decisionCard(conv) {
 
 // System messages.
 
-function editor(initial, onSave, onCancel) {
+function editor(initial, onSave, onCancel, draft) {
   const box = el("div", "editor");
   const area = el("textarea");
   area.rows = Math.min(12, initial.split("\n").length + 2);
   area.value = initial;
   const row = el("div", "row");
   row.append(
-    button("Hold edit", "mini primary", () => onSave(area.value)),
+    button(draft ? "Use in this fork" : "Hold edit", draft ? "mini primary" : "mini primary net", () => onSave(area.value)),
     button("Cancel", "mini", onCancel),
   );
-  box.append(area, el("div", "hint", "Held edits stay unused until you apply them. Leave this empty to propose removing the message."), row);
+  box.append(area, el("div", "hint", draft
+    ? "This takes effect when the fork starts. Leave this empty to remove the message."
+    : "Held edits stay unused until you apply them. Leave this empty to propose removing the message."), row);
   return box;
 }
 
@@ -578,10 +637,12 @@ function tackIcon() {
 function renderSystem(item) {
   const id = current;
   const node = el("div", `system${item.queued ? " is-waiting" : ""}`);
+  node.dataset.message = item.message;
   const head = el("div", "system-head");
   head.append(tackIcon(), el("strong", "", "System"));
   if (item.queued) head.append(el("span", "tag waiting", "Goes with the next call"));
   if (item.edited) head.append(el("span", "tag", "Edited"));
+  if (item.staged) head.append(el("span", "tag waiting", "Changed for this fork"));
   if (item.removed) head.append(el("span", "tag", "Removed"));
   head.append(el("span", "spacer"));
   node.append(head);
@@ -603,15 +664,23 @@ function renderSystem(item) {
     if (folded) body.addEventListener("click", () => toggle.click());
   }
 
-  head.append(button("Edit", "mini", () => {
-    if (node.querySelector(".editor")) return;
-    const form = editor(item.pending ? item.pending.text : item.text, async (text) => {
+  node.openEditor = () => {
+    const open = node.querySelector(".editor");
+    if (open) return open;
+    const draft = Boolean(draftFork);
+    const form = editor(item.pending ? item.pending.text : (item.removed ? "" : item.text), async (text) => {
+      if (draft) {
+        draftFork.edits.set(item.message, text);
+        node.replaceWith(renderSystem(stagedItem(item)));
+        return;
+      }
       await postJSON(`/api/conversations/${id}/system/${item.message}/edits`, { text });
       await show(id);
-    }, () => form.remove());
+    }, () => form.remove(), draft);
     node.append(form);
-    form.querySelector("textarea").focus();
-  }));
+    return form;
+  };
+  head.append(button("Edit", draftFork ? "mini" : "mini net", () => node.openEditor().querySelector("textarea").focus()));
 
   if (item.pending) {
     const pending = el("div", "pending");
@@ -623,11 +692,11 @@ function renderSystem(item) {
     }
     const row = el("div", "row");
     row.append(
-      button("Apply", "mini primary", async () => {
+      button("Apply", "mini primary net", async () => {
         await postJSON(`/api/conversations/${id}/edits/${item.pending.id}/apply`);
         await show(id);
       }),
-      button("Discard", "mini", async () => {
+      button("Discard", "mini net", async () => {
         await postJSON(`/api/conversations/${id}/edits/${item.pending.id}/discard`);
         await show(id);
       }),
@@ -649,38 +718,69 @@ function renderItem(item, index, decision) {
   const node = el("div", item.role, item.text);
   if (item.role === "user") {
     const actions = el("div", "user-actions");
-    actions.append(button("Edit", "mini", () => beginFork(item.index, item.text).catch(reportError)));
+    actions.append(button("Edit", "mini net", () => beginFork(item.index, item.text)));
     node.append(actions);
   }
+  if (item.chain_usd) node.append(chainNode(item));
   return node;
 }
 
 // beginFork shows what a fork would keep and puts text in the composer. Nothing is
-// recorded until something is sent from it, the same as a new conversation.
-async function beginFork(items, text) {
+// recorded until something is sent from it, the same as a new conversation, so changes
+// to its system messages and settings wait here until then.
+async function beginFork(items, text, edits) {
   const from = current ?? draftFork.from;
   const res = await api(`/api/conversations/${from}`);
   const conv = await res.json();
   clearTimeout(pollTimer);
   streaming = null;
   current = null;
-  draftFork = { from, items };
+  draftFork = { from, items, conv, edits: new Map(edits) };
   history.replaceState(null, "", location.pathname);
   setOpenMode(true);
-  $("add-system").disabled = true;
   setControls(from, null);
   setBusy(false);
   showMeta(conv);
   const banner = el("div", "fork-banner");
   banner.append(
-    el("span", "", "A new conversation from this point, with the same tools and settings. Nothing is recorded until you send."),
-    button("Cancel", "mini", () => open(from).catch(reportError)),
+    el("span", "", "A new conversation from this point. You can change its system messages and settings here too. Nothing is recorded until you send or hold."),
+    button("Cancel", "mini net", () => open(from)),
   );
   const kept = conv.items.filter((item) => item.index < items);
-  $("list").replaceChildren(banner, ...kept.map((item) => renderItem(item, item.index, null)));
+  $("list").replaceChildren(banner, forkSettingsPanel(conv), ...kept.map((item) => renderItem(item.role === "system" ? stagedItem(item) : item, item.index, null)));
   setInput(text);
   scrollDown();
   $("input").focus();
+}
+
+// A system message as the fork would have it.
+function stagedItem(item) {
+  const staged = { ...item, pending: null, queued: false };
+  if (!draftFork.edits.has(item.message)) return staged;
+  const text = draftFork.edits.get(item.message);
+  return { ...staged, text, removed: !text, staged: true };
+}
+
+function forkSettingsPanel(conv) {
+  const node = el("details", "conv-settings");
+  node.open = settingsOpen.has(conv.id);
+  node.addEventListener("toggle", () => {
+    if (node.open) settingsOpen.add(conv.id);
+    else settingsOpen.delete(conv.id);
+  });
+  node.append(el("summary", "", "Settings for this fork"));
+  const area = el("textarea");
+  area.id = "settings-text";
+  area.rows = 12;
+  area.spellcheck = false;
+  area.value = JSON.stringify(conv.settings, null, 2);
+  const row = el("div", "row");
+  row.append(button("Load from config", "mini", () => {
+    area.value = JSON.stringify(conv.config_settings, null, 2);
+  }));
+  node.append(area, el("div", "hint", "These take effect when the fork starts."), row);
+  if (conv.tools) node.append(definitionsPanel(conv));
+  return node;
 }
 
 // A conversation owns its settings. The config only supplied where they started.
@@ -704,7 +804,7 @@ function settingsPanel(conv) {
     button("Load from config", "mini", () => {
       area.value = JSON.stringify(conv.config_settings, null, 2);
     }),
-    button("Hold change", "mini primary", async () => {
+    button("Hold change", "mini primary net", async () => {
       await postJSON(`/api/conversations/${conv.id}/settings`, JSON.parse(area.value));
       await show(conv.id);
     }),
@@ -712,7 +812,7 @@ function settingsPanel(conv) {
   node.append(area, el("div", "hint", "Changes are held until you apply them."), row);
   if (conv.tools) node.append(definitionsPanel(conv));
   const again = el("div", "row");
-  again.append(button("Start another like this", "mini", () => startLike(conv).catch(reportError)));
+  again.append(button("Start another like this", "mini net", () => startLike(conv)));
   node.append(again);
   if (conv.pending_settings) {
     const pending = el("div", "pending");
@@ -722,12 +822,12 @@ function settingsPanel(conv) {
     );
     const actions = el("div", "row");
     actions.append(
-      button("Apply", "mini primary", async () => {
+      button("Apply", "mini primary net", async () => {
         await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/apply`);
         definitionsShown.delete(conv.id);
         await show(conv.id);
       }),
-      button("Discard", "mini", async () => {
+      button("Discard", "mini net", async () => {
         await postJSON(`/api/conversations/${conv.id}/settings/${conv.pending_settings.id}/discard`);
         await show(conv.id);
       }),
@@ -775,7 +875,7 @@ function replyControl(conv) {
   if (last && last.role === "notice") label = "Retry";
   if (last && last.role === "system") label = "Ask the model to respond now";
   const row = el("div", "row reply-control");
-  row.append(button(label, "mini primary", () => call(conv.id)));
+  row.append(button(label, "mini spends", () => call(conv.id)));
   return row;
 }
 
@@ -804,7 +904,7 @@ async function refreshList() {
   const res = await api("/api/conversations");
   const summaries = await res.json();
   $("conversations").replaceChildren(...summaries.map((s) => {
-    const b = button("", `conv${s.busy ? " busy" : ""}`, () => open(s.id));
+    const b = button("", `conv net${s.busy ? " busy" : ""}`, () => open(s.id));
     b.setAttribute("aria-current", String(s.id === current));
     b.append(
       el("span", "conv-title", s.preview || "New conversation"),
@@ -816,17 +916,58 @@ async function refreshList() {
   $("title").textContent = active ? (active.preview || "New conversation") : "New conversation";
 }
 
+let sendBusy = false;
+let canAddSystem = false;
+
 function setBusy(busy) {
-  $("send").disabled = busy;
+  sendBusy = busy;
+  refreshComposer();
+}
+
+// What's known for estimating the next call: the conversation's budget, or for a new
+// conversation only the allowance.
+let spendInfo = null;
+
+function bytesOf(text) {
+  return new TextEncoder().encode(JSON.stringify(text)).length;
+}
+
+// The same sum the server does, with what's being typed. It doesn't know what's unsent
+// in a fork, so that uses recent costs as they are.
+function estimateNext(budget) {
+  const base = budget.recent_cost;
+  if (!base) return null;
+  if (draftFork || !budget.last_bytes) return base;
+  const typed = $("input").value;
+  const next = budget.next_bytes + (typed ? bytesOf(typed) : 0);
+  return next > budget.last_bytes ? (base * next) / budget.last_bytes : base;
+}
+
+function refreshSpend() {
+  const line = $("spend");
+  line.replaceChildren();
+  if (!spendInfo) return;
+  const parts = [];
+  if (spendInfo.running) {
+    parts.push(`${dollars(left(spendInfo.budget))} of what you allowed is left.`);
+  } else if (spendInfo.budget) {
+    const estimate = estimateNext(spendInfo.budget);
+    parts.push(estimate === null ? "No estimate yet for the next call." : `Next call about ${dollars(estimate)}.`);
+    parts.push(`Up to ${dollars(spendInfo.allowance)} before tack asks you again.`);
+  } else {
+    parts.push(`Up to ${dollars(spendInfo.allowance)} before tack asks you again.`);
+  }
+  line.append(el("span", "spend-mark"), parts.join(" "));
 }
 
 function showMeta(conv) {
+  spendInfo = { budget: conv.budget, allowance: conv.budget.allowance, running: conv.busy };
+  refreshSpend();
   const stats = conv.items.filter((i) => i.stats).map((i) => i.stats);
   const parts = [conv.model.replace(/^.*\//, "")];
   if (conv.host) parts.push(conv.host);
   if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
-  parts.push(`${dollars(left(conv.budget))} left`);
   parts.push(`this month: ${dollars(conv.budget.period_here)} here, ${dollars(conv.budget.period_all)} all of tack`);
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
 }
@@ -862,7 +1003,8 @@ async function show(id, polling) {
   }
   showMeta(conv);
   if (!live) setControls(id, conv.busy ? conv.running : null);
-  if (conv.busy) pollTimer = setTimeout(() => show(id, true).catch(reportError), 2000);
+  // If tack can't be reached, catching up restarts this.
+  if (conv.busy) pollTimer = setTimeout(() => show(id, true).catch(ignoreUnreachable), 2000);
   else if (polling) refreshList().catch(reportError);
   setBusy(conv.busy || Boolean(conv.decision));
   if (!polling) scrollDown();
@@ -870,7 +1012,8 @@ async function show(id, polling) {
 
 function setOpenMode(isOpen) {
   $("start").hidden = isOpen;
-  $("add-system").disabled = !isOpen;
+  canAddSystem = isOpen;
+  refreshComposer();
 }
 
 function closeDrawer() {
@@ -904,11 +1047,16 @@ async function startNew() {
   history.replaceState(null, "", location.pathname);
   $("list").replaceChildren();
   $("meta").replaceChildren();
+  spendInfo = null;
+  refreshSpend();
   setOpenMode(false);
   closeDrawer();
   setBusy(false);
   const res = await api("/api/defaults");
-  setupStart(await res.json());
+  const defaults = await res.json();
+  setupStart(defaults);
+  spendInfo = { allowance: defaults.settings?.budget_usd ?? 0 };
+  refreshSpend();
   await refreshList();
 }
 
@@ -1141,7 +1289,15 @@ async function startLike(conv) {
   markEdited();
 }
 
+function ignoreUnreachable(err) {
+  if (!(err instanceof Unreachable)) reportError(err);
+}
+
 function reportError(err) {
+  if (err instanceof Unreachable) {
+    flash(err.message);
+    return;
+  }
   $("list").append(el("div", "notice", String(err.message || err)));
   scrollDown();
 }
@@ -1211,9 +1367,13 @@ async function call(id, userText, decision) {
   let failure = null;
   const reply = replyNode();
   const waiting = el("div", "waiting-note cursor");
+  let shownUser = null;
   try {
     for (const node of $("list").querySelectorAll(":scope > .reply-control, :scope > .waiting-note, :scope > .decision-card, :scope > .budget-card")) node.remove();
-    if (userText !== undefined) $("list").append(el("div", "user", userText));
+    if (userText !== undefined) {
+      shownUser = el("div", "user", userText);
+      $("list").append(shownUser);
+    }
     setControls(id, {});
     reply.node.append(waiting);
     $("list").append(reply.node);
@@ -1237,11 +1397,21 @@ async function call(id, userText, decision) {
     streaming = null;
     setControls(id, null);
     setBusy(false);
+    if (!accepted) {
+      shownUser?.remove();
+      reply.node.remove();
+    }
     // The record is the truth, so redraw from it, whatever happened.
-    await show(id).catch(reportError);
+    await show(id).catch(ignoreUnreachable);
   }
-  await refreshList().catch(reportError);
-  if (failure && attached) reportError(failure);
+  await refreshList().catch(ignoreUnreachable);
+  // A stream that breaks partway is only the page losing touch. The call carries on.
+  if (failure instanceof TypeError && accepted) {
+    checkStatus();
+    flash("Lost touch with tack during this reply. It carries on there, and this page catches up once it's back.");
+  } else if (failure && attached) {
+    reportError(failure);
+  }
   return accepted;
 }
 
@@ -1258,20 +1428,61 @@ function setInput(text) {
 
 async function ensureConversation() {
   if (current) return;
-  const res = draftFork
-    ? await postJSON(`/api/conversations/${draftFork.from}/fork`, { items: draftFork.items })
-    : await postJSON("/api/conversations", newConversationBody());
-  draftFork = null;
+  if (draftFork) {
+    await startFork();
+    return;
+  }
+  const res = await postJSON("/api/conversations", newConversationBody());
   current = (await res.json()).id;
   location.hash = current;
   setOpenMode(true);
   await show(current);
 }
 
+// startFork records the fork, then the changes made to it, before any model call.
+async function startFork() {
+  const { from, items, conv, edits } = draftFork;
+  // Text left in an open editor was meant to count.
+  for (const node of $("list").querySelectorAll(".system")) {
+    const area = node.querySelector(".editor textarea");
+    if (area) edits.set(node.dataset.message, area.value);
+  }
+  const text = $("settings-text").value;
+  let settings = null;
+  if (text !== JSON.stringify(conv.settings, null, 2)) {
+    try {
+      settings = JSON.parse(text);
+    } catch (err) {
+      throw new Error(`The fork's settings aren't valid JSON, so nothing was recorded: ${err.message}`);
+    }
+  }
+  const res = await postJSON(`/api/conversations/${from}/fork`, { items });
+  const id = (await res.json()).id;
+  draftFork = null;
+  current = id;
+  location.hash = id;
+  setOpenMode(true);
+  for (const [message, messageText] of edits) {
+    const edit = await postJSON(`/api/conversations/${id}/system/${message}/edits`, { text: messageText });
+    await postJSON(`/api/conversations/${id}/edits/${(await edit.json()).edit}/apply`);
+  }
+  if (settings) {
+    const proposal = await postJSON(`/api/conversations/${id}/settings`, settings);
+    await postJSON(`/api/conversations/${id}/settings/${(await proposal.json()).proposal}/apply`);
+  }
+  await show(id);
+}
+
 $("form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("input").value;
   if (!text.trim() || (current && streaming === current)) return;
+  // The text stays put. Someone typing may not have seen the light change.
+  const locked = lockReason("spends");
+  if (locked) {
+    flash(`${locked}, so that wasn't sent. It's still in the box.`);
+    return;
+  }
   setInput("");
   try {
     await ensureConversation();
@@ -1286,28 +1497,25 @@ $("form").addEventListener("submit", async (event) => {
 $("hold").addEventListener("click", async () => {
   const text = $("input").value;
   if (!text.trim()) return;
-  try {
+  await pendingWhile($("hold"), async () => {
     await ensureConversation();
     await postJSON(`/api/conversations/${current}/held`, { text });
     setInput("");
     if (streaming !== current) await show(current);
     await refreshList();
-  } catch (err) {
-    reportError(err);
-  }
+  }).catch(reportError);
   $("input").focus();
 });
 
 $("add-system").addEventListener("click", async () => {
   const text = $("input").value;
-  if (!text.trim() || !current) return;
-  try {
+  if (!text.trim() || (!current && !draftFork)) return;
+  await pendingWhile($("add-system"), async () => {
+    await ensureConversation();
     await postJSON(`/api/conversations/${current}/system`, { text });
     setInput("");
     await show(current);
-  } catch (err) {
-    reportError(err);
-  }
+  }).catch(reportError);
   $("input").focus();
 });
 
@@ -1340,7 +1548,10 @@ $("reload").addEventListener("click", async () => {
   }
 });
 
-$("input").addEventListener("input", resizeInput);
+$("input").addEventListener("input", () => {
+  resizeInput();
+  refreshSpend();
+});
 $("input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -1363,17 +1574,94 @@ $("menu").addEventListener("click", () => {
 });
 $("scrim").addEventListener("click", closeDrawer);
 
-// Restarts. The page polls because nothing else tells an idle page about one. Failing to
-// reach tack is expected during a restart, so it's not reported as an error unless
-// it goes on for too long.
-const STATUS_EVERY_MS = 5000;
+// Keeping up with tack itself. The page polls because nothing else tells an idle page
+// about a restart, and a poll that gets nowhere is how it finds out it's lost touch.
+const STATUS_EVERY_MS = 3000;
+const STATUS_TIMEOUT_MS = 2500;
+// A restart takes seconds. After this, it probably didn't work.
 const RESTART_GIVE_UP_MS = 30000;
 let knownStatus = null;
 let unreachableSince = null;
+let pageStale = false;
+let pageMustReload = false;
+let checking = false;
+let statusTimer = null;
+
+// Why a kind of button can't work now, if it can't: "spends" calls the model, and "net"
+// only needs tack. A restart that's coming still lets things be recorded.
+function lockReason(kind) {
+  if (unreachableSince !== null) return "tack can't be reached";
+  if (pageMustReload) return "This page has to be reloaded first";
+  if (kind === "spends" && knownStatus?.restarting) return "tack is restarting for an update";
+  return null;
+}
+
+function refreshComposer() {
+  const set = (b, off, reason, usual) => {
+    if (b.dataset.pending) return;
+    b.disabled = off;
+    b.title = reason || usual;
+  };
+  const spends = lockReason("spends");
+  const net = lockReason("net");
+  set($("send"), sendBusy || Boolean(spends), spends, "Calls the model");
+  set($("hold"), Boolean(net), net, "Adds this as your message, but doesn't call the model. It goes with the next call");
+  set($("add-system"), !canAddSystem || Boolean(net), net, "Waits for the next call, unless you ask the model to respond now");
+}
+
+// Buttons come and go with every redraw, so this looks at what's there each time.
+function applyLocks() {
+  for (const b of document.querySelectorAll("button.spends, button.net")) {
+    if (b.dataset.pending) continue;
+    const reason = lockReason(b.classList.contains("spends") ? "spends" : "net");
+    if (reason) {
+      b.disabled = true;
+      b.dataset.locked = reason;
+    } else if (b.dataset.locked) {
+      b.disabled = false;
+      delete b.dataset.locked;
+    }
+  }
+  refreshComposer();
+}
+
+let locksQueued = false;
+new MutationObserver(() => {
+  if (locksQueued) return;
+  locksQueued = true;
+  requestAnimationFrame(() => {
+    locksQueued = false;
+    applyLocks();
+  });
+}).observe(document.body, { childList: true, subtree: true });
+
+function refreshLight() {
+  const light = $("link");
+  let state = "good";
+  let label = "";
+  let title = "Connected to tack";
+  if (unreachableSince !== null) {
+    const restarting = knownStatus?.restarting && Date.now() - unreachableSince < RESTART_GIVE_UP_MS;
+    state = restarting ? "restarting" : "bad";
+    label = restarting ? "Restarting" : "Not connected";
+    title = restarting
+      ? "tack is restarting for an update. This page will reconnect by itself."
+      : `Can't reach tack. Buttons that need it are off, and what you've typed stays here. ${knownStatus?.restarting ? "It was restarting, so the new build may not have started: see journalctl --user -u tack." : "This page keeps trying."}`;
+  } else if (knownStatus?.restarting) {
+    state = "restarting";
+    label = "Restart waiting";
+    title = "tack will restart for an update once what's running has finished.";
+  }
+  light.dataset.state = state;
+  light.title = title;
+  light.setAttribute("aria-label", title);
+  $("link-label").textContent = label;
+}
 
 function showToast(key, title, details, actions) {
   const toast = $("toast");
   if (toast.dataset.key === key) return;
+  clearTimeout(flashTimer);
   toast.dataset.key = key;
   const row = el("div", "toast-row");
   row.append(el("strong", "", title), ...(actions || []));
@@ -1388,14 +1676,26 @@ function hideToast() {
   toast.replaceChildren();
 }
 
+// A message that goes away by itself, unless something more lasting replaces it.
+let flashTimer = null;
+function flash(message) {
+  const lasting = $("toast").dataset.key;
+  if (lasting && !lasting.startsWith("flash")) return;
+  showToast(`flash ${message}`, message);
+  flashTimer = setTimeout(hideToast, 6000);
+}
+
 function shortVersion(version) {
   return version.slice(0, 7) + (version.endsWith("+dirty") ? "+dirty" : "");
 }
 
-function showRestarted(status) {
-  const reload = button("Reload", "mini primary", () => location.reload());
+function reloadButton() {
+  return button("Reload", "mini primary", () => location.reload());
+}
+
+function announceStart(status, before) {
   const dismiss = button("Dismiss", "mini", hideToast);
-  const updated = status.version !== knownStatus.version;
+  const updated = status.version !== before.version;
   const title = updated ? `tack updated to ${shortVersion(status.version)}` : "tack restarted";
   const details = [];
   if (updated && status.changes) {
@@ -1403,7 +1703,8 @@ function showRestarted(status) {
     list.append(...status.changes.map((change) => el("li", "", change)));
     details.push(list);
   }
-  showToast(`started ${status.started}`, title, details, [reload, dismiss]);
+  if (pageStale) details.push(el("div", "hint", "There's a newer page. Reloading keeps what you've typed."));
+  showToast(`started ${status.started}`, title, details, pageStale ? [reloadButton(), dismiss] : [dismiss]);
 }
 
 function showWaiting(status) {
@@ -1423,43 +1724,216 @@ function showWaiting(status) {
   showToast(`waiting ${status.waiting.map((conv) => conv.id).join()}`, `tack will restart for an update when ${count === 1 ? "this finishes" : `these ${count} finish`}. New replies wait until then.`, [list]);
 }
 
-async function checkStatus() {
-  try {
-    const res = await fetch("/api/status");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const status = await res.json();
-    unreachableSince = null;
-    if (!knownStatus) {
-      knownStatus = status;
-      if (status.restarting) showWaiting(status);
-    } else if (status.started !== knownStatus.started) {
-      showRestarted(status);
-    } else if (status.restarting) {
-      knownStatus.restarting = true;
-      showWaiting(status);
-    }
-  } catch {
-    unreachableSince ??= Date.now();
-    if (Date.now() - unreachableSince > RESTART_GIVE_UP_MS) {
-      showToast("unreachable", "tack isn't answering", [el("div", "hint", "If it was restarting, the new build may not have started. Its log is in journalctl --user -u tack.")]);
-    } else if (knownStatus?.restarting) {
-      showToast("restarting", "tack is restarting for an update");
-    }
-  }
-  setTimeout(checkStatus, STATUS_EVERY_MS);
+function comparePage(status) {
+  pageStale = status.page_version !== pageVersion;
+  pageMustReload = String(status.page_required) !== pageRequired;
+  $("page-update").hidden = !pageStale;
 }
+
+function connected(status) {
+  const reconnected = unreachableSince !== null;
+  const before = knownStatus;
+  unreachableSince = null;
+  knownStatus = status;
+  comparePage(status);
+  const toastKey = $("toast").dataset.key || "";
+  if (pageMustReload) {
+    showToast("must-reload", "This page has to be reloaded to work with the new tack", [el("div", "hint", "Reloading keeps what you've typed.")], [reloadButton()]);
+  } else if (status.restarting) {
+    showWaiting(status);
+  } else if (before && status.started !== before.started) {
+    hideToast();
+    announceStart(status, before);
+  } else if (toastKey === "restarting" || toastKey.startsWith("waiting")) {
+    hideToast();
+  }
+  applyLocks();
+  refreshLight();
+  if (reconnected) catchUp().catch(ignoreUnreachable);
+}
+
+function notConnected() {
+  unreachableSince ??= Date.now();
+  // Nothing's coming back on these, so stop waiting and say so.
+  for (const controller of unanswered) controller.abort();
+  if (knownStatus?.restarting) showToast("restarting", "tack is restarting for an update");
+  applyLocks();
+  refreshLight();
+}
+
+// Redraws what may have moved on while out of touch, without losing what's being set up.
+async function catchUp() {
+  await refreshList();
+  if (!current || streaming === current) return;
+  const staged = captureConversation();
+  await show(current, true);
+  restoreConversation(staged);
+}
+
+async function checkStatus() {
+  if (checking) return;
+  checking = true;
+  clearTimeout(statusTimer);
+  try {
+    const res = await fetch("/api/status", { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    connected(await res.json());
+  } catch {
+    notConnected();
+  }
+  checking = false;
+  statusTimer = setTimeout(checkStatus, STATUS_EVERY_MS);
+}
+
+window.addEventListener("online", checkStatus);
+window.addEventListener("offline", checkStatus);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) checkStatus();
+});
+
+// Keeping what's been set up but not recorded across a reload. It stays in this tab.
+const STAGING_KEY = "tack-staging";
+
+function captureConversation() {
+  const editors = [];
+  for (const node of $("list").querySelectorAll(".system")) {
+    const area = node.querySelector(".editor textarea");
+    if (area) editors.push([node.dataset.message, area.value]);
+  }
+  const card = document.querySelector(".decision-card");
+  return {
+    editors,
+    settings: $("settings-text")?.value,
+    settingsOpen: $("settings-text")?.closest("details")?.open,
+    decision: card && {
+      id: card.dataset.decision,
+      denial: card.querySelector("textarea").value,
+      allow: [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice),
+      network: [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network),
+    },
+    budget: $("budget-amount")?.value,
+  };
+}
+
+function restoreConversation(staged) {
+  for (const [message, text] of staged.editors) {
+    const node = [...$("list").querySelectorAll(".system")].find((n) => n.dataset.message === message);
+    if (node) node.openEditor().querySelector("textarea").value = text;
+  }
+  const settings = $("settings-text");
+  if (settings && staged.settings !== undefined) {
+    settings.value = staged.settings;
+    if (staged.settingsOpen) settings.closest("details").open = true;
+  }
+  const card = document.querySelector(".decision-card");
+  if (card && staged.decision?.id === card.dataset.decision) {
+    card.querySelector("textarea").value = staged.decision.denial;
+    const tick = (attr, ids) => {
+      for (const box of $("list").querySelectorAll(`input[data-${attr}]`)) box.checked = ids.includes(box.dataset[attr]);
+    };
+    tick("choice", staged.decision.allow);
+    tick("network", staged.decision.network);
+    card.dispatchEvent(new Event("refresh"));
+  }
+  if ($("budget-amount") && staged.budget !== undefined) $("budget-amount").value = staged.budget;
+}
+
+function captureStart() {
+  const tools = {};
+  for (const [name, editor] of start.editors) {
+    tools[name] = { description: editor.description.value, parameters: Object.fromEntries([...editor.parameters].map(([p, area]) => [p, area.value])) };
+  }
+  return {
+    system: $("system-prompt").value,
+    tools: start.tools,
+    workdir: $("workdir")?.value,
+    off: [...start.off],
+    leftOut: [...start.leftOut],
+    descriptions: tools,
+    settings: $("start-settings").value,
+  };
+}
+
+function restoreStart(saved) {
+  if ($("offer-tools") && $("offer-tools").checked !== saved.tools) $("offer-tools").click();
+  if ($("workdir") && saved.workdir !== undefined) {
+    $("workdir").value = saved.workdir;
+    $("workdir").dispatchEvent(new Event("input"));
+  }
+  for (const box of $("prompt-options").querySelectorAll("input[data-section]")) {
+    if (box.checked === saved.off.includes(box.dataset.section)) box.click();
+  }
+  for (const [name, editor] of start.editors) {
+    if (editor.box.checked === saved.leftOut.includes(name)) editor.box.click();
+    const tool = saved.descriptions[name];
+    if (!tool) continue;
+    editor.description.value = tool.description;
+    for (const [parameter, area] of editor.parameters) area.value = tool.parameters[parameter] ?? area.value;
+  }
+  $("start-settings").value = saved.settings;
+  $("system-prompt").value = saved.system;
+  markEdited();
+}
+
+function captureStaging() {
+  const staging = { composer: $("input").value, conversation: captureConversation() };
+  if (draftFork) staging.fork = { from: draftFork.from, items: draftFork.items, edits: [...draftFork.edits] };
+  else if (!current && start) staging.start = captureStart();
+  return staging;
+}
+
+window.addEventListener("pagehide", () => {
+  try {
+    sessionStorage.setItem(STAGING_KEY, JSON.stringify(captureStaging()));
+  } catch {
+    // Without storage there's nothing to do. Only reloading can lose anything by this.
+  }
+});
+
+// Only a reload or going back brings it back. Coming here fresh should look fresh.
+function takeStaging() {
+  try {
+    const raw = sessionStorage.getItem(STAGING_KEY);
+    sessionStorage.removeItem(STAGING_KEY);
+    const type = performance.getEntriesByType("navigation")[0]?.type;
+    return raw && (type === "reload" || type === "back_forward") ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function restoreStaging(staging) {
+  if (staging.start) restoreStart(staging.start);
+  restoreConversation(staging.conversation);
+  setInput(staging.composer);
+  refreshSpend();
+}
+
 checkStatus();
 
 (async () => {
+  const staging = takeStaging();
   const id = location.hash.slice(1);
+  try {
+    if (staging?.fork) {
+      draftFork = { from: staging.fork.from };
+      await beginFork(staging.fork.items, staging.composer, staging.fork.edits);
+      await restoreStaging(staging);
+      return;
+    }
+  } catch {
+    draftFork = null;
+  }
   if (id) {
     try {
       await open(id);
+      if (staging) await restoreStaging(staging);
       return;
     } catch {
       // Fall through to a new conversation.
     }
   }
   await startNew();
+  if (staging) await restoreStaging(staging);
   $("input").focus();
 })().catch(reportError);

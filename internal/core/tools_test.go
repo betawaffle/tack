@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1128,54 +1129,124 @@ func costStream(cost string) string {
 		`data: {"id":"g","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"cost":` + cost + `}}` + "\n\n"
 }
 
-func TestABudgetStopsCallsBeforeTheyStart(t *testing.T) {
-	f := newFake(t)
+// chainStream replies with a keep_going call that has a cost, so the model carries on.
+func chainStream(n *int, cost string) string {
+	*n++
+	stream := toolStream(wireCall{fmt.Sprintf("call-%d", *n), "keep_going", `{}`})
+	usage := `data: {"id":"g","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"cost":` + cost + `}}` + "\n\n"
+	return strings.Replace(stream, "data: [DONE]", usage+"data: [DONE]", 1)
+}
+
+func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
 	f.settings = store.Settings{BudgetUSD: 0.0025}
+	n := 0
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, chainStream(&n, "0.001")) }
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "one")
+	if got := finish(t, updates); err != nil || got.Kind != "done" {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	// 0.002 spent, and another 0.001 is expected, which would go over.
+	if n := len(f.bodies); n != 2 {
+		t.Fatalf("%d calls", n)
+	}
+	conv, _ := c.Conversation(id)
+	if !conv.Budget.Stopped || conv.Budget.Spent != 0.002 || !conv.CanReply || conv.Budget.Estimate <= 0.001 {
+		t.Errorf("budget = %+v", conv.Budget)
+	}
+
+	// It survives a restart, and allowing more starts from what's been spent.
+	c = f.open()
+	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != 0.002 {
+		t.Errorf("after a restart: %+v", conv.Budget)
+	}
+	if err := c.AllowBudget(id, 0); !errors.Is(err, ErrBadSettings) {
+		t.Errorf("zero = %v", err)
+	}
+	if err := c.AllowBudget(id, 0.0001); err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(id)
+	if conv.Budget.Stopped || conv.Budget.Limit != 0.0021 {
+		t.Errorf("allowed = %+v", conv.Budget)
+	}
+
+	// Even that little lets the next call go, since someone asked, and it's what applies.
+	updates, err = c.Reply(id)
+	mustFinish(t, updates, err)
+	if n := len(f.bodies); n != 3 {
+		t.Errorf("%d calls", n)
+	}
+	conv, _ = c.Conversation(id)
+	if !conv.Budget.Stopped || conv.Budget.Limit != 0.0021 {
+		t.Errorf("budget = %+v", conv.Budget)
+	}
+
+	// A new message starts the usual allowance from there, and the model stops by itself.
 	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.001")) }
+	updates, err = c.Send(id, "two")
+	mustFinish(t, updates, err)
+	conv, _ = c.Conversation(id)
+	if conv.Budget.Stopped || math.Abs(conv.Budget.Limit-0.0055) > 1e-9 {
+		t.Errorf("after a message: %+v", conv.Budget)
+	}
+}
+
+func TestAnExpensiveCallYouAskForStillGoes(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{BudgetUSD: 0.0001}
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.01")) }
+	c := f.open()
+	id, _ := c.NewConversation("")
+	for _, text := range []string{"one", "two", "three"} {
+		updates, err := c.Send(id, text)
+		mustFinish(t, updates, err)
+	}
+	if n := len(f.bodies); n != 3 {
+		t.Errorf("%d calls", n)
+	}
+}
+
+func TestChainsAddUpWhatRanWithoutYou(t *testing.T) {
+	f := newToolFake(t)
+	f.noteTools()
+	f.settings = store.Settings{BudgetUSD: 1}
+	replies := 0
+	n := 0
+	f.handler = func(w http.ResponseWriter) {
+		replies++
+		if replies%2 == 1 {
+			io.WriteString(w, chainStream(&n, "0.25"))
+			return
+		}
+		io.WriteString(w, costStream("0.125"))
+	}
 	c := f.open()
 	id, _ := c.NewConversation("")
 	for _, text := range []string{"one", "two"} {
 		updates, err := c.Send(id, text)
 		mustFinish(t, updates, err)
 	}
-	if n := len(f.bodies); n != 2 {
-		t.Fatalf("%d calls", n)
+	check := func(c *Core) {
+		t.Helper()
+		conv, _ := c.Conversation(id)
+		var totals []float64
+		var calls []int
+		for _, item := range conv.Items {
+			if item.ChainUSD != 0 {
+				totals = append(totals, item.ChainUSD)
+				calls = append(calls, item.ChainCalls)
+			}
+		}
+		if !slices.Equal(totals, []float64{0.375, 0.375}) || !slices.Equal(calls, []int{2, 2}) {
+			t.Errorf("totals = %v, calls = %v, in %+v", totals, calls, conv.Items)
+		}
 	}
-	// 0.002 spent, and another 0.001 is expected, which would go over.
-	updates, err := c.Send(id, "three")
-	if got := finish(t, updates); err != nil || got.Kind != "done" {
-		t.Fatalf("%+v, %v", got, err)
-	}
-	if n := len(f.bodies); n != 2 {
-		t.Errorf("started a call over budget: %d", n)
-	}
-	conv, _ := c.Conversation(id)
-	if !conv.Budget.Stopped || conv.Budget.Spent != 0.002 || !conv.CanReply {
-		t.Errorf("budget = %+v", conv.Budget)
-	}
-	if last := conv.Items[len(conv.Items)-1]; last.Role != "user" || last.Text != "three" {
-		t.Errorf("the message should be kept: %+v", last)
-	}
-
-	// It survives a restart, and adding to the budget lets the message go.
-	c = f.open()
-	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != 0.002 {
-		t.Errorf("after a restart: %+v", conv.Budget)
-	}
-	if err := c.AddBudget(id, 0); !errors.Is(err, ErrBadSettings) {
-		t.Errorf("zero = %v", err)
-	}
-	if err := c.AddBudget(id, 0.01); err != nil {
-		t.Fatal(err)
-	}
-	updates, err = c.Reply(id)
-	mustFinish(t, updates, err)
-	if n := len(f.bodies); n != 3 {
-		t.Errorf("%d calls", n)
-	}
-	if conv, _ := c.Conversation(id); conv.Budget.Stopped || conv.Budget.Limit != 0.0125 {
-		t.Errorf("budget = %+v", conv.Budget)
-	}
+	check(c)
+	check(f.open())
 }
 
 func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
@@ -1748,22 +1819,6 @@ func TestSpendingIsCountedByBillingPeriod(t *testing.T) {
 	conv, _ = c.Conversation(two)
 	if conv.Budget.PeriodHere != 0.25 || conv.Budget.PeriodAll != 0.75 {
 		t.Errorf("after a restart = %+v", conv.Budget)
-	}
-}
-
-func TestBudgetStopReportsTheEstimateItUsed(t *testing.T) {
-	f := newFake(t)
-	f.settings = store.Settings{BudgetUSD: 0.003}
-	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.002")) }
-	c := f.open()
-	id, _ := c.NewConversation("")
-	updates, err := c.Send(id, "one")
-	mustFinish(t, updates, err)
-	updates, err = c.Send(id, strings.Repeat("a much longer message ", 500))
-	mustFinish(t, updates, err)
-	conv, _ := c.Conversation(id)
-	if !conv.Budget.Stopped || conv.Budget.Estimate <= 0.002 {
-		t.Errorf("budget = %+v", conv.Budget)
 	}
 }
 

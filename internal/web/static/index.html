@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tack</title>
+<meta name="tack-page" content="{{page_version}}" data-required="{{page_required}}">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/markdown.js" defer></script>
 <script src="/static/json.js" defer></script>
@@ -19,10 +20,11 @@
     </svg>
     <span>tack</span>
   </a>
-  <button class="new" id="new" type="button"><span aria-hidden="true">+</span> New conversation</button>
+  <button class="new net" id="new" type="button"><span aria-hidden="true">+</span> New conversation</button>
   <nav id="conversations" aria-label="Conversations"></nav>
   <div class="sidebar-foot">
-    <button class="mini" id="reload" type="button" title="Read the config file again">Reload config</button>
+    <button class="mini" id="page-update" type="button" title="There's a newer version of this page. Reloading keeps what you've typed" hidden>Reload page</button>
+    <button class="mini net" id="reload" type="button" title="Read the config file again">Reload config</button>
     <div id="reload-note" class="hint" role="status"></div>
   </div>
 </aside>
@@ -33,6 +35,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <h1 id="title">New conversation</h1>
+    <div id="link" role="status"><span class="link-dot"></span><span id="link-label"></span></div>
     <div id="meta"></div>
   </header>
   <div id="items">
@@ -60,8 +63,9 @@
         <span class="hint-keys">Enter to send · Shift+Enter for a new line</span>
         <button class="quiet" id="hold" type="button" title="Adds this as your message, but doesn't call the model. It goes with the next call">Hold</button>
         <button class="quiet" id="add-system" type="button" title="Waits for the next call, unless you ask the model to respond now">Add as system</button>
-        <button class="send" id="send" type="submit">Send</button>
+        <button class="send spends" id="send" type="submit">Send</button>
       </div>
+      <div id="spend"></div>
     </div>
   </form>
 </main>

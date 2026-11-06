@@ -27,8 +27,15 @@ away. Otherwise tack lets every running turn finish and won't start new replies 
 until it has, and the page says what it's waiting for, then that it updated and what changed.
 It waits as long as that takes. Stopping what's running gets there sooner, and
 `systemctl --user restart tack` doesn't wait at all. The request itself is `SIGUSR1`,
-which makes tack exit with code 75 once it's clear, and systemd starts it again. Logs are in
-`journalctl --user -u tack`.
+which makes tack exit with code 75 once it's clear, and the service treats that as a request to
+start again rather than a failure. `tack-deploy` also installs `tack.service` if it's changed.
+Logs are in `journalctl --user -u tack`.
+
+A light in the page's header shows whether it can reach tack. While it can't, or while a restart
+is coming, buttons that couldn't work are off, and what you've typed stays where it is. Reloading
+keeps what you've typed or set up but haven't recorded yet, in that tab. After an update, the page
+offers a reload if its files changed, and insists if the old page would conflict with the new
+server (`pageRequired` in `internal/web/web.go`).
 
 It serves port 8484 on all interfaces with **no authentication**, and anyone who can
 reach it can approve commands that run as you. Only run it on a network you trust,
@@ -165,12 +172,18 @@ before asking for a reply. A held message can't be edited or removed yet.
 
 ## Budgets and stopping
 
-Each conversation has a soft budget, for what it can spend from where it started. tack
-doesn't start a call if the budget is spent or the next call looks likely to go over, and it
-offers a box to add more, but it never interrupts a call for it. To help you decide, the page
-shows what's been spent this calendar month, in this conversation and across all of tack. Estimates come from recent calls scaled by how much the request
-has grown, so a cache miss can go over. A cancelled call doesn't report a cost, so it
-counts as the most expensive recent one.
+A budget says how much the model can spend without you getting involved. Brass buttons call the
+model, and each time you press one, `budget_usd` starts again from there. That first call
+always goes, and the line under the message box says what it looks likely to cost as you type.
+After that the budget is soft: tack doesn't start another call if the allowance is spent or
+that call looks likely to go over, and it offers a box to allow more from there, but it never
+interrupts a call for it. Estimates come from recent calls scaled by how much the request has
+grown, so a cache miss can go over. A cancelled call doesn't report a cost, so it counts as the
+most expensive recent one.
+
+After calls that ran without you, the conversation shows what they cost in all. To help you
+decide how much to allow, the page shows what's been spent this calendar month, in this
+conversation and across all of tack.
 
 While something is running:
 
@@ -193,9 +206,10 @@ by itself, so only text ends the turn.
 ## Forking
 
 **Edit** on one of your messages, or **Fork from here** on a reply, sets up a new conversation
-with everything before that point. Nothing is recorded until you send or hold something from
-it, and the original isn't touched. A fork has the same tools and settings, sends the same
-bytes for what it keeps, so the cache still applies, and starts with its own budget. It can't
+with everything before that point. Nothing is recorded until you send, hold or add something
+from it, and the original isn't touched. Until then you can also change its system messages and
+settings. A fork has the same tools and settings unless you change them, and sends the same
+bytes for what it keeps, so the cache still applies up to the first change. It can't
 keep a tool call that's still waiting. Forking doesn't undo anything: a file that a later
 tool call changed stays changed.
 

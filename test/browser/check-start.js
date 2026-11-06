@@ -342,16 +342,18 @@ let page;
   await p.locator(".conv-settings .pending button", { hasText: "Apply" }).click();
   await p.waitForFunction(() => !document.querySelector(".conv-settings .pending"));
   await reset();
-  await send("short over budget");
+  await send("tools notego");
   await p.waitForSelector(".budget-card", { timeout: 15000 });
-  ok((await bodies()).length === 0, "over budget, no call starts");
-  ok((await p.inputValue("#budget-amount")) === "0.5", "the add box starts with the top-up");
-  ok((await p.locator(".user", { hasText: "short over budget" }).count()) === 1, "and the message is kept");
+  ok((await bodies()).length === 1, "the call you asked for goes, and the one after it doesn't, over budget");
+  ok((await p.inputValue("#budget-amount")) === "0.5", "the box starts with the top-up");
+  ok(/\+ \$\S+ since you stepped in/.test(await p.locator(".chain-total").last().innerText()), "it shows what the run cost");
+  ok(/this month: \$\S+ here/.test(await p.locator("#meta").innerText()), "and what's been spent this month");
   await p.screenshot({ path: "shots/budget.png" });
-  await p.click(".budget-card button");
-  await p.waitForFunction(() => !document.querySelector(".budget-card") && document.querySelectorAll(".assistant > .prose").length > 1, null, { timeout: 15000 });
+  await reset();
+  await p.click(".budget-card button.spends");
+  await p.waitForFunction(() => !document.querySelector(".budget-card"), null, { timeout: 15000 });
   await idle();
-  ok((await bodies()).length === 1, "adding to it lets the call go");
+  ok((await bodies()).length === 1, "allowing more lets the call go");
 
   // Everything a test of how tools are explained needs: descriptions, which tools are
   // offered, settings, and running it again.
@@ -444,31 +446,137 @@ let page;
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
 
   // Spending, against what tack really reports.
-  const meta = await p.locator("#meta").innerText();
-  ok(/left/.test(meta) && /this month: \$\S+ here, \$\S+ all of tack/.test(meta), "the header shows what's left and this month's spending: " + meta);
+  const spend = await p.locator("#spend").innerText();
+  ok(/Next call about \$\S+\. Up to \$\S+ before tack asks you again/.test(spend), "the composer says what the next call looks like: " + spend);
+  const estimate = (text) => Number(/about \$(\S+)\./.exec(text)[1]);
+  await p.fill("#input", "x".repeat(200000));
+  const typed = await p.locator("#spend").innerText();
+  ok(estimate(typed) > estimate(spend), "and the estimate grows while typing: " + typed);
+  await p.fill("#input", "");
+  ok((await p.locator("#send").getAttribute("class")).includes("spends"), "Send is marked as spending");
+  ok(await p.locator("#hold:not(.spends)").count(), "and Hold isn't");
 
-  // A restart, from what the status says. The real thing can't happen in here.
+  // Changing a fork's system message and settings before it starts.
+  await fresh();
+  await p.fill("#system-prompt", "The original prompt.");
+  await reset();
+  await send("short to fork");
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  await p.locator(".user-actions button", { hasText: "Edit" }).click();
+  await p.waitForSelector(".fork-banner");
+  await p.locator(".system button", { hasText: "Edit" }).click();
+  await p.fill(".system .editor textarea", "The forked prompt.");
+  await p.locator(".system .editor button", { hasText: "Use in this fork" }).click();
+  ok(await p.locator(".system .tag", { hasText: "Changed for this fork" }).isVisible(), "a fork's system message can be changed before it starts");
+  await p.locator(".conv-settings summary").first().click();
+  const forkSettings = JSON.parse(await p.locator("#settings-text").inputValue());
+  await p.fill("#settings-text", JSON.stringify({ ...forkSettings, budget_usd: 0.25 }, null, 2));
+  await p.screenshot({ path: "shots/fork-staged.png" });
+
+  // A reload in the middle of that loses nothing.
+  await p.fill("#input", "short still typing this");
+  await p.locator(".system button", { hasText: "Edit" }).click();
+  await p.fill(".system .editor textarea", "An edit in progress.");
+  await p.reload();
+  await p.waitForSelector(".fork-banner");
+  ok((await p.inputValue("#input")) === "short still typing this", "a reload keeps the composer");
+  ok(JSON.parse(await p.inputValue("#settings-text")).budget_usd === 0.25, "and the fork's settings");
+  ok((await p.inputValue(".system .editor textarea")) === "An edit in progress.", "and an open editor");
+  await p.fill(".system .editor textarea", "The forked prompt.");
+
+  await reset();
+  await p.press("#input", "Enter");
+  await p.waitForSelector(".fork-mark", { timeout: 15000 });
+  await p.waitForFunction(() => document.querySelector(".assistant > .prose"), null, { timeout: 15000 });
+  await idle();
+  const forkSent = (await bodies())[0];
+  ok(forkSent.messages[0].content === "The forked prompt.", "the fork sends the changed system message");
+  ok(forkSent.messages[1].content === "short still typing this", "and the message");
+  ok(JSON.parse(await p.locator("#settings-text").inputValue()).budget_usd === 0.25, "and has the changed settings");
+  await p.waitForFunction(() => document.getElementById("spend").innerText.includes("$0.2500"), null, { timeout: 5000 });
+  ok(true, "which the composer's allowance follows");
+
+  // Holding creates a fork without calling the model.
+  await reset();
+  await p.locator(".user-actions button", { hasText: "Edit" }).click();
+  await p.waitForSelector(".fork-banner");
+  await p.click("#hold");
+  await p.waitForFunction(() => !document.querySelector(".fork-banner") && document.querySelector(".user.is-waiting"), null, { timeout: 5000 });
+  ok((await bodies()).length === 0, "holding starts a fork without a model call");
+
+  ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
+
+  // Losing touch with tack.
   const real = await (await fetch(B + "/api/status")).json();
   await p.reload();
   await p.waitForSelector("#input");
-  await p.waitForTimeout(500);
+  await p.waitForFunction(() => document.getElementById("link").dataset.state === "good", null, { timeout: 5000 });
   ok(await p.locator("#toast").isHidden(), "no toast when nothing's happening");
-  let status = { ...real, restarting: true, waiting: [{ id: "abc", preview: "a long job" }] };
+  ok(await p.locator("#page-update").isHidden(), "and no reload offered");
+  ok((await p.locator("#link-label").innerText()) === "", "and the light just shows");
+  await p.fill("#input", "typed while away");
+  let status = null;
+  await p.route("**/api/**", (route) => route.abort());
+  await p.waitForFunction(() => document.getElementById("link").dataset.state === "bad", null, { timeout: 8000 });
+  ok((await p.locator("#link-label").innerText()) === "Not connected", "the light says when tack can't be reached");
+  ok(await p.locator("#send").isDisabled(), "Send turns off");
+  ok(await p.locator("#hold").isDisabled(), "and so does Hold");
+  ok(await p.locator("button.net").first().isDisabled(), "and other buttons that need tack");
+  await p.press("#input", "Enter");
+  ok((await p.inputValue("#input")) === "typed while away", "pressing Enter leaves the text alone");
+  await p.locator("#input").pressSequentially(" more");
+  ok((await p.inputValue("#input")) === "typed while away more", "and typing still works");
+  ok(/can't be reached/.test(await p.locator("#toast").innerText()), "and it says why nothing was sent");
+  await p.screenshot({ path: "shots/disconnected.png" });
+  await p.unroute("**/api/**");
+  await p.waitForFunction(() => document.getElementById("link").dataset.state === "good", null, { timeout: 8000 });
+  await p.waitForFunction(() => !document.getElementById("send").disabled, null, { timeout: 2000 });
+  ok(true, "it comes back by itself");
+  ok((await p.inputValue("#input")) === "typed while away more", "with the text still there");
+  await p.fill("#input", "");
+
+  // A restart, from what the status says. The real thing can't happen in here.
+  status = { ...real, restarting: true, waiting: [{ id: "abc", preview: "a long job" }] };
   await p.route("**/api/status", (route) => (status ? route.fulfill({ json: status }) : route.abort()));
-  await p.waitForSelector("#toast:not([hidden])", { timeout: 8000 });
-  ok(/when this finishes/.test(await p.locator("#toast").innerText()), "the toast says a restart is waiting");
+  await p.waitForFunction(() => document.getElementById("toast").innerText.includes("when this finishes"), null, { timeout: 8000 });
+  ok(true, "the toast says a restart is waiting");
   ok((await p.locator("#toast a").getAttribute("href")) === "#abc", "and links to what it's waiting for");
+  ok(await p.locator("#send").isDisabled(), "Send is off while a restart waits");
+  ok(await p.locator("#hold").isEnabled(), "but Hold still works");
   await p.screenshot({ path: "shots/toast-waiting.png" });
   status = null;
   await p.waitForFunction(() => document.getElementById("toast").innerText.includes("is restarting"), null, { timeout: 8000 });
-  ok(true, "while tack is away, it says it's restarting");
-  status = { version: "ffffffffffff", started: "2030-01-01T00:00:00Z", previous: real.version, changes: ["Add a thing"] };
+  ok((await p.locator("#link-label").innerText()) === "Restarting", "while tack is away, it says it's restarting");
+
+  // Back with nothing new for the page: there's no need to reload.
+  status = { ...real, version: "ffffffffffff", started: "2030-01-01T00:00:00Z", previous: real.version, changes: ["Add a thing"] };
   await p.waitForFunction(() => document.getElementById("toast").innerText.includes("updated to fffffff"), null, { timeout: 8000 });
   ok((await p.locator("#toast li").innerText()) === "Add a thing", "then that it updated, and what changed");
-  ok((await p.locator("#toast button", { hasText: "Reload" }).count()) === 1, "and offers a reload");
+  ok((await p.locator("#toast button", { hasText: "Reload" }).count()) === 0, "with no reload if the page didn't change");
+  await p.locator("#toast button", { hasText: "Dismiss" }).click();
+  await p.waitForTimeout(3500);
+  ok(await p.locator("#toast").isHidden(), "and it stays dismissed");
+
+  // New page files: a reload is offered.
+  status = { ...status, started: "2030-01-02T00:00:00Z", page_version: "something-else" };
+  await p.waitForFunction(() => document.getElementById("toast").innerText.includes("newer page"), null, { timeout: 8000 });
+  ok((await p.locator("#toast button", { hasText: "Reload" }).count()) === 1, "a page that changed offers a reload");
+  ok(await p.locator("#page-update").isVisible(), "which stays available");
+  ok(await p.locator("#send").isEnabled(), "and it's only an offer");
   await p.screenshot({ path: "shots/toast-updated.png" });
   await p.locator("#toast button", { hasText: "Dismiss" }).click();
-  ok(await p.locator("#toast").isHidden(), "and it can be dismissed");
+
+  // A page that would conflict: it has to reload.
+  status = { ...status, started: "2030-01-03T00:00:00Z", page_required: -1 };
+  await p.waitForFunction(() => document.getElementById("toast").innerText.includes("has to be reloaded"), null, { timeout: 8000 });
+  ok(await p.locator("#send").isDisabled(), "a page that would conflict has its actions off");
+  ok((await p.locator("#toast button", { hasText: "Dismiss" }).count()) === 0, "and that can't be dismissed");
+  await p.screenshot({ path: "shots/toast-required.png" });
+
+  // The server refuses a stale page too, however late it hears.
+  const refused = await fetch(B + "/api/conversations", { method: "POST", headers: { "X-Tack-Page-Required": "-1" }, body: "{}" });
+  ok(refused.status === 409, "and the server refuses it anyway");
 
   await br.close();
   console.log(fails ? `\n${fails} FAILED` : "\nall passed");

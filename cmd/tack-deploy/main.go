@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -109,6 +110,10 @@ func deploy() error {
 		return err
 	}
 
+	if err := installUnit(); err != nil {
+		return err
+	}
+
 	// The range fails if the running version isn't a commit here, or was built dirty.
 	// That only costs the list on the page.
 	changes, _ := output("git", "log", "--reverse", "--format=%s", strings.TrimSuffix(running.Version, "+dirty")+"..HEAD")
@@ -142,6 +147,26 @@ func watch(base, head string) error {
 		}
 	}
 	return fmt.Errorf("tack isn't running %s after %s: see journalctl --user -u tack", head[:7], startTimeout)
+}
+
+// installUnit keeps the installed service the same as the one in the repository.
+func installUnit() error {
+	wanted, err := os.ReadFile("tack.service")
+	if err != nil {
+		return err
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "systemd", "user", "tack.service")
+	if have, err := os.ReadFile(path); err == nil && bytes.Equal(have, wanted) {
+		return nil
+	}
+	if err := os.WriteFile(path, wanted, 0o644); err != nil {
+		return err
+	}
+	return run("systemctl", "--user", "daemon-reload")
 }
 
 func fetchStatus(base string) (status, error) {

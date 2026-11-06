@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -242,5 +243,59 @@ func TestHoldingAMessageMakesNoCall(t *testing.T) {
 	got := get(t, base)
 	if !strings.Contains(got, `"queued":true`) || !strings.Contains(got, `"can_reply":true`) || strings.Contains(got, `"assistant"`) {
 		t.Errorf("conversation = %s", got)
+	}
+}
+
+func TestAPageThatsOutOfDateIsRefused(t *testing.T) {
+	s := site(t)
+	send := func(required string) int {
+		req, _ := http.NewRequest(http.MethodPost, s.URL+"/api/conversations", strings.NewReader("{}"))
+		if required != "" {
+			req.Header.Set(pageRequiredHeader, required)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := send(strconv.Itoa(pageRequired - 1)); got != http.StatusConflict {
+		t.Errorf("an old page got %d", got)
+	}
+	if got := send(strconv.Itoa(pageRequired)); got != http.StatusOK {
+		t.Errorf("the current page got %d", got)
+	}
+	if got := send(""); got != http.StatusOK {
+		t.Errorf("something that isn't a page got %d", got)
+	}
+}
+
+func TestThePageKnowsItsVersion(t *testing.T) {
+	s := site(t)
+	resp, err := http.Get(s.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	page, _ := io.ReadAll(resp.Body)
+	want := `content="` + pageVersion() + `" data-required="` + strconv.Itoa(pageRequired) + `"`
+	if !strings.Contains(string(page), want) || strings.Contains(string(page), "{{") {
+		t.Errorf("no %s in the page", want)
+	}
+	status, err := http.Get(s.URL + "/api/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer status.Body.Close()
+	var got struct {
+		PageVersion  string `json:"page_version"`
+		PageRequired int    `json:"page_required"`
+	}
+	if err := json.UnmarshalRead(status.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.PageVersion != pageVersion() || got.PageRequired != pageRequired {
+		t.Errorf("status = %+v", got)
 	}
 }

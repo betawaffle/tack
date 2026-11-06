@@ -36,7 +36,7 @@ import (
 const exitUnreadableRecord = 78
 
 // exitRestart asks systemd to start tack again, which runs whatever binary is
-// installed by then. tack.service restarts on any failure but the ones it lists.
+// installed by then. tack.service says so.
 const exitRestart = 75
 
 // restartNote is a file in the data directory holding what a requested restart

@@ -58,6 +58,10 @@ type Item struct {
 
 	// Replies that made tool calls.
 	ToolCalls []ToolCallView `json:"tool_calls,omitzero"`
+
+	// The last call since someone set things going: what those calls cost in all.
+	ChainUSD   float64 `json:"chain_usd,omitzero"`
+	ChainCalls int     `json:"chain_calls,omitzero"`
 }
 
 // ToolCallView is a tool call as the UI shows it. Arguments are the exact text
@@ -90,6 +94,13 @@ type BudgetView struct {
 	Stopped    bool    `json:"stopped,omitzero"`
 	PeriodHere float64 `json:"period_here"`
 	PeriodAll  float64 `json:"period_all"`
+	// For estimating the next call while it's being written: the most expensive recent
+	// call, the size of the last request, and the size of the next if nothing's added.
+	// Allowance is what someone setting things going next would allow.
+	RecentCost float64 `json:"recent_cost"`
+	LastBytes  int     `json:"last_bytes"`
+	NextBytes  int     `json:"next_bytes"`
+	Allowance  float64 `json:"allowance"`
 }
 
 // NoteView is an item on the page, written by the model.
@@ -213,6 +224,13 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	out.Budget = BudgetView{
 		Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: full.BudgetTopUpUSD, Stopped: conv.budgetStopped,
 		PeriodHere: conv.spentByPeriod[period], PeriodAll: c.spentInPeriod(period),
+		RecentCost: conv.maxRecentCost(), LastBytes: conv.lastRequestBytes, Allowance: full.BudgetUSD,
+	}
+	// Only for an estimate, so one that can't be worked out just goes without.
+	if definitions, err := c.definitions(conv.tools); err == nil {
+		if body, err := c.renderRequest(conv, conv.context(), definitions, effective); err == nil {
+			out.Budget.NextBytes = len(body)
+		}
 	}
 	if conv.budgetStopped {
 		out.Budget.Estimate = conv.stoppedEstimate
@@ -239,6 +257,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 			lastCall = i
 		}
 	}
+	chains := conv.chainTotals()
 	for i, it := range conv.items {
 		shown := len(out.Items)
 		switch {
@@ -264,6 +283,7 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		}
 		if len(out.Items) > shown {
 			out.Items[shown].Index = i
+			out.Items[shown].ChainUSD, out.Items[shown].ChainCalls = chains[i].cost, chains[i].calls
 		}
 	}
 	return out, nil

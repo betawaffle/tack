@@ -9,8 +9,11 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-// A budget is soft: tack doesn't start a call that it expects to go over, but it never
-// interrupts one for it. Spending comes from what OpenRouter reports for each call.
+// A budget says how much the model can spend without a person getting involved. Whenever
+// someone does something that calls the model, an allowance starts from there. That first
+// call always goes, since they just asked for it. After that the budget is soft: tack
+// doesn't start a call that it expects to go over, but it never interrupts one for it.
+// Spending comes from what OpenRouter reports for each call.
 
 // recentCostsKept is how many calls the estimate looks at.
 const recentCostsKept = 3
@@ -31,18 +34,21 @@ func usageCost(ev *store.Event) (float64, bool) {
 // addCost counts a finished call. A call that was cancelled or cut off doesn't report
 // its cost, and the host may charge for it anyway, so it counts as the most expensive
 // recent call. A refused request costs nothing.
-func (conv *conversation) addCost(ev *store.Event) {
+func (conv *conversation) addCost(ev *store.Event) float64 {
 	if cost, ok := usageCost(ev); ok {
 		conv.count(ev, cost)
 		conv.recentCosts = append(conv.recentCosts, cost)
 		if len(conv.recentCosts) > recentCostsKept {
 			conv.recentCosts = conv.recentCosts[1:]
 		}
-		return
+		return cost
 	}
 	if ev.Status == 200 || ev.Cancelled {
-		conv.count(ev, conv.maxRecentCost())
+		cost := conv.maxRecentCost()
+		conv.count(ev, cost)
+		return cost
 	}
+	return 0
 }
 
 func (conv *conversation) count(ev *store.Event, cost float64) {
@@ -86,17 +92,73 @@ func (conv *conversation) estimate(requestBytes int) float64 {
 	return estimate
 }
 
+// budgetLimit is the total spending that the next call shouldn't go past.
 func (conv *conversation) budgetLimit(settings store.Settings) float64 {
+	if conv.allowanceSet {
+		return conv.allowanceBase + conv.allowance
+	}
 	return settings.WithDefaults().BudgetUSD + conv.budgetAdded
 }
 
-// AddBudget adds to a conversation's budget. It's allowed at any time.
-func (c *Core) AddBudget(convID string, amount float64) error {
-	if err := c.exists(convID); err != nil {
-		return err
+// startAllowance marks that a person has set things going. If the allowance they chose
+// hasn't been used yet, that's the one that applies.
+func (c *Core) startAllowance(conv *conversation) error {
+	c.mu.Lock()
+	if conv.freshAllowance {
+		c.mu.Unlock()
+		return nil
 	}
+	amount, spent := conv.effectiveSettings(c.settings).WithDefaults().BudgetUSD, conv.spent
+	c.mu.Unlock()
+	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: conv.id, AmountUSD: amount, SpentUSD: spent, By: "user"})
+}
+
+// AllowBudget lets the model spend this much more from here, whatever was left before.
+// It's allowed at any time.
+func (c *Core) AllowBudget(convID string, amount float64) error {
+	c.mu.Lock()
+	conv := c.convs[convID]
+	if conv == nil {
+		c.mu.Unlock()
+		return ErrNotFound
+	}
+	spent := conv.spent
+	c.mu.Unlock()
 	if amount <= 0 {
 		return fmt.Errorf("%w: the amount has to be positive", ErrBadSettings)
 	}
-	return c.record(&store.Event{Type: store.BudgetAdded, Conversation: convID, AmountUSD: amount, By: "user"})
+	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: convID, AmountUSD: amount, SpentUSD: spent, By: "user"})
+}
+
+// chainTotal is what the calls since someone last set things going cost.
+type chainTotal struct {
+	cost  float64
+	calls int
+}
+
+// chainTotals finds each finished chain's total, by the index of its last call. The
+// caller holds mu.
+func (conv *conversation) chainTotals() map[int]chainTotal {
+	out := map[int]chainTotal{}
+	for i, start := range conv.chainStarts {
+		end := len(conv.items)
+		if i+1 < len(conv.chainStarts) {
+			end = conv.chainStarts[i+1]
+		} else if conv.busy {
+			continue
+		}
+		var total chainTotal
+		last := -1
+		for j := start; j < end; j++ {
+			if it := conv.items[j]; it.role == "" {
+				total.cost += it.cost
+				total.calls++
+				last = j
+			}
+		}
+		if last >= 0 && total.cost > 0 {
+			out[last] = total
+		}
+	}
+	return out
 }
