@@ -44,12 +44,11 @@ let page;
   ok((await p.inputValue("#workdir")) === WORK, "working directory prefilled");
   ok((await p.isChecked("#offer-tools")), "tools offered by default");
   await p.fill("#workdir", "");
-  ok((await prompt()).includes("can't access files"), "no working directory leaves no real tools here");
+  ok((await prompt()).includes("access to files"), "no working directory leaves no real tools here");
   await p.fill("#workdir", WORK);
-  ok((await prompt()).includes("needs approval"), "and a working directory brings them back");
+  ok((await prompt()).includes("user's approval"), "and a working directory brings them back");
   let text = await prompt();
-  ok(text.startsWith("Be direct") && text.includes("needs approval") && !text.includes("can't access files"), "text has base and tools sections");
-  ok(text.includes("note tool"), "and explains notes");
+  ok(text.startsWith("Be direct") && text.includes("user's approval") && !text.includes("access to files"), "text has base and tools sections");
   ok(text.includes(WORK), "working directory filled in");
 
   await p.locator("input[data-section=base]").uncheck();
@@ -58,8 +57,7 @@ let page;
 
   await p.locator("#offer-tools").uncheck();
   text = await prompt();
-  ok(text.includes("can't access files") && !text.includes("needs approval"), "no tools swaps the section");
-  ok(!text.includes("note tool"), "and leaves out notes");
+  ok(text.includes("access to files") && !text.includes("user's approval"), "no tools swaps the section");
   ok(await p.isDisabled("#workdir"), "working directory disabled without tools");
   await reset();
   await send("short one");
@@ -67,7 +65,7 @@ let page;
   await idle();
   let b = await bodies();
   ok(!b[0].tools, "no tools sent when unticked");
-  ok(b[0].messages[0].content.includes("can't access files"), "the model is told so");
+  ok(b[0].messages[0].content.includes("access to files"), "the model is told so");
 
   // Editing by hand wins.
   await fresh();
@@ -240,7 +238,7 @@ let page;
   await idle();
   b = await bodies();
   ok(b[0].tools.map((t) => t.function.name).join() === "note", "no working directory leaves only notes");
-  ok(b[0].messages[0].content.includes("can't access files"), "and the model is told");
+  ok(b[0].messages[0].content.includes("access to files"), "and the model is told");
   fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
 
   // Holding the very first message starts the conversation.

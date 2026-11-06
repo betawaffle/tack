@@ -22,8 +22,7 @@ const WorkdirVariable = "{{workdir}}"
 
 // Section is a named piece of a system prompt. A section with For set belongs only
 // to conversations that do ("tools") or don't ("no-tools") have tools that reach
-// outside the conversation, that have those and a working directory ("workdir"), or
-// that have tools that only write notes ("notes").
+// outside the conversation, or that have those and a working directory ("workdir").
 type Section struct {
 	Name string `json:"name"`
 	Text string `json:"text"`
@@ -33,11 +32,8 @@ type Section struct {
 func builtin() []Section {
 	return []Section{
 		{Name: "base", Text: "Be direct and concise. Say when you're unsure, and don't invent facts, citations or results."},
-		{Name: "no-tools", For: "no-tools", Text: "You can't access files, commands or the internet, so never imply you did something you can't do."},
-		{Name: "tools", For: "tools", Text: "Every tool call needs approval from the user, which can take a while, so ask for what you actually need. " +
-			"A denial isn't an error: read the reason and change your approach rather than repeating the call. " +
-			"You only see a tool's output if the user releases it."},
-		{Name: "notes", For: "notes", Text: "Use the note tool to keep the user's page up to date, such as your plan, and to say when you wish you had a tool. Notes aren't sent back to you. Notes don't end your turn: you're called again with their results. Your turn ends when you reply without any tool calls."},
+		{Name: "no-tools", For: "no-tools", Text: "You don't have access to files, commands or the internet."},
+		{Name: "tools", For: "tools", Text: "Most tool calls wait for the user's approval, and the user then decides whether you see the output, so a result can take a while. The result of a denied call says what happened."},
 		{Name: "workdir", For: "workdir", Text: "Relative paths and commands start from the working directory, " + WorkdirVariable + "."},
 	}
 }

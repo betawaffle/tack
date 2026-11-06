@@ -1616,7 +1616,6 @@ function chosenSections() {
     if (s.for === "tools") return offersTools();
     if (s.for === "no-tools") return !offersTools();
     if (s.for === "workdir") return offersTools() && Boolean($("workdir")?.value);
-    if (s.for === "notes") return start.tools && start.defaults.tools.some((t) => t.no_approval && !start.leftOut.has(t.name));
     return !start.off.has(s.name);
   });
 }

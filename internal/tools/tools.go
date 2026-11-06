@@ -56,14 +56,14 @@ func Read(opts Options) []core.Tool {
 		{
 			Name:         "read_file",
 			NeedsWorkdir: true,
-			Definition:   definition("read_file", "Read a text file.", `{"path":{"type":"string","description":"Path to the file."}}`, `["path"]`),
+			Definition:   definition("read_file", "Read a text file. A very long one is cut off, and the result says so.", `{"path":{"type":"string","description":"Path to the file."}}`, `["path"]`),
 			Inspect:      r.inspectFile,
 			Run:          r.readFile,
 		},
 		{
 			Name:         "list_files",
 			NeedsWorkdir: true,
-			Definition:   definition("list_files", "List a directory. Directories end in a slash.", `{"path":{"type":"string","description":"Path to the directory. Defaults to the working directory."}}`, `[]`),
+			Definition:   definition("list_files", "List a directory, one entry per line. Directories end in a slash, and symbolic links show their target.", `{"path":{"type":"string","description":"Path to the directory. Defaults to the working directory."}}`, `[]`),
 			Inspect:      r.inspectDir,
 			Run:          r.listFiles,
 		},
@@ -75,7 +75,7 @@ func Read(opts Options) []core.Tool {
 				if len(settings.SearchSkip) > 0 {
 					skipping = "Skips " + strings.Join(settings.SearchSkip, ", ") + ", and files that are binary, very large or not world-readable."
 				}
-				return definition("search_files", "Search text files under a path with a regular expression, as path:line:text. "+skipping, `{"pattern":{"type":"string","description":"An RE2 regular expression."},"path":{"type":"string","description":"File or directory to search. Defaults to the working directory."}}`, `["pattern"]`)
+				return definition("search_files", "Search text files under a path with a regular expression. Each match is a line of path:line:text. "+skipping+" The result says how many files were skipped, and if it stopped early.", `{"pattern":{"type":"string","description":"An RE2 regular expression."},"path":{"type":"string","description":"File or directory to search. Defaults to the working directory."}}`, `["pattern"]`)
 			},
 			Inspect: r.inspectSearch,
 			Run:     r.searchFiles,
@@ -99,7 +99,7 @@ func All(opts Options) []core.Tool {
 			Name:          "run_command",
 			NeedsWorkdir:  true,
 			NetworkOption: true,
-			Definition:    definition("run_command", "Run a command with bash in the working directory, in a sandbox. Only the working directory is writable, there is no input, the environment is limited, and there is no network unless the user allows it for the call.", `{"command":{"type":"string","description":"The command to run."}}`, `["command"]`),
+			Definition:    definition("run_command", "Run a command with bash in the working directory, in a sandbox. Only the working directory is writable, there is no input, the environment is limited, and there is no network unless the user allows it for the call. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the command was stopped.", `{"command":{"type":"string","description":"The command to run."}}`, `["command"]`),
 			Inspect:       inspectCommand,
 			Run:           r.runCommand,
 			Timeout: func(settings store.Settings) time.Duration {
