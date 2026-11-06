@@ -12,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/betawaffle/tack/internal/openrouter"
 	"github.com/betawaffle/tack/internal/store"
@@ -1703,4 +1705,157 @@ func TestAMessageCanBeHeldWhileADecisionWaits(t *testing.T) {
 	}
 	f.decide(c, id, store.DecideCalls, "")
 	f.wantMessages(1, sys("Be brief."), user("Use your tools."), assistantCalls(callA), toolMsg("call-a", DefaultCallDenial), user("Before you go on."))
+}
+
+func TestSpendingIsCountedByBillingPeriod(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{BudgetUSD: 1}
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.25")) }
+	c := f.open()
+	one, _ := c.NewConversation("")
+	two, _ := c.NewConversation("")
+	for _, id := range []string{one, one, two} {
+		updates, err := c.Send(id, "hi")
+		mustFinish(t, updates, err)
+	}
+	conv, _ := c.Conversation(one)
+	if conv.Budget.PeriodHere != 0.5 || conv.Budget.PeriodAll != 0.75 {
+		t.Errorf("budget = %+v", conv.Budget)
+	}
+
+	// A fork counts what it spends itself, and its original keeps what it spent.
+	fork, err := c.Fork(one, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, _ = c.Conversation(fork)
+	if conv.Budget.PeriodHere != 0 || conv.Budget.PeriodAll != 0.75 {
+		t.Errorf("fork budget = %+v", conv.Budget)
+	}
+
+	// Last month's doesn't count.
+	c.mu.Lock()
+	last := billingPeriod(time.Now().AddDate(0, -1, -1))
+	c.convs[one].spentByPeriod = map[string]float64{last: 0.5}
+	c.mu.Unlock()
+	conv, _ = c.Conversation(one)
+	if conv.Budget.PeriodHere != 0 || conv.Budget.PeriodAll != 0.25 || conv.Budget.Spent != 0.5 {
+		t.Errorf("next month = %+v", conv.Budget)
+	}
+
+	// All of it survives a restart.
+	c = f.open()
+	conv, _ = c.Conversation(two)
+	if conv.Budget.PeriodHere != 0.25 || conv.Budget.PeriodAll != 0.75 {
+		t.Errorf("after a restart = %+v", conv.Budget)
+	}
+}
+
+func TestBudgetStopReportsTheEstimateItUsed(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{BudgetUSD: 0.003}
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.002")) }
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "one")
+	mustFinish(t, updates, err)
+	updates, err = c.Send(id, strings.Repeat("a much longer message ", 500))
+	mustFinish(t, updates, err)
+	conv, _ := c.Conversation(id)
+	if !conv.Budget.Stopped || conv.Budget.Estimate <= 0.002 {
+		t.Errorf("budget = %+v", conv.Budget)
+	}
+}
+
+func TestARestartWaitsForTurnsAndStartsNothingNew(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{BudgetUSD: 1}
+	gate := make(chan struct{})
+	f.handler = func(w http.ResponseWriter) {
+		<-gate
+		io.WriteString(w, costStream("0.001"))
+	}
+	c := f.open()
+	if err := c.Started("first"); err != nil {
+		t.Fatal(err)
+	}
+	busy, _ := c.NewConversation("")
+	other, _ := c.NewConversation("")
+	updates, err := c.Send(busy, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.RequestRestart([]string{"a change"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.Drained():
+		t.Fatal("drained while a turn was running")
+	default:
+	}
+	status := c.CurrentStatus()
+	if !status.Restarting || len(status.Waiting) != 1 || status.Waiting[0].ID != busy || status.Waiting[0].Preview != "hi" {
+		t.Errorf("status = %+v", status)
+	}
+	if _, err := c.Send(other, "no"); !errors.Is(err, ErrRestarting) {
+		t.Errorf("send = %v", err)
+	}
+	if _, err := c.Reply(other); !errors.Is(err, ErrRestarting) {
+		t.Errorf("reply = %v", err)
+	}
+	// Nothing was recorded for the refused send, and holding still works.
+	if conv, _ := c.Conversation(other); len(conv.Items) != 0 {
+		t.Errorf("items = %+v", conv.Items)
+	}
+	if err := c.HoldMessage(other, "for later"); err != nil {
+		t.Error(err)
+	}
+
+	close(gate)
+	mustFinish(t, updates, nil)
+	select {
+	case <-c.Drained():
+	case <-time.After(5 * time.Second):
+		t.Fatal("never drained")
+	}
+
+	// The next run knows what it replaced, and that clears once it's been seen.
+	c = f.open()
+	if err := c.Started("second"); err != nil {
+		t.Fatal(err)
+	}
+	status = c.CurrentStatus()
+	if status.Restarting || status.Version != "second" || status.Previous != "first" || !slices.Equal(status.Changes, []string{"a change"}) {
+		t.Errorf("after = %+v", status)
+	}
+	c = f.open()
+	if err := c.Started("third"); err != nil {
+		t.Fatal(err)
+	}
+	if status := c.CurrentStatus(); status.Previous != "second" || len(status.Changes) != 0 {
+		t.Errorf("a plain restart = %+v", status)
+	}
+	if conv, _ := c.Conversation(other); len(conv.Items) != 1 || conv.Items[0].Text != "for later" {
+		t.Errorf("held message = %+v", conv.Items)
+	}
+}
+
+func TestARestartWithNothingRunningIsDrainedRightAway(t *testing.T) {
+	c := newFake(t).open()
+	id, _ := c.NewConversation("")
+	if err := c.RequestRestart(nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.Drained():
+	default:
+		t.Error("not drained")
+	}
+	if status := c.CurrentStatus(); !status.Restarting || len(status.Waiting) != 0 {
+		t.Errorf("status = %+v", status)
+	}
+	if _, err := c.Send(id, "no"); !errors.Is(err, ErrRestarting) {
+		t.Errorf("send = %v", err)
+	}
 }

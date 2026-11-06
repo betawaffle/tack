@@ -54,6 +54,16 @@ type Core struct {
 	settings store.Settings
 	convs    map[string]*conversation
 	order    []string
+
+	// The last start and any restart asked for since, derived from the record.
+	lastVersion string
+	lastStarted time.Time
+	nextChanges []string
+	// This run, which isn't.
+	status        Status
+	restarting    bool
+	closedDrained bool
+	drained       chan struct{}
 }
 
 type conversation struct {
@@ -71,9 +81,11 @@ type conversation struct {
 
 	// Spending, derived from the record.
 	spent, budgetAdded float64
+	spentByPeriod      map[string]float64
 	recentCosts        []float64
 	lastRequestBytes   int
 	budgetStopped      bool
+	stoppedEstimate    float64
 
 	paused bool // don't call the model until a message or Continue
 	notes  []*noteItem
@@ -137,7 +149,7 @@ func New(cfg Config) (*Core, error) {
 			return nil, fmt.Errorf("tool %s is defined with the name %q", tool.Name, names[0])
 		}
 	}
-	c := &Core{cfg: cfg, convs: map[string]*conversation{}, settings: settings}
+	c := &Core{cfg: cfg, convs: map[string]*conversation{}, settings: settings, drained: make(chan struct{})}
 	err := cfg.Store.Replay(func(ev *store.Event) error {
 		if !store.Known(ev.Type) {
 			return fmt.Errorf("unknown event type %q: a newer build wrote this record, so run that build or a later one", ev.Type)
@@ -180,6 +192,14 @@ func (c *Core) record(ev *store.Event) error {
 
 // apply updates state from an event. The caller holds mu, or is New.
 func (c *Core) apply(ev *store.Event) {
+	switch ev.Type {
+	case store.TackStarted:
+		c.lastVersion, c.lastStarted, c.nextChanges = ev.Version, ev.Time, nil
+		return
+	case store.RestartRequested:
+		c.nextChanges = ev.Changes
+		return
+	}
 	if ev.Type == store.ConversationAdded {
 		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir, settings: ev.Settings}
 		c.order = append(c.order, ev.Conversation)
@@ -447,7 +467,7 @@ func (conv *conversation) fork(ev *store.Event) *conversation {
 		}
 		out.items = append(out.items, &kept)
 	}
-	out.spent = 0
+	out.spent, out.spentByPeriod = 0, nil
 	for _, entry := range conv.noteHistory {
 		if entry.items <= ev.ForkItems {
 			out.noteHistory = append(out.noteHistory, entry)
@@ -562,6 +582,9 @@ func (c *Core) reserve(convID string, check func(*conversation) error) (*convers
 	if conv.busy {
 		return nil, ErrBusy
 	}
+	if c.restarting {
+		return nil, ErrRestarting
+	}
 	if check != nil {
 		if err := check(conv); err != nil {
 			return nil, err
@@ -574,6 +597,7 @@ func (c *Core) reserve(convID string, check func(*conversation) error) (*convers
 func (c *Core) release(conv *conversation) {
 	c.mu.Lock()
 	conv.busy = false
+	c.checkDrained()
 	c.mu.Unlock()
 }
 

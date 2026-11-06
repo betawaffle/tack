@@ -442,6 +442,34 @@ let page;
   ok(continued.messages.length === 4 && continued.messages[2].role === "assistant", "forking from a reply keeps that reply");
 
   ok(errs.length === 0, "no console errors or policy violations: " + errs.slice(0, 5).join(" | "));
+
+  // Spending, against what tack really reports.
+  const meta = await p.locator("#meta").innerText();
+  ok(/left/.test(meta) && /this month: \$\S+ here, \$\S+ all of tack/.test(meta), "the header shows what's left and this month's spending: " + meta);
+
+  // A restart, from what the status says. The real thing can't happen in here.
+  const real = await (await fetch(B + "/api/status")).json();
+  await p.reload();
+  await p.waitForSelector("#input");
+  await p.waitForTimeout(500);
+  ok(await p.locator("#toast").isHidden(), "no toast when nothing's happening");
+  let status = { ...real, restarting: true, waiting: [{ id: "abc", preview: "a long job" }] };
+  await p.route("**/api/status", (route) => (status ? route.fulfill({ json: status }) : route.abort()));
+  await p.waitForSelector("#toast:not([hidden])", { timeout: 8000 });
+  ok(/when this finishes/.test(await p.locator("#toast").innerText()), "the toast says a restart is waiting");
+  ok((await p.locator("#toast a").getAttribute("href")) === "#abc", "and links to what it's waiting for");
+  await p.screenshot({ path: "shots/toast-waiting.png" });
+  status = null;
+  await p.waitForFunction(() => document.getElementById("toast").innerText.includes("is restarting"), null, { timeout: 8000 });
+  ok(true, "while tack is away, it says it's restarting");
+  status = { version: "ffffffffffff", started: "2030-01-01T00:00:00Z", previous: real.version, changes: ["Add a thing"] };
+  await p.waitForFunction(() => document.getElementById("toast").innerText.includes("updated to fffffff"), null, { timeout: 8000 });
+  ok((await p.locator("#toast li").innerText()) === "Add a thing", "then that it updated, and what changed");
+  ok((await p.locator("#toast button", { hasText: "Reload" }).count()) === 1, "and offers a reload");
+  await p.screenshot({ path: "shots/toast-updated.png" });
+  await p.locator("#toast button", { hasText: "Dismiss" }).click();
+  ok(await p.locator("#toast").isHidden(), "and it can be dismissed");
+
   await br.close();
   console.log(fails ? `\n${fails} FAILED` : "\nall passed");
   process.exit(fails ? 1 : 0);

@@ -398,12 +398,18 @@ function markRunning(callID) {
   if (tag) tag.textContent = STATE_LABELS.running;
 }
 
+// What's left of the budget. It's soft, so spending can pass it.
+function left(budget) {
+  return Math.max(budget.limit - budget.spent, 0);
+}
+
 function budgetCard(conv) {
   const b = conv.budget;
   const node = el("div", "budget-card");
   node.append(
     el("strong", "", "Budget reached"),
-    el("div", "hint", `Spent ${dollars(b.spent)} of ${dollars(b.limit)}. The next call looks like about ${dollars(b.estimate)}, so tack didn't start it.`),
+    el("div", "hint", `${dollars(left(b))} left, and the next call looks like about ${dollars(b.estimate)}, so tack didn't start it.`),
+    el("div", "hint", `Spent this month: ${dollars(b.period_here)} in this conversation, ${dollars(b.period_all)} across all of tack.`),
   );
   const row = el("div", "row");
   const amount = el("input");
@@ -411,7 +417,8 @@ function budgetCard(conv) {
   amount.type = "number";
   amount.step = "any";
   amount.min = "0";
-  amount.value = String(b.top_up);
+  // Enough to get this call started, if the usual amount wouldn't be.
+  amount.value = String(Math.max(b.top_up, b.spent + b.estimate - b.limit));
   amount.setAttribute("aria-label", "Dollars to add");
   row.append(amount, button("Add and continue", "mini primary", async () => {
     await postJSON(`/api/conversations/${conv.id}/budget`, { amount_usd: Number(amount.value) });
@@ -819,7 +826,8 @@ function showMeta(conv) {
   if (conv.host) parts.push(conv.host);
   if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
-  parts.push(`${dollars(conv.budget.spent)} of ${dollars(conv.budget.limit)}`);
+  parts.push(`${dollars(left(conv.budget))} left`);
+  parts.push(`this month: ${dollars(conv.budget.period_here)} here, ${dollars(conv.budget.period_all)} all of tack`);
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
 }
 
@@ -1354,6 +1362,93 @@ $("menu").addEventListener("click", () => {
   $("menu").setAttribute("aria-expanded", String(isOpen));
 });
 $("scrim").addEventListener("click", closeDrawer);
+
+// Restarts. The page polls because nothing else tells an idle page about one. Failing to
+// reach tack is expected during a restart, so it's not reported as an error unless
+// it goes on for too long.
+const STATUS_EVERY_MS = 5000;
+const RESTART_GIVE_UP_MS = 30000;
+let knownStatus = null;
+let unreachableSince = null;
+
+function showToast(key, title, details, actions) {
+  const toast = $("toast");
+  if (toast.dataset.key === key) return;
+  toast.dataset.key = key;
+  const row = el("div", "toast-row");
+  row.append(el("strong", "", title), ...(actions || []));
+  toast.replaceChildren(row, ...(details || []));
+  toast.hidden = false;
+}
+
+function hideToast() {
+  const toast = $("toast");
+  toast.hidden = true;
+  toast.dataset.key = "";
+  toast.replaceChildren();
+}
+
+function shortVersion(version) {
+  return version.slice(0, 7) + (version.endsWith("+dirty") ? "+dirty" : "");
+}
+
+function showRestarted(status) {
+  const reload = button("Reload", "mini primary", () => location.reload());
+  const dismiss = button("Dismiss", "mini", hideToast);
+  const updated = status.version !== knownStatus.version;
+  const title = updated ? `tack updated to ${shortVersion(status.version)}` : "tack restarted";
+  const details = [];
+  if (updated && status.changes) {
+    const list = el("ul", "toast-changes");
+    list.append(...status.changes.map((change) => el("li", "", change)));
+    details.push(list);
+  }
+  showToast(`started ${status.started}`, title, details, [reload, dismiss]);
+}
+
+function showWaiting(status) {
+  if (!status.waiting) {
+    showToast("restarting", "tack is restarting for an update");
+    return;
+  }
+  const list = el("ul", "toast-changes");
+  list.append(...status.waiting.map((conv) => {
+    const item = el("li");
+    const link = el("a", "", conv.preview || conv.id);
+    link.href = `#${conv.id}`;
+    item.append(link);
+    return item;
+  }));
+  const count = status.waiting.length;
+  showToast(`waiting ${status.waiting.map((conv) => conv.id).join()}`, `tack will restart for an update when ${count === 1 ? "this finishes" : `these ${count} finish`}. New replies wait until then.`, [list]);
+}
+
+async function checkStatus() {
+  try {
+    const res = await fetch("/api/status");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const status = await res.json();
+    unreachableSince = null;
+    if (!knownStatus) {
+      knownStatus = status;
+      if (status.restarting) showWaiting(status);
+    } else if (status.started !== knownStatus.started) {
+      showRestarted(status);
+    } else if (status.restarting) {
+      knownStatus.restarting = true;
+      showWaiting(status);
+    }
+  } catch {
+    unreachableSince ??= Date.now();
+    if (Date.now() - unreachableSince > RESTART_GIVE_UP_MS) {
+      showToast("unreachable", "tack isn't answering", [el("div", "hint", "If it was restarting, the new build may not have started. Its log is in journalctl --user -u tack.")]);
+    } else if (knownStatus?.restarting) {
+      showToast("restarting", "tack is restarting for an update");
+    }
+  }
+  setTimeout(checkStatus, STATUS_EVERY_MS);
+}
+checkStatus();
 
 (async () => {
   const id = location.hash.slice(1);

@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/betawaffle/tack/internal/store"
 )
@@ -32,7 +33,7 @@ func usageCost(ev *store.Event) (float64, bool) {
 // recent call. A refused request costs nothing.
 func (conv *conversation) addCost(ev *store.Event) {
 	if cost, ok := usageCost(ev); ok {
-		conv.spent += cost
+		conv.count(ev, cost)
 		conv.recentCosts = append(conv.recentCosts, cost)
 		if len(conv.recentCosts) > recentCostsKept {
 			conv.recentCosts = conv.recentCosts[1:]
@@ -40,8 +41,31 @@ func (conv *conversation) addCost(ev *store.Event) {
 		return
 	}
 	if ev.Status == 200 || ev.Cancelled {
-		conv.spent += conv.maxRecentCost()
+		conv.count(ev, conv.maxRecentCost())
 	}
+}
+
+func (conv *conversation) count(ev *store.Event, cost float64) {
+	conv.spent += cost
+	if conv.spentByPeriod == nil {
+		conv.spentByPeriod = map[string]float64{}
+	}
+	conv.spentByPeriod[billingPeriod(ev.Time)] += cost
+}
+
+// billingPeriod names the period a time falls in. For now that's the calendar month
+// where tack is running.
+func billingPeriod(t time.Time) string {
+	return t.Local().Format("2006-01")
+}
+
+// spentInPeriod is what all of tack has spent in a period. The caller holds mu.
+func (c *Core) spentInPeriod(period string) float64 {
+	var total float64
+	for _, conv := range c.convs {
+		total += conv.spentByPeriod[period]
+	}
+	return total
 }
 
 func (conv *conversation) maxRecentCost() float64 {

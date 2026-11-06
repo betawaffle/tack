@@ -87,6 +87,7 @@ const (
 // Event types.
 const (
 	TackStarted       = "tack_started"
+	RestartRequested  = "restart_requested"
 	ConversationAdded = "conversation_created"
 	// ConversationForked starts a conversation from the state of another one at that
 	// moment. It's its own type so that a build that can't work out the history
@@ -254,7 +255,7 @@ type Artifact struct {
 // getting history wrong, such as not knowing a tool call was already decided.
 func Known(eventType string) bool {
 	switch eventType {
-	case TackStarted, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
+	case TackStarted, RestartRequested, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, BudgetStopped, PauseRequested, PauseCleared, NoteAdded:
@@ -271,6 +272,9 @@ type Event struct {
 	// tack_started
 	Version string `json:"version,omitzero"`
 	PID     int    `json:"pid,omitzero"`
+
+	// restart_requested: what the build it's restarting into changes, if that's known.
+	Changes []string `json:"changes,omitzero"`
 
 	// conversation_created and everything that happens in a conversation
 	Conversation string `json:"conversation,omitzero"`

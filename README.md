@@ -19,7 +19,15 @@ systemctl --user daemon-reload
 systemctl --user enable --now tack
 ```
 
-To update it, rebuild and run `systemctl --user restart tack`. Logs are in
+To update it, run `go run ./cmd/tack-deploy` with everything committed. That runs the
+tests, builds tack and `tack-show`, checks the new build can start with your config and
+record, installs both to `~/.local/bin` (the old one stays as `tack.previous`), and
+asks the running tack to restart at a clean stopping point. If nothing's running that's right
+away. Otherwise tack lets every running turn finish and won't start new replies or tools
+until it has, and the page says what it's waiting for, then that it updated and what changed.
+It waits as long as that takes. Stopping what's running gets there sooner, and
+`systemctl --user restart tack` doesn't wait at all. The request itself is `SIGUSR1`,
+which makes tack exit with code 75 once it's clear, and systemd starts it again. Logs are in
 `journalctl --user -u tack`.
 
 It serves port 8484 on all interfaces with **no authentication**, and anyone who can
@@ -157,9 +165,10 @@ before asking for a reply. A held message can't be edited or removed yet.
 
 ## Budgets and stopping
 
-Each conversation has a soft budget. tack doesn't start a call if the budget is spent
-or the next call looks likely to go over, and it offers a box to add more, but it never
-interrupts a call for it. Estimates come from recent calls scaled by how much the request
+Each conversation has a soft budget, for what it can spend from where it started. tack
+doesn't start a call if the budget is spent or the next call looks likely to go over, and it
+offers a box to add more, but it never interrupts a call for it. To help you decide, the page
+shows what's been spent this calendar month, in this conversation and across all of tack. Estimates come from recent calls scaled by how much the request
 has grown, so a cache miss can go over. A cancelled call doesn't report a cost, so it
 counts as the most expensive recent one.
 

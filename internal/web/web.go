@@ -66,6 +66,7 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/apply", s.applySettings)
 	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/discard", s.discardSettings)
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
+	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
 	return knownHost(hosts, security(http.NewCrossOriginProtection().Handler(mux)))
@@ -205,6 +206,10 @@ func (s *server) definitions(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (s *server) status(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.core.CurrentStatus())
 }
 
 func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
@@ -444,6 +449,8 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, core.ErrRestarting):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:
 		log.Printf("request failed: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

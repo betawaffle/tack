@@ -226,6 +226,7 @@ func (conv *conversation) applyTool(ev *store.Event) {
 		conv.budgetStopped = false
 	case store.BudgetStopped:
 		conv.budgetStopped = true
+		conv.stoppedEstimate = ev.EstimateUSD
 	case store.PauseRequested:
 		conv.paused = true
 	case store.PauseCleared:

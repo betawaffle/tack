@@ -80,13 +80,16 @@ type ToolCallView struct {
 }
 
 // BudgetView is a conversation's spending. Stopped says a call wasn't started because
-// of it. TopUp is what the add box starts with.
+// of it, and then Estimate is what that call looked like it would cost. TopUp is what
+// the add box starts with. The period totals are for the current billing period.
 type BudgetView struct {
-	Limit    float64 `json:"limit"`
-	Spent    float64 `json:"spent"`
-	Estimate float64 `json:"estimate"`
-	TopUp    float64 `json:"top_up"`
-	Stopped  bool    `json:"stopped,omitzero"`
+	Limit      float64 `json:"limit"`
+	Spent      float64 `json:"spent"`
+	Estimate   float64 `json:"estimate"`
+	TopUp      float64 `json:"top_up"`
+	Stopped    bool    `json:"stopped,omitzero"`
+	PeriodHere float64 `json:"period_here"`
+	PeriodAll  float64 `json:"period_all"`
 }
 
 // NoteView is an item on the page, written by the model.
@@ -153,17 +156,21 @@ func (c *Core) Conversations() []Summary {
 	defer c.mu.Unlock()
 	out := make([]Summary, 0, len(c.order))
 	for _, id := range slices.Backward(c.order) {
-		conv := c.convs[id]
-		s := Summary{ID: id, Created: conv.created, Busy: conv.busy}
-		for _, it := range conv.items {
-			if it.role == "user" {
-				s.Preview = c.preview(it.parts)
-				break
-			}
-		}
-		out = append(out, s)
+		out = append(out, c.summary(c.convs[id]))
 	}
 	return out
+}
+
+// summary describes a conversation. The caller holds mu.
+func (c *Core) summary(conv *conversation) Summary {
+	s := Summary{ID: conv.id, Created: conv.created, Busy: conv.busy}
+	for _, it := range conv.items {
+		if it.role == "user" {
+			s.Preview = c.preview(it.parts)
+			break
+		}
+	}
+	return s
 }
 
 func (c *Core) preview(parts []store.Part) string {
@@ -202,7 +209,14 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	effective := conv.effectiveSettings(c.settings)
 	out.Model, out.Host = effective.Model, effective.Host
 	full := effective.WithDefaults()
-	out.Budget = BudgetView{Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: full.BudgetTopUpUSD, Stopped: conv.budgetStopped}
+	period := billingPeriod(time.Now())
+	out.Budget = BudgetView{
+		Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: full.BudgetTopUpUSD, Stopped: conv.budgetStopped,
+		PeriodHere: conv.spentByPeriod[period], PeriodAll: c.spentInPeriod(period),
+	}
+	if conv.budgetStopped {
+		out.Budget.Estimate = conv.stoppedEstimate
+	}
 	out.Paused = conv.paused
 	out.Running.Reply = conv.cancelReply != nil
 	for id := range conv.stopTools {
