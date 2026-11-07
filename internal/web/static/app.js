@@ -587,7 +587,7 @@ function markRunning(callID) {
   const card = [...$("list").querySelectorAll(".tool")].findLast((node) => node.dataset.call === callID);
   if (!card) return;
   card.className = "tool state-running";
-  const tag = card.querySelector(".tool-head .tag");
+  const tag = card.querySelector(".tool-head .tool-state");
   if (tag) tag.textContent = STATE_LABELS.running;
 }
 
@@ -773,7 +773,7 @@ function renderToolCall(call, decision) {
   head.append(exact(call.name, "tool-name"));
   const args = parsedArguments(call);
   if (args?.language) head.append(el("span", "tag", args.language));
-  head.append(el("span", "tag", STATE_LABELS[call.state] || call.state));
+  head.append(el("span", "tag tool-state", STATE_LABELS[call.state] || call.state));
   for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
   if (call.custom) head.append(el("span", "tag", "custom"));
   if (call.ran_automatically) head.append(el("span", "tag", "Ran without asking"));
@@ -785,6 +785,7 @@ function renderToolCall(call, decision) {
     head.insertBefore(el("span", "tag unused", "Has hidden characters"), head.querySelector(".tool-preview"));
   }
 
+  if (call.channel?.length) node.append(channelPanel(call));
   if (call.has_output) {
     // Empty output is left out of the JSON, and it's still output.
     const text = call.output || "";
@@ -827,6 +828,61 @@ function renderToolCall(call, decision) {
     }
   }
   return node;
+}
+
+// What a call's code asked tack while it ran, each request exactly as it was written. A call to
+// a custom tool waits here for an answer, which the code gets exactly as written.
+function channelPanel(call) {
+  const box = el("details", "channel");
+  box.open = true;
+  box.dataset.channel = call.id;
+  box.append(el("summary", "", `Calls from the code (${call.channel.length})`));
+  for (const ex of call.channel) box.append(exchangeNode(ex, call.state === "running"));
+  return box;
+}
+
+function exchangeNode(ex, running) {
+  const node = el("div", "exchange");
+  node.dataset.exchange = ex.id;
+  node.append(exact(ex.request, "tool-text exchange-request"));
+  if (ex.answerable) node.append(answerBox(ex.id, ex.tool));
+  else if (ex.waiting) node.append(el("div", "hint", running ? "Waiting…" : "No answer: the run ended first."));
+  else node.append(el("div", "hint", ex.by === "user" ? "You answered:" : "tack answered:"), exact(ex.response || ""));
+  return node;
+}
+
+function answerBox(id, tool) {
+  const wrap = el("div", "exchange-answer");
+  const area = el("textarea", "custom-result channel-answer");
+  area.rows = 3;
+  area.spellcheck = false;
+  area.dataset.answer = id;
+  area.placeholder = "The result the code gets";
+  area.setAttribute("aria-label", `Result of ${tool}`);
+  const answer = (deny) => async () => {
+    await postJSON(`/api/conversations/${current}/code-calls/${id}`, { text: area.value, deny });
+    wrap.replaceWith(el("div", "hint", deny ? "You denied it." : "You answered it."));
+  };
+  const row = el("div", "row");
+  row.append(button("Answer", "mini primary net", answer(false)), button("Deny", "mini net", answer(true)));
+  wrap.append(el("div", "hint", "The code is waiting for you. Its time limit is held meanwhile. Denying sends what's written, or a default, as an error."), area, row);
+  return wrap;
+}
+
+// While a reply streams, the page isn't redrawn, so a call from code is added to its card.
+function showCodeCall(update) {
+  const card = [...$("list").querySelectorAll(".tool")].findLast((node) => node.dataset.call === update.id);
+  if (!card) return;
+  const ex = JSON.parse(update.text);
+  card.open = true;
+  let box = card.querySelector(".channel");
+  if (!box) {
+    box = channelPanel({ channel: [], state: "running" });
+    card.querySelector(".tool-head").after(box);
+  }
+  box.append(exchangeNode({ id: ex.id, tool: ex.tool, request: JSON.stringify({ tool: ex.tool, arguments: ex.arguments }), answerable: true }, true));
+  box.querySelector("summary").textContent = `Calls from the code (${box.querySelectorAll(".exchange").length})`;
+  box.querySelector(`textarea[data-answer="${ex.id}"]`)?.focus();
 }
 
 const DECISION_TEXT = {
@@ -1638,7 +1694,8 @@ async function show(id, polling, force) {
   if (id !== current) return;
   // Don't throw away something being typed just because a poll came round.
   const live = streaming === id;
-  const typing = polling && !force && document.querySelector("#list .editor, #settings-text:focus");
+  const typing = polling && !force && (document.querySelector("#list .editor, #settings-text:focus") ||
+    [...document.querySelectorAll("#list .channel-answer")].some((area) => area.value || area === document.activeElement));
   shown.busy = conv.busy;
   if (!typing) {
     shown = { id, revision: conv.revision, busy: conv.busy, conv };
@@ -1840,6 +1897,7 @@ async function consume(res, id, reply) {
           markRunning(update.id);
         }
         if (update.kind === "tool_done") setControls(id, {});
+        if (update.kind === "code_call") showCodeCall(update);
         if (update.kind === "content") text.add(update.text);
         if (update.kind === "reasoning") {
           // Only the first time, so it stays closed if someone closes it.

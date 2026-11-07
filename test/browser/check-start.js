@@ -130,6 +130,21 @@ let page;
   ok(lookupDef.function.description === "Look something up." && lookupDef.function.parameters.required[0] === "q", "as it was written");
   ok(b[1].messages.at(-1).role === "tool" && b[1].messages.at(-1).content === "Tea is a drink.", "and the model gets exactly the result written");
 
+  // Code can call it too, and you answer on the running card.
+  await reset();
+  await send("tools codecall");
+  await card();
+  await p.click("#decide");
+  await p.waitForSelector("textarea[data-answer]", { timeout: 15000 });
+  ok(true, "code calling a custom tool waits for you on its card");
+  await p.fill("textarea[data-answer]", "Tea, from you.");
+  await p.screenshot({ path: "shots/code-call.png" });
+  await p.locator(".exchange-answer button", { hasText: "Answer" }).click();
+  await p.waitForFunction(() => [...document.querySelectorAll(".prose")].filter((x) => x.innerText.includes("Done with tools.")).length >= 2, null, { timeout: 15000 });
+  await idle();
+  ok((await p.locator(".tool-output .tool-text").last().textContent()).includes("{'result': 'Tea, from you.'}"), "and the code gets exactly what you wrote");
+  ok((await p.locator(".exchange").last().textContent()).includes("You answered:"), "which the card keeps");
+
   // Reloading the config.
   const originalConfig = fs.readFileSync(process.env.TACK_TEST_CONFIG, "utf8");
   ok((await p.locator(".conv-settings .tag.waiting").count()) === 0, "no notice while nothing has changed");

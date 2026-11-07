@@ -99,6 +99,8 @@ type ToolCallView struct {
 	Compact bool `json:"compact,omitzero"`
 	// Custom says it's a call to a tool the person defined, so they write its result.
 	Custom bool `json:"custom,omitzero"`
+	// Channel is what its code asked tack while it ran, in order.
+	Channel []ChannelView `json:"channel,omitzero"`
 
 	// OutputTokens is what the output would add to the next call, while it's waiting on someone
 	// deciding whether to send it. Zero means it can't be counted.

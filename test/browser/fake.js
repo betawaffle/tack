@@ -51,6 +51,7 @@ const TOOL_CALLS = {
   long: [["run_code", JSON.stringify({ language: "python", code: "import time\nprint('begun', flush=True)\ntime.sleep(30)" })]],
   context: [["run_code", JSON.stringify({ language: "python", code: "import json\nc = json.load(open('/conversation/context.json'))\nprint(c['request']['model'], c['reply']['tool_calls'][0]['function']['name'], c['request']['messages'][-1]['content'])" })]],
   lookup: [["lookup", '{"q":"tea"}']],
+  codecall: [["run_code", JSON.stringify({ language: "python", code: 'import json, socket\nf = socket.socket(fileno=10).makefile("rwb")\nf.write(json.dumps({"tool": "lookup", "arguments": {"q": "tea"}}).encode() + b"\\n")\nf.flush()\nprint(json.loads(f.readline()))' })]],
 };
 let bodies = [];
 http

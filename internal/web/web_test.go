@@ -172,6 +172,8 @@ func TestStartingFromSectionsAndTools(t *testing.T) {
 	// The tools change like settings, and some settings change straight away.
 	proposal := field(t, post(t, conv+"/"+id+"/tools", `{"tools":[]}`, 200), "proposal")
 	post(t, conv+"/"+id+"/settings/"+proposal+"/apply", "", 200)
+	post(t, conv+"/"+id+"/code-calls/nope", `{"text":"x"}`, http.StatusNotFound)
+	post(t, conv+"/"+id+"/code-calls/nope", `{"txet":"x"}`, http.StatusBadRequest)
 	post(t, conv+"/"+id+"/settings/now", `{"model":"x"}`, http.StatusBadRequest)
 	post(t, conv+"/"+id+"/settings/now", `{"reasoning_effort":"lots"}`, http.StatusBadRequest)
 	post(t, conv+"/"+id+"/settings/now", `{"auto_run_code":true,"host":"relace/fp4","reasoning_effort":"high"}`, 200)

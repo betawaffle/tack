@@ -516,3 +516,9 @@ button:disabled { opacity: .45; cursor: default; }
 .thinking > .view-row, .tool-output > .view-row { position: absolute; top: 0; right: 0; margin: 0; }
 .thinking:not([open]) > .view-row { display: none; }
 a.mini { display: inline-block; text-decoration: none; }
+
+/* What running code asked tack */
+.channel { margin: 6px 0; font-size: 12.5px; }
+.channel > summary { cursor: pointer; width: fit-content; color: var(--muted); }
+.exchange { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+.exchange-answer { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border: 1px solid var(--wait); border-radius: 6px; background: var(--wait-soft); }

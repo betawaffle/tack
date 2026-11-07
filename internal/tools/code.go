@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/betawaffle/tack/internal/cgroup"
@@ -46,7 +47,7 @@ const (
 	codeAutoSendBytes = 8 << 10
 )
 
-const codeDescription = "Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to 16 MB. /tmp is empty each time, and holds up to 64 MB. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. It has Python's standard library and no other packages. It's limited to 2 GB of memory and 256 processes. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own."
+const codeDescription = "Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to 16 MB. /tmp is empty each time, and holds up to 64 MB. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. File descriptor 10 is a socket to the harness: write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to 64 KB, and a run can make up to 200 calls. It has Python's standard library and no other packages. It's limited to 2 GB of memory and 256 processes. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own."
 
 // File descriptors in the sandbox. bwrap consumes the first four itself.
 const (
@@ -57,6 +58,7 @@ const (
 	fdKeptIn
 	fdKeptOut
 	fdContext
+	fdChannel // what the model's code talks to tack through
 )
 
 // codeStart runs in the sandbox around the model's code, which gets its own process and can't
@@ -75,7 +77,13 @@ try:
             archive.extractall("/work", filter="data")
 except Exception as e:
     print("tack couldn't restore the files in /work:", e, file=sys.stderr, flush=True)
-child = subprocess.Popen([sys.executable, "-I", "-u", "-B", "-X", "utf8", "/code/main.py"], stdin=subprocess.DEVNULL, cwd="/work")
+try:
+    channel = (os.dup2(10, 10),)
+except OSError:
+    channel = ()
+child = subprocess.Popen([sys.executable, "-I", "-u", "-B", "-X", "utf8", "/code/main.py"], stdin=subprocess.DEVNULL, cwd="/work", pass_fds=channel)
+for fd in channel:
+    os.close(fd)
 child.wait()
 def add(archive, path):
     info = archive.gettarinfo(path, arcname=os.path.relpath(path, "/work"))
@@ -382,6 +390,34 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 		return nil, err
 	}
 	extra = append(extra, in)
+	// A pair of connected sockets: tack's end can be closed under a reader, and the code's
+	// end stays blocking, the way code expects a socket to be.
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.SetNonblock(pair[0], true); err != nil {
+		syscall.Close(pair[0])
+		syscall.Close(pair[1])
+		return nil, err
+	}
+	tackEnd, codeEnd := os.NewFile(uintptr(pair[0]), "channel"), os.NewFile(uintptr(pair[1]), "channel for code")
+	defer tackEnd.Close()
+	extra = append(extra, codeEnd)
+	serveCtx, stopServing := context.WithCancel(ctx)
+	served := make(chan error, 1)
+	go func() {
+		if call.Serve == nil {
+			// Nothing answers, so the code finds it closed rather than waiting.
+			tackEnd.Close()
+			served <- nil
+			return
+		}
+		err := call.Serve(serveCtx, tackEnd)
+		// Once tack stops answering, as after a limit, the code finds it closed.
+		tackEnd.Close()
+		served <- err
+	}()
 	kept := make(chan []byte, 1)
 	go func() {
 		data, _ := io.ReadAll(io.LimitReader(keptRead, codeSavedBytes+1))
@@ -394,6 +430,11 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	cmd.Env = codeEnv
 	cmd.ExtraFiles = extra
 	output, failure := r.runSandboxed(ctx, cmd, call, s, "code", &cgroup.Limits{Memory: codeMemoryBytes, Pids: codePids})
+	stopServing()
+	tackEnd.Close()
+	if err := <-served; err != nil {
+		failure = errors.Join(failure, fmt.Errorf("tack's side of the channel failed: %w", err))
+	}
 
 	keptWrite.Close()
 	// With the sandbox gone nothing else can be holding the other end, but this is what's

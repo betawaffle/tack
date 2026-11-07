@@ -139,6 +139,7 @@ func Handler(c *core.Core, defaults func() Defaults, save func(prompt.Defaults) 
 	mux.HandleFunc("POST /api/defaults", s.saveDefaults)
 	mux.HandleFunc("POST /api/conversations/{id}/tools", s.current(s.proposeTools))
 	mux.HandleFunc("POST /api/conversations/{id}/settings/now", s.changeSettingsNow)
+	mux.HandleFunc("POST /api/conversations/{id}/code-calls/{call}", s.answerCodeCall)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
@@ -431,6 +432,25 @@ func (s *server) proposeTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"proposal": id})
+}
+
+// answerCodeCall answers running code's call to a custom tool. It isn't tied to a revision,
+// since the conversation is busy running that code.
+func (s *server) answerCodeCall(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+		Deny bool   `json:"deny"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.core.AnswerCodeCall(r.PathValue("id"), r.PathValue("call"), body.Text, body.Deny); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 // changeSettingsNow changes the settings that can change at any point, even while a

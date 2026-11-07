@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"slices"
 	"strings"
@@ -83,6 +84,10 @@ type Call struct {
 	// Context returns the request that led to this call, exactly as it was sent, and the
 	// reply that made the call, as JSON. It's nil during Inspect.
 	Context func() ([]byte, error)
+
+	// Serve answers what the running code writes to conn, until conn or ctx ends. See
+	// serveChannel. It's nil during Inspect.
+	Serve func(ctx context.Context, conn io.ReadWriter) error
 }
 
 func (t *Tool) define(settings store.Settings) jsontext.Value {
@@ -197,6 +202,7 @@ type toolCall struct {
 	automatic bool         // nobody was asked before it ran
 	edited    bool         // someone changed what the model sees
 	pending   *edit        // a change to that, held until it's applied or discarded
+	channel   []*exchange  // what its code asked tack while it ran
 }
 
 func (t *toolCall) resolved() bool { return t.result != nil }
@@ -306,6 +312,18 @@ func (conv *conversation) applyTool(ev *store.Event) {
 	case store.ToolStarted:
 		if call := conv.tool(ev.ToolCall); call != nil {
 			call.started, call.finished = true, false
+		}
+	case store.CodeRequest:
+		if call := conv.tool(ev.ToolCall); call != nil {
+			call.channel = append(call.channel, &exchange{id: ev.Channel, tool: ev.Kind, request: ev.Request})
+		}
+	case store.CodeResponse:
+		if call := conv.tool(ev.ToolCall); call != nil {
+			for _, ex := range call.channel {
+				if ex.id == ev.Channel {
+					ex.response, ex.by = ev.Response, ev.By
+				}
+			}
 		}
 	case store.ToolFinished:
 		if call := conv.tool(ev.ToolCall); call != nil {
@@ -814,14 +832,14 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	}
 	scratch := func(op, key, text string) (string, error) { return c.scratchOperation(conv, op, key, text) }
 	callContext := func() ([]byte, error) { return c.callContext(conv, call) }
-	output, failure := c.execute(ctx, call, Call{Settings: settings, Execution: execution, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch, Context: callContext}, func(name string, data []byte) error {
+	output, failure := c.execute(ctx, conv, call, Call{Settings: settings, Execution: execution, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch, Context: callContext}, func(name string, data []byte) error {
 		block, err := c.cfg.Store.Put(data)
 		if err != nil {
 			return err
 		}
 		artifacts = append(artifacts, store.Artifact{Name: name, Block: block})
 		return nil
-	})
+	}, send)
 	ref, err := c.cfg.Store.Put(output)
 	if err != nil {
 		return err
@@ -842,7 +860,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	return c.record(finished)
 }
 
-func (c *Core) execute(parent context.Context, call *toolCall, run Call, keep func(string, []byte) error) ([]byte, error) {
+func (c *Core) execute(parent context.Context, conv *conversation, call *toolCall, run Call, keep func(string, []byte) error, send func(Update)) ([]byte, error) {
 	tool := c.findTool(call.Name)
 	if tool == nil {
 		return nil, fmt.Errorf("there is no tool named %q", call.Name)
@@ -870,9 +888,13 @@ func (c *Core) execute(parent context.Context, call *toolCall, run Call, keep fu
 	if tool.Timeout != nil {
 		timeout = tool.Timeout(run.Settings)
 	}
-	ctx, cancel := context.WithTimeoutCause(parent, timeout, fmt.Errorf("it ran past its limit of %s", timeout))
-	defer cancel()
+	ctx, limit := pausableTimeout(parent, timeout, fmt.Errorf("it ran past its limit of %s", timeout))
+	defer limit.stop()
 	run.Keep = keep
+	served := run
+	run.Serve = func(ctx context.Context, conn io.ReadWriter) error {
+		return c.serveChannel(ctx, conn, conv, call, served, limit.hold, send)
+	}
 	return tool.Run(ctx, run)
 }
 
@@ -1156,6 +1178,7 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		Error:        call.failure,
 		Compact:      c.isCompact(call.Name),
 		Custom:       conv.isCustom(call.Name),
+		Channel:      c.channelViews(call),
 		ResultEdited: call.edited,
 		// Only the newest call with an ID can be the one a decision means.
 		Decidable: conv.decision != nil && slices.Contains(conv.decision.calls, call.ID) &&

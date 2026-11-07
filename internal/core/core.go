@@ -64,6 +64,8 @@ type Core struct {
 	capabilities map[capabilityKey]capability
 	// Requests written by hand, outside any conversation.
 	manual []*manualCall
+	// codeCalls are calls running code made to custom tools, waiting for a person, by ID.
+	codeCalls map[string]*waitingCodeCall
 	// This run, which isn't.
 	status        Status
 	restarting    bool

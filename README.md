@@ -154,7 +154,18 @@ between calls in a conversation, up to 16 MB, as an archive in the record that's
 inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.
 Notes and scratch can be read from `/conversation`, and so can `context.json`: the exact
 request that led to the call, under `request`, and the reply that made it, under `reply`, shaped
-like a message in that request. Output up to 8 KB goes to the model without
+like a message in that request.
+
+File descriptor 10 is a socket to tack, so code can call tools: it writes
+`{"tool": name, "arguments": object}` on one line and reads back `{"result": text}` or
+`{"error": text}`. It can call any tool the conversation offers that runs without asking, like
+`note` and `scratch`, and any custom tool, but nothing that would need approval, `run_code`
+included, so it gets nothing the model doesn't already have. A call to a custom tool shows on
+the running call's card, with a box for the answer, and the run's time limit is held while it
+waits. Lines are limited to 64 KB, and a run to 200 calls and 1 MB. Past a limit, tack stops
+answering and closes its end. Every request and response is recorded and shown on the card.
+
+Output up to 8 KB goes to the model without
 a second approval, because it can't contain anything the model didn't already have, and larger output
 waits, with the choice of sending only the first and last 2 KB. A conversation can opt in to running
 code without asking, from the row above the message box, its settings or the approval card, and

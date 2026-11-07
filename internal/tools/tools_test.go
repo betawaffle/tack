@@ -2,12 +2,14 @@ package tools
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -498,5 +500,44 @@ func TestBadCodeIsCaughtBeforeApproval(t *testing.T) {
 		if _, err := f.tools["run_code"].Inspect(f.call(args)); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+func TestCodeCanTalkToTackThroughItsSocket(t *testing.T) {
+	f := newFixture(t)
+	call := f.call(map[string]string{"language": "python", "code": `
+import json, socket
+s = socket.socket(fileno=10)
+f = s.makefile("rwb")
+for tool in ["scratch", "other"]:
+    f.write(json.dumps({"tool": tool, "arguments": {"op": "list"}}).encode() + b"\n")
+    f.flush()
+    print(json.loads(f.readline()))
+`})
+	call.Execution = store.NewID()
+	var seen []string
+	call.Serve = func(_ context.Context, conn io.ReadWriter) error {
+		r := bufio.NewReader(conn)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return nil
+			}
+			seen = append(seen, strings.TrimSpace(line))
+			fmt.Fprintf(conn, `{"result":"answer %d"}`+"\n", len(seen))
+		}
+	}
+	out, err := f.tools["run_code"].Run(context.Background(), call)
+	if err != nil || string(out) != "{'result': 'answer 1'}\n{'result': 'answer 2'}\n" {
+		t.Errorf("out = %q, %v", out, err)
+	}
+	if len(seen) != 2 || seen[0] != `{"tool": "scratch", "arguments": {"op": "list"}}` {
+		t.Errorf("seen = %q", seen)
+	}
+	// Without anything serving it, writing fails rather than hanging.
+	call.Serve = nil
+	call.Args["code"] = []byte(`"import os\ntry:\n    os.write(10, b'x\\n')\n    print(os.read(10, 10))\nexcept OSError as e:\n    print('closed', e.errno)"`)
+	if out, err := f.tools["run_code"].Run(context.Background(), call); err != nil || !strings.Contains(string(out), "closed") && string(out) != "b''\n" {
+		t.Errorf("unserved = %q, %v", out, err)
 	}
 }

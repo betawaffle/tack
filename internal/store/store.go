@@ -128,6 +128,11 @@ const (
 	// model_call_finished, with the request's provider section as routing.
 	ManualCallStarted  = "manual_call_started"
 	ManualCallFinished = "manual_call_finished"
+	// CodeRequest is one line that running code wrote to tack, as Request, with the tool
+	// it named as Kind, while the call ToolCall ran as Execution. CodeResponse is what it
+	// was given back, as Response, by tack or by the user. Channel ties the two together.
+	CodeRequest  = "code_request"
+	CodeResponse = "code_response"
 )
 
 // Note is an item on a conversation's page. The text is a block, like other content.
@@ -237,7 +242,7 @@ func Known(eventType string) bool {
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged,
-		ManualCallStarted, ManualCallFinished:
+		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse:
 		return true
 	}
 	return false
@@ -349,6 +354,9 @@ type Event struct {
 	DecisionCalls []string `json:"decision_calls,omitzero"`
 	Choices       []Choice `json:"choices,omitzero"`
 	By            string   `json:"by,omitzero"`
+
+	// code_request and code_response: which request.
+	Channel string `json:"channel,omitzero"`
 
 	// tool_*
 	Execution string     `json:"execution,omitzero"` // one run of a call. A re-run gets a new one
