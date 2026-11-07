@@ -39,7 +39,7 @@ const reset = () => fetch(F + "/reset");
   const tool = (i) => p.locator(".tool").nth(i);
 
   await p.goto(B);
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
 
   // A batch waits for a person.
   await send("tools two");
@@ -114,7 +114,7 @@ const reset = () => fetch(F + "/reset");
   // Calls that can't run.
   await reset();
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   await send("tools bad");
   await card();
   ok((await p.locator(".tool-invalid").count()) === 2, "invalid calls explained");
@@ -129,7 +129,7 @@ const reset = () => fetch(F + "/reset");
   // Hidden characters and markup in arguments.
   await reset();
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   await send("tools hidden");
   await card();
   ok((await p.locator(".tool .ctrl").count()) === 3, "hidden characters made visible");
@@ -145,7 +145,7 @@ const reset = () => fetch(F + "/reset");
   // A tool that fails.
   await reset();
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   await send("tools boom");
   await card();
   await p.click("#decide");
@@ -160,7 +160,7 @@ const reset = () => fetch(F + "/reset");
   // Views of tool output don't disturb a decision.
   await reset();
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   await send("tools json");
   await card();
   await p.click("#decide");
@@ -181,7 +181,7 @@ const reset = () => fetch(F + "/reset");
   const url = p.url();
   await reset();
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   await send("tools two");
   await card();
   const waiting = p.url();

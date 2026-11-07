@@ -7,26 +7,24 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/prompt"
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/markdown.js static/json.js static/money.js static/highlight.js
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -35,7 +33,7 @@ const maxMessageBytes = 8 << 20
 // this server, so that it has to be reloaded. Any other change to the page's files only
 // offers a reload. Pages send it with every request, and it's checked there too, since
 // they might not have heard yet.
-const pageRequired = 3
+const pageRequired = 4
 
 const pageRequiredHeader = "X-Tack-Page-Required"
 
@@ -81,13 +79,17 @@ type siteStatus struct {
 	PageRequired int    `json:"page_required"`
 }
 
-// Defaults are what the page offers for a new conversation. Sections are read each
-// time, so editing them doesn't need a restart.
+// Defaults are what the page offers for a new conversation. The prompt is read each
+// time, so editing it doesn't need a restart. Tools are tack's own, and Prompt says which
+// of those to offer, in what order, with which descriptions, and any custom ones.
 type Defaults struct {
-	Sections []prompt.Section `json:"sections"`
-	Workdir  string           `json:"workdir"`
-	Tools    []core.ToolInfo  `json:"tools"`
-	Settings store.Settings   `json:"settings"`
+	Prompt   prompt.Defaults `json:"prompt"`
+	Problem  string          `json:"problem,omitzero"` // why the saved prompt couldn't be read
+	Tools    []core.ToolInfo `json:"tools"`
+	Settings store.Settings  `json:"settings"`
+	Hosts    []string        `json:"hosts"`
+	Efforts  []string        `json:"efforts"`
+	Date     string          `json:"date"` // what {{date}} would be filled with now
 }
 
 // Reload is the result of reloading the config. NeedsRestart names settings that
@@ -97,8 +99,8 @@ type Reload struct {
 }
 
 // Handler returns the whole site.
-func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, error), hosts []string) http.Handler {
-	s := &server{core: c, defaults: defaults, reload: reload}
+func Handler(c *core.Core, defaults func() Defaults, save func(prompt.Defaults) error, reload func() (Reload, error), hosts []string) http.Handler {
+	s := &server{core: c, defaults: defaults, save: save, reload: reload}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.Handle("GET /static/", http.FileServerFS(static))
@@ -134,6 +136,9 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("GET /api/recorded-calls", s.recordedCalls)
 	mux.HandleFunc("GET /api/recorded-calls/{call}", s.recordedRequest)
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
+	mux.HandleFunc("POST /api/defaults", s.saveDefaults)
+	mux.HandleFunc("POST /api/conversations/{id}/tools", s.current(s.proposeTools))
+	mux.HandleFunc("POST /api/conversations/{id}/settings/now", s.changeSettingsNow)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
@@ -229,6 +234,7 @@ type server struct {
 	actions  sync.Mutex
 	core     *core.Core
 	defaults func() Defaults
+	save     func(prompt.Defaults) error
 	reload   func() (Reload, error)
 }
 
@@ -319,37 +325,26 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.core.Conversations())
 }
 
+// create starts a conversation from sections, which are stored one block each with the
+// date filled in, and the tools to offer, in order. No tools means none at all.
 func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		System   string   `json:"system"`
-		Sections []string `json:"sections"`
-		Tools    bool     `json:"tools"`
-		Workdir  string   `json:"workdir"`
-
-		LeaveOut    []string                  `json:"leave_out"`
-		Definitions map[string]jsontext.Value `json:"definitions"`
-		Settings    *store.Settings           `json:"settings"`
+		Sections []prompt.Section `json:"sections"`
+		Tools    []core.Offer     `json:"tools"`
+		Settings *store.Settings  `json:"settings"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
-	if err := json.UnmarshalRead(r.Body, &body); err != nil {
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	defaults := s.defaults()
-	// An empty working directory is fine: it leaves out the tools that need one.
-	if body.Tools && body.Workdir != "" {
-		info, err := os.Stat(body.Workdir)
-		if err != nil || !info.IsDir() || !filepath.IsAbs(body.Workdir) {
-			http.Error(w, "the working directory has to be an absolute path to a directory", http.StatusBadRequest)
-			return
-		}
+	blocks := prompt.Blocks(body.Sections, prompt.Date(time.Now()))
+	offer := body.Tools
+	if offer == nil {
+		offer = []core.Offer{}
 	}
-	// If the text is exactly what the sections make, it's stored section by section.
-	// Otherwise it was edited, or a section file changed, and the text as sent wins.
-	blocks := prompt.Blocks(defaults.Sections, body.Sections, body.Workdir)
 	id, err := s.core.NewConversationWith(core.Options{
-		System: body.System, Blocks: blocks, Tools: body.Tools, Workdir: body.Workdir,
-		LeaveOut: body.LeaveOut, Definitions: body.Definitions, Settings: body.Settings,
+		System: strings.Join(blocks, ""), Blocks: blocks, Offer: offer, Settings: body.Settings,
 	})
 	if err != nil {
 		fail(w, err)
@@ -400,6 +395,73 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
 	defaults := s.defaults()
 	writeJSON(w, defaults)
+}
+
+// saveDefaults replaces what new conversations start with. The tools are only checked
+// when a conversation starts with them, since tack's own can change in between.
+func (s *server) saveDefaults(w http.ResponseWriter, r *http.Request) {
+	var body prompt.Defaults
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Tools == nil {
+		body.Tools = []prompt.Tool{}
+	}
+	if err := s.save(body); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) proposeTools(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Tools []core.Offer `json:"tools"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := s.core.ProposeTools(r.PathValue("id"), body.Tools)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"proposal": id})
+}
+
+// changeSettingsNow changes the settings that can change at any point, even while a
+// reply is running, so it isn't tied to a revision.
+func (s *server) changeSettingsNow(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AutoRunCode     *bool   `json:"auto_run_code"`
+		Host            *string `json:"host"`
+		ReasoningEffort *string `json:"reasoning_effort"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	err := s.core.ChangeSettingsNow(r.PathValue("id"), func(settings *store.Settings) {
+		if body.AutoRunCode != nil {
+			settings.AutoRunCode = *body.AutoRunCode
+		}
+		if body.Host != nil {
+			settings.Host = *body.Host
+		}
+		if body.ReasoningEffort != nil {
+			settings.ReasoningEffort = *body.ReasoningEffort
+		}
+	})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func readMessage(w http.ResponseWriter, r *http.Request) (core.Message, bool) {
@@ -602,18 +664,18 @@ func (s *server) reloadConfig(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Allow      []string `json:"allow"`
-		Network    []string `json:"network"`
-		Shorten    []string `json:"shorten"`
-		AutoRun    bool     `json:"auto_run_code"`
-		DenialText string   `json:"denial_text"`
+		Allow      []string          `json:"allow"`
+		Shorten    []string          `json:"shorten"`
+		AutoRun    bool              `json:"auto_run_code"`
+		DenialText string            `json:"denial_text"`
+		Results    map[string]string `json:"results"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
 	if err := json.UnmarshalRead(r.Body, &body); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	updates, err := s.core.DecideWith(r.PathValue("id"), r.PathValue("decision"), core.Decision{Allow: body.Allow, Network: body.Network, Shorten: body.Shorten, Text: body.DenialText, AutoRunCode: body.AutoRun})
+	updates, err := s.core.DecideWith(r.PathValue("id"), r.PathValue("decision"), core.Decision{Allow: body.Allow, Shorten: body.Shorten, Text: body.DenialText, AutoRunCode: body.AutoRun, Results: body.Results})
 	if err != nil {
 		fail(w, err)
 		return

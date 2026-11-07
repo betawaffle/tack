@@ -11,6 +11,7 @@
 <script src="/static/money.js" defer></script>
 <script src="/static/highlight.js" defer></script>
 <script src="/static/app.js" defer></script>
+<script src="/static/start.js" defer></script>
 </head>
 <body>
 <aside id="sidebar">
@@ -50,10 +51,7 @@
           <ellipse class="tack-shine" cx="9" cy="6.6" rx="3.2" ry="1.5"/>
         </svg>
         <p class="lede">What are we working on?</p>
-        <div id="prompt-options"></div>
-        <label for="system-prompt">System prompt for this conversation. This is exactly what will be sent. Clear it to send none.</label>
-        <textarea id="system-prompt" rows="7"></textarea>
-        <div id="start-details"></div>
+        <div id="start-panel"></div>
       </section>
       <div id="list"></div>
     </div>
@@ -63,6 +61,11 @@
     <button class="mini" id="follow" type="button" aria-pressed="false" title="Keep the end of the reply in view. Scrolling, clicking, or moving to something else stops it" hidden>Follow</button>
   </div></div>
   <div id="controls"></div>
+  <div id="quick" hidden>
+    <label class="field-row">Host <select id="quick-host" aria-label="Host"></select></label>
+    <label class="field-row">Effort <select id="quick-effort" aria-label="Reasoning effort"></select></label>
+    <label class="check"><input type="checkbox" id="quick-auto-run"> Run code without asking</label>
+  </div>
   <form id="form">
     <div class="composer">
       <div class="message-field" id="message-fields">

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/openrouter"
@@ -19,8 +20,12 @@ import (
 
 const reply = `data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":"stop"}]}` + "\n\n"
 
+// saved is what the last site's page saved as the defaults.
+var saved *prompt.Defaults
+
 func site(t *testing.T) *httptest.Server {
 	t.Helper()
+	saved = nil
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, reply)
 	}))
@@ -35,7 +40,10 @@ func site(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	s := httptest.NewServer(Handler(c, func() Defaults {
-		return Defaults{Sections: []prompt.Section{{Name: "a", Text: "the default"}}}
+		return Defaults{Prompt: prompt.Defaults{Sections: []prompt.Section{{Name: "a", Text: "the default"}}}}
+	}, func(d prompt.Defaults) error {
+		saved = &d
+		return nil
 	}, noReload, []string{"framework"}))
 	t.Cleanup(s.Close)
 	return s
@@ -78,7 +86,7 @@ func TestSystemPromptFlow(t *testing.T) {
 		t.Errorf("defaults = %s", data)
 	}
 
-	id := field(t, post(t, conv, `{"system":"Be brief."}`, 200), "id")
+	id := field(t, post(t, conv, `{"sections":[{"name":"a","text":"Be brief."}]}`, 200), "id")
 	base := conv + "/" + id
 
 	if out := post(t, base+"/messages", `{"text":"Hi"}`, 200); !strings.Contains(out, `"kind":"done"`) {
@@ -108,7 +116,7 @@ func TestSystemPromptFlow(t *testing.T) {
 
 func TestPageAndPolicy(t *testing.T) {
 	s := site(t)
-	for _, path := range []string{"/", "/static/app.js", "/static/style.css", "/static/markdown.js", "/requests", "/static/requests.js", "/static/requests.css"} {
+	for _, path := range []string{"/", "/static/app.js", "/static/start.js", "/static/style.css", "/static/markdown.js", "/requests", "/static/requests.js", "/static/requests.css"} {
 		resp, err := http.Get(s.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -142,15 +150,43 @@ func TestCrossSitePostIsRefused(t *testing.T) {
 	}
 }
 
-func TestAWorkdirHasToBeRealOrEmpty(t *testing.T) {
-	s := toolSite(t, t.TempDir())
+func TestStartingFromSectionsAndTools(t *testing.T) {
+	s := site(t)
 	conv := s.URL + "/api/conversations"
-	for _, workdir := range []string{"relative", "/does/not/exist", "/etc/hostname"} {
-		body, _ := json.Marshal(map[string]any{"tools": true, "workdir": workdir})
-		post(t, conv, string(body), http.StatusBadRequest)
+	post(t, conv, `{"system":"the old way"}`, http.StatusBadRequest)
+	post(t, conv, `{"tools":[{"name":"nope"}]}`, http.StatusBadRequest)
+	body := `{"sections":[{"name":"a","text":"On {{date}}."},{"name":"b","text":"Not sent.","off":true},{"name":"c","text":"C"}],` +
+		`"tools":[{"name":"look","custom":true,"definition":{"type":"function","function":{"name":"look"}}}]}`
+	id := field(t, post(t, conv, body, 200), "id")
+	var view core.Conversation
+	if err := json.Unmarshal([]byte(get(t, conv+"/"+id)), &view); err != nil {
+		t.Fatal(err)
 	}
-	post(t, conv, `{"tools":true,"workdir":""}`, 200)
-	post(t, conv, `{"tools":false,"workdir":"relative"}`, 200)
+	want := "On " + prompt.Date(time.Now()) + ".\n\nC"
+	if view.Items[0].Text != want || !view.Tools || len(view.CustomTools) != 1 {
+		t.Errorf("view = %q, %+v", view.Items[0].Text, view)
+	}
+	if tools := get(t, conv+"/"+id+"/tools"); tools != `[{"type":"function","function":{"name":"look"}}]` {
+		t.Errorf("tools = %s", tools)
+	}
+	// The tools change like settings, and some settings change straight away.
+	proposal := field(t, post(t, conv+"/"+id+"/tools", `{"tools":[]}`, 200), "proposal")
+	post(t, conv+"/"+id+"/settings/"+proposal+"/apply", "", 200)
+	post(t, conv+"/"+id+"/settings/now", `{"model":"x"}`, http.StatusBadRequest)
+	post(t, conv+"/"+id+"/settings/now", `{"reasoning_effort":"lots"}`, http.StatusBadRequest)
+	post(t, conv+"/"+id+"/settings/now", `{"auto_run_code":true,"host":"relace/fp4","reasoning_effort":"high"}`, 200)
+	if got := get(t, conv+"/"+id); !strings.Contains(got, `"auto_run_code":true`) || !strings.Contains(got, `"reasoning_effort":"high"`) || strings.Contains(got, `"custom_tools"`) {
+		t.Errorf("after: %s", got)
+	}
+}
+
+func TestDefaultsCanBeSaved(t *testing.T) {
+	s := site(t)
+	post(t, s.URL+"/api/defaults", `{"sections":[],"oops":1}`, http.StatusBadRequest)
+	post(t, s.URL+"/api/defaults", `{"sections":[{"name":"x","text":"X"}]}`, 200)
+	if saved == nil || len(saved.Sections) != 1 || saved.Tools == nil {
+		t.Errorf("saved = %+v", saved)
+	}
 }
 
 func TestSettingsAreHeldAndValidated(t *testing.T) {
@@ -180,25 +216,6 @@ func get(t *testing.T, url string) string {
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	return string(data)
-}
-
-func toolSite(t *testing.T, workdir string) *httptest.Server {
-	t.Helper()
-	key := secret.NewKey("sk-or-test-not-a-real-key")
-	st, err := store.Open(t.TempDir(), secret.NewTestTripwire(func(where string) { t.Errorf("tripwire: %s", where) }, key))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	c, err := core.New(core.Config{Store: st, Client: openrouter.NewClient("http://127.0.0.1:1", key), Model: "m"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := httptest.NewServer(Handler(c, func() Defaults {
-		return Defaults{Sections: []prompt.Section{{Name: "tools", For: "tools", Text: "x"}}, Workdir: workdir, Tools: []core.ToolInfo{{Name: "x", NeedsWorkdir: true}}}
-	}, noReload, []string{"framework"}))
-	t.Cleanup(s.Close)
-	return s
 }
 
 func noReload() (Reload, error) { return Reload{}, errors.New("nothing to reload") }

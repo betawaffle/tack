@@ -155,36 +155,22 @@ type Settings struct {
 	BudgetUSD      float64 `json:"budget_usd,omitzero"`
 	BudgetTopUpUSD float64 `json:"budget_top_up_usd,omitzero"`
 
-	SearchSkip            []string          `json:"search_skip,omitzero"`
-	CommandEnv            map[string]string `json:"command_env,omitzero"`
-	CommandTimeoutSeconds int               `json:"command_timeout_seconds,omitzero"`
-	SandboxReadOnly       []string          `json:"sandbox_read_only,omitzero"`
-	SandboxReadWrite      []string          `json:"sandbox_read_write,omitzero"`
-	// SandboxProtected are paths inside the working directory that stay read-only.
-	SandboxProtected []string `json:"sandbox_protected,omitzero"`
-
+	CommandTimeoutSeconds int `json:"command_timeout_seconds,omitzero"`
 	ToolTimeoutSeconds    int `json:"tool_timeout_seconds,omitzero"`
 	InspectTimeoutSeconds int `json:"inspect_timeout_seconds,omitzero"`
 	OutputWaitSeconds     int `json:"output_wait_seconds,omitzero"`
 	StopGraceSeconds      int `json:"stop_grace_seconds,omitzero"`
-	MaxReadBytes          int `json:"max_read_bytes,omitzero"`
-	MaxListed             int `json:"max_listed,omitzero"`
-	MaxMatches            int `json:"max_matches,omitzero"`
-	MaxSearchFileBytes    int `json:"max_search_file_bytes,omitzero"`
-	MaxLineShown          int `json:"max_line_shown,omitzero"`
 
 	// AutoRunCode runs code in its sandbox without asking. Large output still waits.
 	AutoRunCode bool `json:"auto_run_code,omitzero"`
+
+	// ReasoningEffort is sent as the request's reasoning effort. Empty sends none, which
+	// leaves it to the host.
+	ReasoningEffort string `json:"reasoning_effort,omitzero"`
 }
 
-// DefaultSandboxReadOnly is what a sandboxed command can read, unless the config says
-// otherwise: the system, and the parts of /etc that programs commonly need.
-var DefaultSandboxReadOnly = []string{
-	"/usr", "/bin", "/sbin", "/lib", "/lib64",
-	"/etc/alternatives", "/etc/ca-certificates", "/etc/crypto-policies", "/etc/gitconfig",
-	"/etc/group", "/etc/hosts", "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
-	"/etc/localtime", "/etc/nsswitch.conf", "/etc/passwd", "/etc/pki", "/etc/resolv.conf", "/etc/ssl",
-}
+// ReasoningEfforts are the values OpenRouter accepts for ReasoningEffort.
+var ReasoningEfforts = []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}
 
 // WithDefaults fills in the limits. Model, host and the lists stay as they are, since
 // empty means something there.
@@ -205,18 +191,6 @@ func (s Settings) WithDefaults() Settings {
 	if s.BudgetTopUpUSD == 0 {
 		s.BudgetTopUpUSD = 0.001
 	}
-	fill(&s.MaxReadBytes, 16<<20)
-	fill(&s.MaxListed, 10000)
-	fill(&s.MaxMatches, 1000)
-	fill(&s.MaxSearchFileBytes, 2<<20)
-	fill(&s.MaxLineShown, 500)
-	if s.SandboxReadOnly == nil {
-		s.SandboxReadOnly = DefaultSandboxReadOnly
-	}
-	if s.SandboxProtected == nil {
-		// Hooks and config in .git run unsandboxed the next time someone uses git.
-		s.SandboxProtected = []string{".git"}
-	}
 	return s
 }
 
@@ -232,11 +206,6 @@ func (s Settings) Validate() error {
 		"inspect_timeout_seconds": s.InspectTimeoutSeconds,
 		"output_wait_seconds":     s.OutputWaitSeconds,
 		"stop_grace_seconds":      s.StopGraceSeconds,
-		"max_read_bytes":          s.MaxReadBytes,
-		"max_listed":              s.MaxListed,
-		"max_matches":             s.MaxMatches,
-		"max_search_file_bytes":   s.MaxSearchFileBytes,
-		"max_line_shown":          s.MaxLineShown,
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%s has to be positive", name)
@@ -245,20 +214,8 @@ func (s Settings) Validate() error {
 	if s.BudgetUSD <= 0 || s.BudgetTopUpUSD <= 0 {
 		return errors.New("budget_usd and budget_top_up_usd have to be positive")
 	}
-	for _, path := range append(slices.Clone(s.SandboxReadOnly), s.SandboxReadWrite...) {
-		if !filepath.IsAbs(path) {
-			return fmt.Errorf("sandbox path %q has to be absolute", path)
-		}
-	}
-	for _, path := range s.SandboxProtected {
-		if path == "" || !filepath.IsLocal(path) {
-			return fmt.Errorf("sandbox_protected path %q has to be inside the working directory", path)
-		}
-	}
-	for _, name := range s.SearchSkip {
-		if name == "" || strings.ContainsRune(name, filepath.Separator) {
-			return errors.New("search_skip has directory names, not paths")
-		}
+	if s.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, s.ReasoningEffort) {
+		return fmt.Errorf("reasoning_effort has to be one of %s, or empty", strings.Join(ReasoningEfforts, ", "))
 	}
 	return nil
 }
@@ -315,11 +272,17 @@ type Event struct {
 	Conversation string `json:"conversation,omitzero"`
 
 	// conversation_created: the exact tool definitions its calls send, and where
-	// their relative paths start.
+	// their relative paths started, back when tools had them.
 	// settings_proposed has the settings, and settings_applied the new definitions.
-	Tools    Ref       `json:"tools,omitzero"`
-	Workdir  string    `json:"workdir,omitzero"`
-	Settings *Settings `json:"settings,omitzero"`
+	// A proposal with ToolsProposed set also holds definitions of its own, as Tools,
+	// which are empty if it offers no tools at all.
+	Tools         Ref       `json:"tools,omitzero"`
+	ToolsProposed bool      `json:"tools_proposed,omitzero"`
+	Workdir       string    `json:"workdir,omitzero"`
+	Settings      *Settings `json:"settings,omitzero"`
+	// CustomTools name the tools in Tools that tack doesn't have. A person writes
+	// the result of every call to one.
+	CustomTools []string `json:"custom_tools,omitzero"`
 
 	// conversation_forked: where it came from, and how many of that conversation's
 	// items it keeps, counting from the start. Absent means none. It also has settings.

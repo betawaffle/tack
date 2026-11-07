@@ -31,10 +31,8 @@ cat >"$tmp/config.json" <<CONFIG
   "data": "$tmp/data",
   "key": "$tmp/key",
   "url": "http://127.0.0.1:18600/v1",
-  "prompts": "$tmp/none",
-  "default_workdir": "$tmp/work",
-  "budget_usd": 1,
-  "command_env": {"PATH": "/usr/bin:/bin", "TACK_TEST_VALUE": "from-config"}
+  "prompt": "$tmp/prompt.json",
+  "budget_usd": 1
 }
 CONFIG
 "$tmp/tack" -config "$tmp/config.json" >"$tmp/tack.log" 2>&1 &

@@ -129,7 +129,17 @@ func main() {
 	defaults := func() web.Defaults {
 		mu.Lock()
 		defer mu.Unlock()
-		return web.Defaults{Sections: prompt.Load(current.Prompts), Workdir: current.DefaultWorkdir, Tools: c.ToolInfo(), Settings: current.Settings}
+		d := web.Defaults{Tools: c.ToolInfo(), Settings: current.Settings, Hosts: current.Hosts, Efforts: store.ReasoningEfforts, Date: prompt.Date(time.Now())}
+		var err error
+		if d.Prompt, err = prompt.Load(current.Prompt); err != nil {
+			d.Problem = err.Error()
+		}
+		return d
+	}
+	save := func(d prompt.Defaults) error {
+		mu.Lock()
+		defer mu.Unlock()
+		return prompt.Save(current.Prompt, d)
 	}
 
 	hangup := make(chan os.Signal, 1)
@@ -166,7 +176,7 @@ func main() {
 	if name, err := os.Hostname(); err == nil {
 		hosts = append(hosts, name)
 	}
-	server := &http.Server{Addr: cfg.Addr, Handler: web.Handler(c, defaults, reload, hosts)}
+	server := &http.Server{Addr: cfg.Addr, Handler: web.Handler(c, defaults, save, reload, hosts)}
 	go func() {
 		<-c.Drained()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

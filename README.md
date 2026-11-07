@@ -42,14 +42,13 @@ offers a reload if its files changed, and insists if the old page would conflict
 server (`pageRequired` in `internal/web/web.go`).
 
 It serves port 8484 on all interfaces with **no authentication**, and anyone who can
-reach it can approve commands that run as you. Only run it on a network you trust,
+reach it can approve code that runs as you, and write tack's prompt file. Only run it on a network you trust,
 and use a firewall if some of that network isn't. Browsers only get in by IP
 address, `localhost`, the machine's hostname or a name in `allowed_hosts`, which
 stops other websites reaching it through DNS rebinding.
 
 The service runs from `/var/empty` on purpose. tack never uses its own working
-directory for anything: conversations each name theirs, and relative paths in the
-config are refused.
+directory for anything, and relative paths in the config are refused.
 
 ## Config
 
@@ -63,9 +62,8 @@ setting is optional, and an unknown one is an error:
 | `key` | `~/.config/tack/openrouter-key` | Needs a restart |
 | `url` | OpenRouter | Needs a restart. The key is sent here |
 | `allowed_hosts` | none | Needs a restart. Extra hostnames the page can be reached by |
-| `prompts` | `~/.config/tack/prompt` | Read when a conversation starts |
-| `default_workdir` | none | Fills in the field for new conversations |
-| `sandbox_extra_read_only` | none | Added to `sandbox_read_only` |
+| `prompt` | `~/.config/tack/prompt.json` | What new conversations start with. Read each time, and written by **Save as default** |
+| `hosts` | `morph/fp8`, `relace/fp4`, `particle-ai/us/flex` | The hosts the page offers. Any other can be typed into the settings |
 
 These are only defaults, copied into each new conversation, which owns them after that:
 
@@ -73,19 +71,13 @@ These are only defaults, copied into each new conversation, which owns them afte
 |---|---|---|
 | `model`, `host` | `deepseek/deepseek-v4.1-flash-1017`, `morph/fp8` | |
 | `budget_usd`, `budget_top_up_usd` | `0.001` each | Where the budget starts, and what the add box starts with |
-| `search_skip` | `.git`, `node_modules` | Directory names `search_files` leaves out |
-| `command_env` | a basic `PATH`, `HOME` and `LANG` | The whole environment for `run_command` |
-| `command_timeout_seconds` | `120` | |
-| `sandbox_read_only` | the system, and common parts of `/etc` | |
-| `sandbox_read_write` | none | Extra writable paths |
-| `sandbox_protected` | `.git` | Paths inside the working directory that stay read-only |
+| `reasoning_effort` | none | Sent as `reasoning.effort`: `max`, `xhigh`, `high`, `medium`, `low`, `minimal` or `none`. None leaves it to the host |
+| `auto_run_code` | `false` | Run code without asking |
+| `command_timeout_seconds` | `120` | The limit for running code |
 | `tool_timeout_seconds` | `60` | |
 | `inspect_timeout_seconds` | `2` | The check when a call arrives |
 | `output_wait_seconds` | `5` | How long background children can hold output open |
-| `stop_grace_seconds` | `5` | Between asking a command to stop and killing it |
-| `max_read_bytes` | 16 MiB | For `read_file`, `edit_file` and command output |
-| `max_listed`, `max_matches` | `10000`, `1000` | |
-| `max_search_file_bytes`, `max_line_shown` | 2 MiB, `500` | |
+| `stop_grace_seconds` | `5` | Between asking code to stop and killing it |
 
 Paths have to be absolute. To apply changes, press **Reload config** in the page,
 which tells you if the file has a problem and leaves the running settings alone if
@@ -95,6 +87,13 @@ bad file at startup exits with code 78, and so does a key file others can access
 Each conversation's settings can be changed from its panel, or loaded from the config.
 Changes are held until you apply them, since changing the model, host or tool
 definitions misses the cache. Each load of the config is recorded.
+
+The row above the message box changes the host, the reasoning effort, and whether code runs
+without asking, at any point, even while a reply is running. They apply from the next call, and
+a change held in the panel keeps them. Before a conversation starts, or in a fork that's being
+set up, they change the settings it starts with. For DeepSeek V4.1 the effort is the first thing
+in the prompt, and hosts don't share caches, so changing either misses the whole cache.
+Token counts assume the default effort.
 
 ## System messages
 
@@ -108,60 +107,64 @@ call miss the cache from that point.
 
 ## System prompts
 
-A system prompt is made of sections, joined into an ordinary system message when a
-conversation starts and never rendered again, because changing the start of a
-context misses the whole cache. The built-in sections are `base`, and `tools` or
-`no-tools` depending on whether the conversation offers tools.
+A system prompt is made of sections, joined with a blank line into an ordinary system message
+when a conversation starts and never rendered again, because changing the start of a context
+misses the whole cache. Each section is stored as its own block.
 
-Put your own in `~/.config/tack/prompt/`: `<name>.md` replaces the section of that
-name, an empty file removes it, and any other name adds a section. There's no
-template language, only `{{workdir}}`, which becomes the working directory. They're
-read each time, so editing them doesn't need a restart.
+The start panel shows each section as its paragraphs, and you can rename, reorder, turn off,
+add and remove sections and paragraphs. The only thing filled in is `{{date}}`, which becomes
+the date the conversation starts, as `YYYY-MM-DD`. There's no other template language.
+**Exactly what's sent** shows the text and the tool definitions as they'll go out.
 
-Below the text, the start panel can also leave out tools, edit what each tool and its
-parameters are described as, and change the settings. Only descriptions can be edited: the
-rest of a definition is what the tool's code relies on. Each conversation shows the exact
-definitions it sends, and **Start another like this** fills the panel in from it.
+Below the sections are the tools, in the order they're offered, each with a box to turn it off.
+A built-in tool shows what each parameter takes, and only its descriptions can be edited: the
+rest is what its code relies on. **Whole definition** shows it exactly.
 
-The start panel has a checkbox per section above the text that will be sent. If you
-edit that text by hand, it's sent as written.
+**Save as default** writes the sections and tools, including what's turned off, to the `prompt`
+file, and **Back to the default** loads it again. Without the file, new conversations start
+from tack's own `base` and `tools` sections and every built-in tool. The file holds personal
+text, so it's yours, not part of tack. **Start another like this** fills the panel in from a
+conversation, with its whole system message as one section.
+
+A conversation's tools can change later, from the editor for its first system message or from
+its settings panel. Like settings, the change is held until you apply it, and it can't be
+applied while a call is waiting. Tools come first in every request, so the next call misses
+the whole cache.
+
+## Custom tools
+
+**+ Custom tool** adds a tool tack doesn't have, for trying out what a model does with an
+idea before it exists. Its definition is entirely yours: a name, a description and parameters
+as JSON Schema, or the whole definition, sent byte for byte. Nothing runs when it's called.
+The call waits like any other, with a box for the result, and the model gets exactly what you
+write there. Denying it sends the denial instead.
 
 ## Tool calls
 
-New conversations can offer `read_file`, `list_files`, `search_files`, `edit_file`,
-`run_command` and `run_code`, starting from a working directory you choose. There's no sandbox
-for the file tools, whose limit is you reading each call. Tools that need a working
-directory are left out without one.
+tack's own tools are `run_code`, `note` and `scratch`. Older conversations may offer the file
+and command tools tack used to have, and a call to one of those fails by itself.
 
-`run_code` runs Python, and needs no working directory because it can't see one. Its sandbox
+`run_code` runs Python, under [bubblewrap](https://github.com/containers/bubblewrap), which is
+required. Its sandbox
 has only the interpreter, the standard library and the libraries they load, plus time zones, all
 read-only. It has no `/proc`, no network, no other programs and nothing installed on the machine. A
 syscall filter allows only what ordinary Python needs (x86-64 only), and limits of 2 GB of memory and
 256 processes apply when tack has a delegated cgroup. None of this is a setting. `/work` is kept
 between calls in a conversation, up to 16 MB, as an archive in the record that's only ever unpacked
 inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.
-Notes and scratch can be read from `/conversation`. Output up to 8 KB goes to the model without
+Notes and scratch can be read from `/conversation`, and so can `context.json`: the exact
+request that led to the call, under `request`, and the reply that made it, under `reply`, shaped
+like a message in that request. Output up to 8 KB goes to the model without
 a second approval, because it can't contain anything the model didn't already have, and larger output
 waits, with the choice of sending only the first and last 2 KB. A conversation can opt in to running
-code without asking, from the start panel, its settings or the approval card, and forks and
-"Start another like this" keep that choice. Its budget and pausing still apply, and every other tool still asks
-
-Commands run under [bubblewrap](https://github.com/containers/bubblewrap), which is
-required. They see only read-only system paths, a writable working directory and an
-empty `/tmp` and home, with their own process tree, no new namespaces, and only the
-configured environment and no input. There's no network unless you tick that on the
-card for that call. Each run has an execution ID and, with `Delegate=yes`, its own
-cgroup, which ends everything it started. `.git` stays read-only, because its hooks and
-config run unsandboxed the next time you use `git`, so commands can't commit. The
-sandbox shares the host's kernel, and the rest of the working directory is writable, so
-source code a command changes still runs unsandboxed when you build or run it. A `.git`
-in a subdirectory isn't covered unless it's listed.
+code without asking, from the row above the message box, its settings or the approval card, and
+forks and "Start another like this" keep that choice. Its budget and pausing still apply, and every
+other tool still asks.
 
 Syscall tracing is designed but shelved: see [docs/syscall-tracing.md](docs/syscall-tracing.md).
 
-A command that prints a known secret trips the tripwire: tack stops, and the key
-needs rotating. An edit keeps the file's previous contents in the record, and its
-success message is tack's own, so it goes to the model without a second approval.
+Output that contains a known secret trips the tripwire: tack stops, and the key
+needs rotating.
 
 When a model asks for tool calls, they wait for a decision, and the wait survives
 restarts. Whatever isn't ticked is denied, and the model is told so in wording you
@@ -169,13 +172,8 @@ can edit. Approved calls then run, and their output waits for a second decision
 before the model sees any of it. A call that was interrupted is never run again
 without asking.
 
-Approval cards flag paths outside the working directory and files that aren't
-world-readable, and every `run_command` carries a permanent flag. A flag means look
-here, and no flag doesn't mean safe. If what a card showed has changed by the time a
-call would run, it doesn't run. The key file
-is refused however it's reached, and isn't even offered for approval. `search_files`
-skips anything not world-readable, since nobody approves its files one by one, plus
-the directories named by `search_skip`.
+Approval cards flag every `run_code`. A flag means look here, and no flag doesn't mean
+safe. If what a card showed has changed by the time a call would run, it doesn't run.
 
 Arguments and output are stored as blocks, not in event lines. A conversation
 keeps sending the tool definitions it started with, byte for byte.
@@ -207,7 +205,7 @@ While something is running:
 
 - **Pause** lets everything running or approved finish, then doesn't call the model until
   your next message or Continue. Results go out with what you say next.
-- **Stop command** sends `SIGTERM`, then kills it after a short grace period. Its output so
+- **Stop the tool** sends `SIGTERM`, then kills it after a short grace period. Its output so
   far still goes to the output approval.
 - **Cancel reply** closes the connection, which is how OpenRouter says to cancel. Hosts that
   support it stop processing and billing. Others finish and charge in full.
@@ -224,8 +222,7 @@ for output waiting to be sent.
 
 `scratch` keeps text for the model to read back, with a closed panel on the page so that nothing in it is hidden from you. `note` writes to a panel on the conversation's page, labelled as coming from the model. It
 doesn't need approval, and the model has no tool to read it back, though code can. A reply with notes carries on by itself unless
-you've paused the conversation, so only a reply with no tool calls ends the turn. Notes are
-offered even with no working directory.
+you've paused the conversation, so only a reply with no tool calls ends the turn.
 
 A conversation keeps sending the tool definitions it started with, so a model can call a tool
 tack no longer has. That call gets a failed result by itself, saying the tool is no longer

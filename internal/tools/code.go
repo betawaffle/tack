@@ -46,7 +46,7 @@ const (
 	codeAutoSendBytes = 8 << 10
 )
 
-const codeDescription = "Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to 16 MB. /tmp is empty each time, and holds up to 64 MB. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, for reading. It has Python's standard library and no other packages. It's limited to 2 GB of memory and 256 processes. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own."
+const codeDescription = "Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to 16 MB. /tmp is empty each time, and holds up to 64 MB. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. It has Python's standard library and no other packages. It's limited to 2 GB of memory and 256 processes. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own."
 
 // File descriptors in the sandbox. bwrap consumes the first four itself.
 const (
@@ -56,6 +56,7 @@ const (
 	fdCode
 	fdKeptIn
 	fdKeptOut
+	fdContext
 )
 
 // codeStart runs in the sandbox around the model's code, which gets its own process and can't
@@ -229,6 +230,7 @@ func (r *reader) codeArgs(real string, dirs []string, files map[string]string) [
 		"--ro-bind-data", strconv.Itoa(fdCode), "/code/main.py",
 		"--ro-bind-data", strconv.Itoa(fdNotes), "/conversation/notes.json",
 		"--ro-bind-data", strconv.Itoa(fdScratch), "/conversation/scratch.json",
+		"--ro-bind-data", strconv.Itoa(fdContext), "/conversation/context.json",
 		"--seccomp", strconv.Itoa(fdFilter),
 		// Last, because the root is an unlimited place to write until it's read-only.
 		"--remount-ro", "/",
@@ -369,6 +371,17 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	}
 	defer keptRead.Close()
 	extra = append(extra, keptWrite)
+	conversation := []byte(`{"request":null,"reply":null}`)
+	if call.Context != nil {
+		if conversation, err = call.Context(); err != nil {
+			return nil, err
+		}
+	}
+	in, err := feed(conversation)
+	if err != nil {
+		return nil, err
+	}
+	extra = append(extra, in)
 	kept := make(chan []byte, 1)
 	go func() {
 		data, _ := io.ReadAll(io.LimitReader(keptRead, codeSavedBytes+1))

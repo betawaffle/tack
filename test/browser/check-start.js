@@ -1,6 +1,7 @@
-// Drives the start panel and the real read tools in a real browser, against the
-// real binary with a fake provider.
+// Drives the start panel, custom tools and running code in a real browser, against
+// the real binary with a fake provider.
 const fs = require("fs");
+const path = require("path");
 const { chromium } = require("playwright");
 const B = "http://127.0.0.1:18601",
   F = "http://127.0.0.1:18600";
@@ -11,7 +12,7 @@ const ok = (c, m) => {
 };
 const bodies = async () => (await (await fetch(F + "/bodies")).json()).map((b) => JSON.parse(b));
 const reset = () => fetch(F + "/reset");
-const WORK = process.env.TACK_TEST_WORKDIR;
+const PROMPT_FILE = path.join(path.dirname(process.env.TACK_TEST_CONFIG), "prompt.json");
 
 let page;
 (async () => {
@@ -28,153 +29,106 @@ let page;
     // A full reload, so that a slower hash change can't redraw the panel mid-test.
     await p.goto("about:blank");
     await p.goto(B);
-    await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+    await p.waitForSelector("#start-panel .section-editor");
   };
-  const prompt = () => p.inputValue("#system-prompt");
+  const sectionNames = () => p.locator("#start-panel .section-name").evaluateAll((n) => n.map((x) => x.value));
+  const toolNames = () => p.locator("#start-panel .tool-editor").evaluateAll((n) => n.map((x) => x.dataset.tool));
+  // The whole prompt as one section, for tests about something else.
+  const setPrompt = (text) =>
+    p.evaluate((t) => {
+      start.sections = [{ name: "test", text: t }];
+      redrawStart();
+    }, text);
+  const section = (name) => p.locator(`.section-editor[data-section="${name}"]`);
   const send = async (t) => {
     await p.fill("#input", t);
     await p.press("#input", "Enter");
   };
   const card = () => p.waitForSelector(".decision-card", { timeout: 15000 });
   const idle = () => p.waitForFunction(() => !document.getElementById("send").disabled && !document.querySelector(".waiting-note"), null, { timeout: 15000 });
+  const replied = async () => {
+    await p.waitForSelector(".ledger", { timeout: 15000 });
+    await idle();
+  };
 
-  // The panel builds the text.
+  // The prompt is sections of paragraphs, and the tools are listed in order.
   await fresh();
-  await p.screenshot({ path: "shots/start-panel.png" });
-  ok((await p.inputValue("#workdir")) === WORK, "working directory prefilled");
-  ok((await p.isChecked("#offer-tools")), "tools offered by default");
-  await p.fill("#workdir", "");
-  ok((await prompt()).includes("user's approval") && !(await prompt()).includes("working directory"), "no working directory still leaves running code");
-  await p.fill("#workdir", WORK);
-  ok((await prompt()).includes("user's approval"), "and a working directory brings them back");
-  let text = await prompt();
-  ok(text.startsWith("You are an AI agent") && text.includes("user's approval") && !text.includes("any tools"), "text has base and tools sections");
-  ok(text.includes(WORK), "working directory filled in");
+  await p.screenshot({ path: "shots/start-panel.png", fullPage: true });
+  ok((await sectionNames()).join() === "base,tools", "the built-in sections are there, in order");
+  ok((await section("base").locator(".paragraph-text").count()) === 4, "split into paragraphs");
+  ok((await toolNames()).join() === "run_code,note,scratch", "and so are the tools");
+  ok((await p.locator(".tool-editor[data-tool=run_code] .tool-param-head").first().innerText()).includes('one of "python", required'), "a tool shows what it takes, not just its descriptions");
 
-  await p.locator("input[data-section=base]").uncheck();
-  ok(!(await prompt()).includes("Be direct"), "unticking removes a section");
-  await p.locator("input[data-section=base]").check();
-
-  await p.locator("#offer-tools").uncheck();
-  text = await prompt();
-  ok(text.includes("any tools") && !text.includes("user's approval"), "no tools swaps the section");
-  ok(await p.isDisabled("#workdir"), "working directory disabled without tools");
+  // Moving, removing, editing and adding.
+  await section("tools").locator("button[title='Move up']").click();
+  ok((await sectionNames()).join() === "tools,base", "sections can be moved");
+  await section("base").locator(".paragraph").nth(1).locator("button").click();
+  await section("base").locator(".paragraph-text").first().fill("Edited first paragraph.");
+  await section("base").locator("button", { hasText: "+ Paragraph" }).click();
+  await section("base").locator(".paragraph-text").last().fill("An added paragraph.");
+  await p.locator(".sections-editor > button", { hasText: "+ Section" }).click();
+  await p.locator(".section-editor").last().locator(".paragraph-text").fill("A new section.");
+  await section("tools").locator("input[data-section-on]").uncheck();
+  await p.locator("#start-panel summary", { hasText: "Exactly what's sent" }).click();
+  const preview = await p.locator("#start-preview-body pre").first().innerText();
+  ok(preview.startsWith("Edited first paragraph.\n\nYou're welcome") && preview.endsWith("An added paragraph.\n\nA new section."), "the preview is exactly what's sent: " + preview.slice(-60));
+  ok(!preview.includes("{{date}}") && /started on \d{4}-\d\d-\d\d\./.test(preview), "with the date filled in");
+  await p.screenshot({ path: "shots/start-edited.png", fullPage: true });
   await reset();
   await send("short one");
-  await p.waitForSelector(".ledger", { timeout: 15000 });
-  await idle();
+  await replied();
   let b = await bodies();
-  ok(!b[0].tools, "no tools sent when unticked");
-  ok(b[0].messages[0].content.includes("any tools"), "the model is told so");
+  ok(b[0].messages[0].content === preview, "and that's what's sent");
+  ok(b[0].tools.map((t) => t.function.name).join() === "run_code,note,scratch", "with the tools");
 
-  // Editing by hand wins.
+  // No tools ticked means none at all.
   await fresh();
-  await p.fill("#workdir", WORK + "/");
-  ok((await prompt()).includes(WORK + "/."), "changing the directory updates the text");
-  await p.fill("#workdir", WORK);
-  await p.fill("#system-prompt", "Written by hand.");
-  ok(await p.isDisabled("input[data-section=base]"), "hand edit disables the checkboxes");
-  ok(await p.isVisible("#prompt-reset"), "and offers to go back");
-  await p.fill("#workdir", "/tmp");
-  ok((await prompt()) === "Written by hand.", "changing the directory keeps a hand edit");
-  await p.fill("#workdir", WORK);
-  await p.click("#prompt-reset");
-  ok((await prompt()).startsWith("You are an AI agent") && !(await p.isVisible("#prompt-reset")), "going back restores the sections");
-  await p.fill("#system-prompt", "Written by hand.");
+  for (const name of ["run_code", "note", "scratch"]) await p.locator(`input[data-offer=${name}]`).uncheck();
   await reset();
   await send("short two");
-  await p.waitForSelector(".ledger", { timeout: 15000 });
-  await idle();
+  await replied();
   b = await bodies();
-  ok(b[0].messages[0].content === "Written by hand.", "hand edit is what gets sent");
-  ok(b[0].tools.map((t) => t.function.name).join() === "read_file,list_files,search_files,edit_file,run_command,run_code,note,scratch", "tools are offered");
+  ok(!b[0].tools, "no tools sent when none are ticked");
 
-  // A bad directory is refused, and nothing is lost.
+  // Saving as the default.
   await fresh();
-  await p.fill("#workdir", "/does/not/exist");
-  await send("keep this");
-  await p.waitForSelector(".notice:has-text('working directory')", { timeout: 5000 });
-  ok((await p.inputValue("#input")) === "keep this", "bad directory keeps the message");
-  ok(await p.isVisible("#start"), "and stays on the start panel");
+  ok(await p.isDisabled("#save-defaults"), "nothing to save until something changes");
+  await section("base").locator(".section-name").fill("intro");
+  await section("tools").locator("input[data-section-on]").uncheck();
+  await p.locator("input[data-offer=scratch]").uncheck();
+  await p.click("#save-defaults");
+  await p.waitForFunction(() => document.getElementById("save-defaults").disabled);
+  await fresh();
+  ok((await sectionNames()).join() === "intro,tools", "saved defaults come back");
+  ok(!(await section("tools").locator("input[data-section-on]").isChecked()) && !(await p.locator("input[data-offer=scratch]").isChecked()), "with what was off");
+  const savedFile = JSON.parse(fs.readFileSync(PROMPT_FILE, "utf8"));
+  ok(savedFile.sections[0].name === "intro" && savedFile.tools.length === 3, "they're in the prompt file");
+  fs.unlinkSync(PROMPT_FILE);
+  await fresh();
+  ok((await sectionNames()).join() === "base,tools", "and without it, tack's own come back");
 
-  // Real tools, with their flags.
-  await fresh();
+  // A custom tool, which you answer.
+  await p.locator(".tools-editor > button", { hasText: "+ Custom tool" }).click();
+  const custom = p.locator(".tool-editor.is-custom");
+  await custom.locator("input[data-name]").fill("lookup");
+  await custom.locator(".tool-description").fill("Look something up.");
+  await custom.locator(".tool-schema").fill(JSON.stringify({ type: "object", properties: { q: { type: "string" } }, required: ["q"] }));
+  await p.screenshot({ path: "shots/custom-tool.png", fullPage: true });
   await reset();
-  await send("tools read");
+  await send("tools lookup");
   await card();
-  const tool = (i) => p.locator(".tool").nth(i);
-  ok((await tool(0).locator(".tool-flag").count()) === 0, "a plain file has no flag");
-  ok((await tool(1).locator(".tool-flag").textContent()) === "Outside the working directory", "outside the directory is flagged");
-  ok((await tool(2).locator(".tool-flag").textContent()) === "Not world-readable", "a private file is flagged");
-  ok((await tool(3).locator(".tool-invalid").textContent()).includes("protected"), "the key file says why it can't run");
-  ok((await tool(3).locator("input[data-choice]").count()) === 0, "and isn't offered for approval");
-  await tool(1).locator("input[data-choice]").uncheck();
-  await tool(2).locator("input[data-choice]").uncheck();
-  await p.screenshot({ path: "shots/read-flags.png" });
-  await p.click("#decide");
-  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
-  await card();
-  ok((await tool(0).locator(".tool-output .tool-text").textContent()) === "hello from the test file\n", "the file is read");
-  ok((await bodies()).length === 1, "nothing reached the model yet");
+  ok(await p.locator(".tool .tag", { hasText: "custom" }).isVisible(), "a call to a custom tool says so");
+  ok((await p.locator("#decide").innerText()) === "Answer", "and answering it runs nothing");
+  await p.fill("textarea[data-result]", "Tea is a drink.");
+  await p.screenshot({ path: "shots/custom-call.png" });
   await p.click("#decide");
   await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  await idle();
   b = await bodies();
-  const contents = b[1].messages.filter((m) => m.role === "tool").map((m) => m.content);
-  ok(contents[0] === "hello from the test file\n", "released output reaches the model");
-  ok(contents.slice(1).every((c) => c.includes("denied") || c.includes("withheld") || c.includes("can't run")), "everything else was denied or withheld");
-  ok(!JSON.stringify(b[1]).includes("sk-or"), "the key never reaches the model");
-
-  await reset();
-  await send("tools list");
-  await card();
-  await p.locator("input[data-choice]").nth(0).check();
-  await p.locator("input[data-choice]").nth(1).check();
-  await p.click("#decide");
-  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
-  await card();
-  const list = await p.locator(".tool.state-finished .tool-output .tool-text").nth(0).textContent();
-  const found = await p.locator(".tool.state-finished .tool-output .tool-text").nth(1).textContent();
-  ok(list.includes("hello.txt"), "list_files works");
-  ok(found.includes("hello.txt:1:hello") && !found.includes("private.txt:"), "search_files works and skips private files");
-  await p.click("#decide");
-  await p.waitForFunction(() => !document.querySelector(".decision-card"));
-  await idle();
-
-  await reset();
-  await send("tools wrong");
-  await card();
-  ok((await p.locator(".tool.state-waiting .tool-invalid").textContent()).includes("unexpected argument"), "wrong arguments are caught before approval");
-  ok((await p.locator("input[data-choice]").count()) === 0, "and can't be approved");
-
-  // Editing and commands.
-  await fresh();
-  await reset();
-  await send("tools edit");
-  await card();
-  ok((await tool(0).locator(".tool-text").nth(1).textContent()) === "hello", "the edit shows the exact text");
-  await p.click("#decide");
-  await p.waitForSelector(".tool.state-sent", { timeout: 15000 });
-  ok(fs.readFileSync(`${WORK}/hello.txt`, "utf8") === "goodbye from the test file\n", "the file changed");
-  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
-  ok((await p.locator(".decision-card").count()) === 0, "tack's own message doesn't need a second approval");
-
-  await reset();
-  await send("tools command");
-  await card();
-  ok((await p.locator(".tool-flag").last().textContent()) === "Runs any command", "commands carry a permanent flag");
-  ok((await p.locator("input[data-network]").count()) === 1, "and offer a network choice");
-  ok(!(await p.locator("input[data-network]").isChecked()), "off by default");
-  await p.screenshot({ path: "shots/command.png" });
-  await p.click("#decide");
-  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
-  await card();
-  const ran = await p.locator(".tool.state-finished .tool-output").textContent();
-  ok(ran.includes(WORK) && ran.includes("from-config"), "the command ran in the working directory with the configured environment");
-  ok(ran.includes("no-key") && ran.includes("no-network"), "the sandbox hides the key and the network");
-  ok(ran.includes("exit code 3"), "the exit code is shown");
-  await p.click("#decide");
-  await p.waitForFunction(() => !document.querySelector(".decision-card"), null, { timeout: 15000 });
-  await idle();
+  const lookupDef = b[0].tools.find((t) => t.function.name === "lookup");
+  ok(b[0].tools.map((t) => t.function.name).join() === "run_code,note,scratch,lookup", "the custom tool is offered where it is in the list");
+  ok(lookupDef.function.description === "Look something up." && lookupDef.function.parameters.required[0] === "q", "as it was written");
+  ok(b[1].messages.at(-1).role === "tool" && b[1].messages.at(-1).content === "Tea is a drink.", "and the model gets exactly the result written");
 
   // Reloading the config.
   const originalConfig = fs.readFileSync(process.env.TACK_TEST_CONFIG, "utf8");
@@ -183,7 +137,7 @@ let page;
   await p.click("#reload");
   await p.waitForSelector("#reload-note.bad");
   ok((await p.locator("#reload-note").textContent()).includes("nothing changed"), "a bad config is reported and changes nothing");
-  fs.writeFileSync(process.env.TACK_TEST_CONFIG, JSON.stringify({ ...JSON.parse(originalConfig), search_skip: ["hidden-dir"], model: "other/model", url: "http://127.0.0.1:1/elsewhere" }));
+  fs.writeFileSync(process.env.TACK_TEST_CONFIG, JSON.stringify({ ...JSON.parse(originalConfig), model: "other/model", url: "http://127.0.0.1:1/elsewhere" }));
   await p.click("#reload");
   await p.waitForFunction(() => document.getElementById("reload-note").textContent.startsWith("Reloaded"));
   ok((await p.locator("#reload-note").textContent()).includes("url"), "startup settings are reported as needing a restart");
@@ -194,9 +148,7 @@ let page;
   await p.waitForSelector(".prose:has-text('A short reply')", { timeout: 15000 });
   await idle();
   b = await bodies();
-  const search = (body) => body.tools.find((t) => t.function.name === "search_files").function.description;
-  ok(search(b[0]).includes(".git") && !search(b[0]).includes("hidden-dir"), "an open conversation keeps its settings");
-  ok(b[0].model === "deepseek/deepseek-v4.1-flash-1017", "and its model");
+  ok(b[0].model === "deepseek/deepseek-v4.1-flash-1017", "an open conversation keeps its settings");
   ok(b.length === 1, "the new URL wasn't used: replies still come from the fake provider");
 
   // Changes are held.
@@ -217,25 +169,50 @@ let page;
   await p.waitForFunction(() => !document.getElementById("send").disabled, null, { timeout: 15000 });
   await idle();
   b = await bodies();
-  ok(search(b[0]).includes("hidden-dir") && b[0].model === "other/model", "an applied change is used");
+  ok(b[0].model === "other/model", "an applied change is used");
+
+  // The host, the effort and running code without asking change at any point.
+  ok((await p.inputValue("#quick-host")) === "morph/fp8" && (await p.inputValue("#quick-effort")) === "", "the quick row shows the conversation's settings");
+  await p.selectOption("#quick-host", "relace/fp4");
+  await p.waitForFunction(() => document.getElementById("meta").innerText.includes("relace/fp4"), null, { timeout: 5000 });
+  await p.selectOption("#quick-effort", "low");
+  await p.waitForFunction(() => document.getElementById("meta").innerText.includes("effort low"), null, { timeout: 5000 });
+  await p.screenshot({ path: "shots/quick.png" });
+  await reset();
+  await send("short after changing the host");
+  await replied();
+  b = await bodies();
+  ok(b[0].provider.order.join() === "relace/fp4" && b[0].reasoning?.effort === "low", "they change the next call: " + JSON.stringify([b[0].provider, b[0].reasoning]));
+  await p.selectOption("#quick-effort", "");
+  await p.waitForFunction(() => !document.getElementById("meta").innerText.includes("effort"), null, { timeout: 5000 });
+  await reset();
+  await send("short with the host's default");
+  await replied();
+  ok(!(await bodies())[0].reasoning, "and the host's default sends no effort");
+
+  // The tools change from the system message's editor, held like settings.
+  const systemBefore = b[0].messages[0].content;
+  await p.locator(".system button", { hasText: "Edit" }).click();
+  await p.locator(".system .editor textarea[data-description=note]").fill("A changed note description.");
+  await p.screenshot({ path: "shots/system-tools.png", fullPage: true });
+  await p.locator(".system .editor button", { hasText: "Hold edit" }).click();
+  await p.waitForSelector(".conv-settings .pending", { timeout: 5000 });
+  ok((await p.locator(".conv-settings .pending").innerText()).includes("A changed note description."), "a change to the tools is held, showing what they'd be");
+  await p.locator(".conv-settings .pending button", { hasText: "Apply" }).click();
+  await p.waitForFunction(() => !document.querySelector(".conv-settings .pending"));
+  await reset();
+  await send("short with the new description");
+  await replied();
+  b = await bodies();
+  ok(b[0].tools.find((t) => t.function.name === "note").function.description === "A changed note description.", "and goes out once applied");
+  ok(b[0].messages[0].content === systemBefore, "without changing the system message");
+
   await fresh();
   await reset();
   await send("short in a new one");
-  await p.waitForSelector(".ledger", { timeout: 15000 });
-  await idle();
+  await replied();
   b = await bodies();
-  ok(search(b[0]).includes("hidden-dir") && b[0].model === "other/model", "new conversations start from the config");
-
-  // No working directory.
-  await fresh();
-  await p.fill("#workdir", "");
-  await reset();
-  await send("short with no directory");
-  await p.waitForSelector(".ledger", { timeout: 15000 });
-  await idle();
-  b = await bodies();
-  ok(b[0].tools.map((t) => t.function.name).join() === "run_code,note,scratch", "no working directory leaves running code and notes");
-  ok(b[0].messages[0].content.includes("user's approval"), "and the model is told how those work");
+  ok(b[0].model === "other/model", "new conversations start from the config");
   fs.writeFileSync(process.env.TACK_TEST_CONFIG, originalConfig);
 
   // Holding the very first message starts the conversation.
@@ -267,37 +244,32 @@ let page;
   await send("tools sleep");
   await card();
   await p.click("#decide");
-  await p.waitForSelector("#controls button:has-text('Stop command')", { timeout: 5000 });
-  ok(await p.locator("#controls button:has-text('Pause')").isVisible(), "a running command can be paused after or stopped");
+  await p.waitForSelector("#controls button:has-text('Stop the tool')", { timeout: 5000 });
+  ok(await p.locator("#controls button:has-text('Pause')").isVisible(), "running code can be paused after or stopped");
   ok((await p.locator(".tool.state-running").count()) === 1 && (await p.locator("input[data-choice]").count()) === 0, "its card shows it running, with nothing left to tick");
   await p.screenshot({ path: "shots/running.png" });
   await p.click("#controls button:has-text('Pause')");
-  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
-  await card();
-  ok((await p.locator(".tool-output").textContent()).includes("finished"), "pause lets the command finish");
-  await p.click("#decide");
   await p.waitForSelector(".reply-control button:has-text('Continue')", { timeout: 15000 });
+  ok((await p.locator(".tool-output").textContent()).includes("finished"), "pause lets the code finish");
   ok((await bodies()).length === 1, "and doesn't call the model");
   await p.click(".reply-control button");
   await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
   ok((await bodies()).length === 2, "until you continue");
   ok((await p.locator("#controls button").count()) === 0, "the controls go away");
 
-  // Stop command.
+  // Stopping it.
   await reset();
   await send("tools long");
   await card();
+  const doneBefore = await p.locator(".prose", { hasText: "Done with tools." }).count();
   await p.click("#decide");
-  await p.waitForSelector("#controls button:has-text('Stop command')", { timeout: 5000 });
+  await p.waitForSelector("#controls button:has-text('Stop the tool')", { timeout: 5000 });
   const stoppedAt = Date.now();
-  await p.click("#controls button:has-text('Stop command')");
-  await p.waitForSelector(".tool.state-finished", { timeout: 15000 });
-  ok(Date.now() - stoppedAt < 8000, "the command stops");
-  const stopped = await p.locator(".tool.state-finished .tool-output").textContent();
-  ok(stopped.includes("you stopped it") && stopped.includes("begun"), "and its output so far is kept");
-  await card();
-  await p.click("#decide");
-  await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  await p.click("#controls button:has-text('Stop the tool')");
+  await p.waitForFunction((n) => [...document.querySelectorAll(".prose")].filter((x) => x.innerText.includes("Done with tools.")).length > n, doneBefore, { timeout: 15000 });
+  ok(Date.now() - stoppedAt < 8000, "the code stops");
+  const stopped = await p.locator(".tool-output").last().textContent();
+  ok(stopped.includes("you stopped it") && stopped.includes("begun"), "and its output so far is kept, and sent: " + stopped.slice(0, 120));
   await idle();
 
   // Cancel reply.
@@ -342,14 +314,13 @@ let page;
   // offered, settings, and running it again.
   await fresh();
   await reset();
-  await p.locator("#start-details summary", { hasText: "Tools" }).click();
   await p.fill("textarea[data-description=note]", "A rewritten note description.");
-  await p.fill("textarea[aria-label='note: key']", "A rewritten key description.");
-  await p.locator("input[data-tool=list_files]").uncheck();
-  await p.locator("#start-details summary", { hasText: "Settings" }).click();
+  await p.fill("textarea[data-parameter='note.key']", "A rewritten key description.");
+  await p.locator("input[data-offer=scratch]").uncheck();
+  await p.locator("#start-panel summary", { hasText: "All settings" }).click();
   const started = JSON.parse(await p.inputValue("#start-settings"));
   await p.fill("#start-settings", JSON.stringify({ ...started, budget_top_up_usd: 0.125 }));
-  await p.fill("#system-prompt", "A prompt written for this test.");
+  await setPrompt("A prompt written for this test.");
   await p.screenshot({ path: "shots/start-tools.png", fullPage: true });
   await send("short try the edits");
   await p.waitForFunction(() => document.querySelector(".reply-main > .prose"), null, { timeout: 15000 });
@@ -359,22 +330,23 @@ let page;
   ok(sentNote.function.description === "A rewritten note description.", "the edited description is sent");
   ok(sentNote.function.parameters.properties.key.description === "A rewritten key description.", "and the edited parameter");
   ok(Object.keys(sentNote.function.parameters.properties).join() === "kind,key,text,status", "with the parameters in the same order");
-  ok(!sentTools.some((t) => t.function.name === "list_files"), "a tool left out isn't offered");
-  ok(sentTools.some((t) => t.function.name === "read_file"), "and the others still are");
+  ok(!sentTools.some((t) => t.function.name === "scratch"), "a tool left out isn't offered");
+  ok(sentTools.some((t) => t.function.name === "run_code"), "and the others still are");
 
   await p.locator(".conv-settings > summary").click();
-  await p.locator(".definitions summary").click();
-  await p.waitForFunction(() => document.querySelector(".definitions pre").textContent.includes("A rewritten note"), null, { timeout: 5000 });
-  ok(true, "the conversation shows the definitions it sends");
+  await p.locator(".tools-panel > summary").click();
+  await p.waitForFunction(() => document.querySelector(".tools-panel textarea[data-description=note]")?.value === "A rewritten note description.", null, { timeout: 5000 });
+  ok(true, "the conversation shows the tools it offers");
   await p.screenshot({ path: "shots/definitions.png", fullPage: true });
 
-  // The hidden panel still holds the old text, so clear it to see it filled in again.
+  // The hidden panel still holds the old sections, so clear them to see them filled in again.
   await p.evaluate(() => {
-    document.getElementById("system-prompt").value = "";
+    start.sections = [];
+    redrawStart();
   });
   await p.getByRole("button", { name: "Start another like this" }).click();
-  await p.waitForFunction(() => document.getElementById("system-prompt").value === "A prompt written for this test.", null, { timeout: 5000 });
-  ok(!(await p.locator("input[data-tool=list_files]").isChecked()), "starting another keeps a tool left out");
+  await p.waitForFunction(() => document.querySelector("#start-panel .paragraph-text")?.value === "A prompt written for this test.", null, { timeout: 5000 });
+  ok(!(await p.locator("#start-panel input[data-offer=scratch]").isChecked()), "starting another keeps a tool left out");
   await reset();
   await send("short run it again");
   await p.waitForFunction(() => document.querySelector(".reply-main > .prose"), null, { timeout: 15000 });
@@ -387,7 +359,7 @@ let page;
 
   // Forking: try other first messages without setting anything up again.
   await fresh();
-  await p.fill("#system-prompt", "The prompt to keep.");
+  await setPrompt("The prompt to keep.");
   await reset();
   await send("short the original");
   await p.waitForFunction(() => document.querySelector(".reply-main > .prose"), null, { timeout: 15000 });
@@ -456,7 +428,7 @@ let page;
 
   // Changing a fork's system message and settings before it starts.
   await fresh();
-  await p.fill("#system-prompt", "The original prompt.");
+  await setPrompt("The original prompt.");
   await reset();
   await send("short to fork");
   await p.waitForFunction(() => document.querySelector(".reply-main > .prose"), null, { timeout: 15000 });
@@ -464,7 +436,7 @@ let page;
   await p.locator(".user-actions button", { hasText: "Edit" }).click();
   await p.waitForSelector(".fork-banner");
   await p.locator(".system button", { hasText: "Edit" }).click();
-  await p.fill(".system .editor textarea", "The forked prompt.");
+  await p.fill(".system .editor > textarea", "The forked prompt.");
   await p.locator(".system .editor button", { hasText: "Use in this fork" }).click();
   ok(await p.locator(".system .tag", { hasText: "Changed for this fork" }).isVisible(), "a fork's system message can be changed before it starts");
   await p.locator(".conv-settings summary").first().click();
@@ -475,13 +447,13 @@ let page;
   // A reload in the middle of that loses nothing.
   await p.fill("#input", "short still typing this");
   await p.locator(".system button", { hasText: "Edit" }).click();
-  await p.fill(".system .editor textarea", "An edit in progress.");
+  await p.fill(".system .editor > textarea", "An edit in progress.");
   await p.reload();
   await p.waitForSelector(".fork-banner");
   ok((await p.inputValue("#input")) === "short still typing this", "a reload keeps the composer");
   ok(JSON.parse(await p.inputValue("#settings-text")).budget_usd === 0.25, "and the fork's settings");
-  ok((await p.inputValue(".system .editor textarea")) === "An edit in progress.", "and an open editor");
-  await p.fill(".system .editor textarea", "The forked prompt.");
+  ok((await p.inputValue(".system .editor > textarea")) === "An edit in progress.", "and an open editor");
+  await p.fill(".system .editor > textarea", "The forked prompt.");
 
   await reset();
   await p.press("#input", "Enter");
@@ -628,9 +600,8 @@ let page;
   await p.waitForFunction(() => !document.getElementById("refused-row").textContent.includes("message names"), null, { timeout: 5000 });
   ok(await p.locator("#name-row").isVisible(), "and it can be asked again");
 
-  // Running code, with a conversation that has no working directory.
+  // Running code.
   await fresh();
-  await p.fill("#workdir", "");
   await reset();
   await send("tools code");
   await card();
@@ -645,31 +616,42 @@ let page;
   await p.setViewportSize({ width: 1280, height: 800 });
   const codeOutput = await p.locator(".tool-output").last().innerText();
   ok(codeOutput.includes("4") && codeOutput.includes("no such file"), "it runs, and can't see outside its sandbox: " + codeOutput.slice(0, 120));
-  ok((await p.locator("input[data-network]").count()) === 0, "and has no network option");
 
-  // Opting in on the start panel, so code runs with nobody asked.
+  // Opting in before it starts, so code runs with nobody asked.
   await fresh();
-  await p.fill("#workdir", "");
   await reset();
-  await p.locator("#start-auto-run").check();
+  await p.locator("#quick-auto-run").check();
   ok(JSON.parse(await p.inputValue("#start-settings")).auto_run_code === true, "the box changes the settings");
   await send("tools code");
   await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
+  await idle();
   ok((await p.locator(".tool .tag", { hasText: "Ran without asking" }).count()) === 1, "code ran without asking, and says so");
 
-  // Opting in from the card.
+  // Code can read the request that led to its call.
+  await reset();
+  await send("tools context");
+  await p.waitForFunction(() => [...document.querySelectorAll(".prose")].filter((x) => x.innerText.includes("Done with tools.")).length >= 2, null, { timeout: 15000 });
+  await idle();
+  const contextOutput = await p.locator(".tool-output .tool-text").last().textContent();
+  ok(contextOutput.includes(" run_code tools context"), "code can read the request and the reply that called it: " + contextOutput.slice(0, 120));
+
+  // Opting in from the card, and out again from the quick row.
   await fresh();
-  await p.fill("#workdir", "");
   await reset();
   await send("tools code");
   await card();
   await p.click("#always-run");
   await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
   await idle();
-  await p.locator(".conv-settings summary").first().click();
-  ok(await p.locator("#conv-auto-run").isChecked(), "stopping asking from the card changes the conversation's setting");
-  await p.locator("#conv-auto-run").uncheck();
-  await p.waitForFunction(() => document.getElementById("conv-auto-run") && !document.getElementById("conv-auto-run").checked);
+  ok(await p.locator("#quick-auto-run").isChecked(), "stopping asking from the card changes the conversation's setting");
+  await p.locator("#quick-auto-run").uncheck();
+  await p.waitForFunction(() => shown.conv && !shown.conv.settings.auto_run_code, null, { timeout: 5000 });
+  await idle();
+  await reset();
+  await send("tools code");
+  await card();
+  ok(true, "and turning it off asks again");
+  await p.click("#deny");
   await idle();
 
   // A reply coming in leaves the page alone, and only draws whole blocks.

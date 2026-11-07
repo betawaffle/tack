@@ -10,6 +10,8 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/openrouter"
@@ -68,7 +70,20 @@ func main() {
 	if err := c.Recover(); err != nil {
 		log.Fatal(err)
 	}
-	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, func() web.Defaults {
-		return web.Defaults{Sections: []prompt.Section{{Name: "test", Text: "Use your tools carefully."}}, Workdir: *data, Tools: c.ToolInfo()}
-	}, func() (web.Reload, error) { return web.Reload{}, nil }, nil)))
+	var (
+		mu    sync.Mutex
+		saved = prompt.Defaults{Sections: []prompt.Section{{Name: "test", Text: "Use your tools carefully."}}}
+	)
+	defaults := func() web.Defaults {
+		mu.Lock()
+		defer mu.Unlock()
+		return web.Defaults{Prompt: saved, Tools: c.ToolInfo(), Settings: store.Settings{BudgetUSD: 1}.WithDefaults(), Hosts: []string{"morph/fp8", "relace/fp4"}, Efforts: store.ReasoningEfforts, Date: prompt.Date(time.Now())}
+	}
+	save := func(d prompt.Defaults) error {
+		mu.Lock()
+		defer mu.Unlock()
+		saved = d
+		return nil
+	}
+	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, defaults, save, func() (web.Reload, error) { return web.Reload{}, nil }, nil)))
 }

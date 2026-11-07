@@ -25,14 +25,12 @@ type Config struct {
 	// AllowedHosts are extra hostnames the page can be reached by.
 	AllowedHosts []string `json:"allowed_hosts"`
 
-	Prompts string `json:"prompts"`
+	// Prompt is the file that new conversations' system prompt and tools start from.
+	// The page writes it when someone saves what they've set up as the default.
+	Prompt string `json:"prompt"`
 
-	// DefaultWorkdir fills in the working directory for a new conversation. tack's
-	// own working directory is never used for anything, so it has no fallback.
-	DefaultWorkdir string `json:"default_workdir"`
-
-	// SandboxExtraReadOnly adds to sandbox_read_only, without repeating its defaults.
-	SandboxExtraReadOnly []string `json:"sandbox_extra_read_only"`
+	// Hosts are the hosts the page offers to choose from. Any host can still be typed.
+	Hosts []string `json:"hosts"`
 
 	// Settings are the defaults a new conversation starts with. After that, it owns
 	// its copy.
@@ -52,16 +50,15 @@ func defaults() (Config, error) {
 		dataHome = filepath.Join(home, ".local/share")
 	}
 	return Config{
-		Addr:    "0.0.0.0:8484",
-		Data:    filepath.Join(dataHome, "tack"),
-		Key:     filepath.Join(configHome, "tack/openrouter-key"),
-		URL:     "https://openrouter.ai/api/v1/chat/completions",
-		Prompts: filepath.Join(configHome, "tack/prompt"),
+		Addr:   "0.0.0.0:8484",
+		Data:   filepath.Join(dataHome, "tack"),
+		Key:    filepath.Join(configHome, "tack/openrouter-key"),
+		URL:    "https://openrouter.ai/api/v1/chat/completions",
+		Prompt: filepath.Join(configHome, "tack/prompt.json"),
+		Hosts:  []string{"morph/fp8", "relace/fp4", "particle-ai/us/flex"},
 		Settings: store.Settings{
-			Model:      "deepseek/deepseek-v4.1-flash-1017",
-			Host:       "morph/fp8",
-			SearchSkip: []string{".git", "node_modules"},
-			CommandEnv: map[string]string{"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8"},
+			Model: "deepseek/deepseek-v4.1-flash-1017",
+			Host:  "morph/fp8",
 		}.WithDefaults(),
 	}, nil
 }
@@ -99,24 +96,15 @@ func Load(path string, required bool) (Config, error) {
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
-	cfg.SandboxReadOnly = append(slices.Clone(cfg.SandboxReadOnly), cfg.SandboxExtraReadOnly...)
 	return cfg, nil
 }
 
 // validate refuses relative paths, because they'd depend on tack's own working
 // directory, which is never meant to matter.
 func (c Config) validate() error {
-	for name, path := range map[string]string{"data": c.Data, "key": c.Key, "prompts": c.Prompts} {
+	for name, path := range map[string]string{"data": c.Data, "key": c.Key, "prompt": c.Prompt} {
 		if !filepath.IsAbs(path) {
 			return fmt.Errorf("%s has to be an absolute path", name)
-		}
-	}
-	if c.DefaultWorkdir != "" && !filepath.IsAbs(c.DefaultWorkdir) {
-		return errors.New("default_workdir has to be an absolute path")
-	}
-	for _, path := range c.SandboxExtraReadOnly {
-		if !filepath.IsAbs(path) {
-			return errors.New("sandbox_extra_read_only has to have absolute paths")
 		}
 	}
 	return c.Settings.Validate()

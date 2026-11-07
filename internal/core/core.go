@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,7 +81,8 @@ type conversation struct {
 	revision int
 
 	tools    store.Ref       // the exact definitions it sends, if it has any
-	workdir  string          // where its tools' relative paths start
+	custom   []string        // the tools in those that a person answers
+	workdir  string          // where its tools' relative paths started, in older conversations
 	settings *store.Settings // what it uses. Older conversations have none
 	// lastModel and lastHost stand in for older conversations, from their last call.
 	lastModel, lastHost string
@@ -240,7 +242,7 @@ func (c *Core) apply(ev *store.Event) {
 		return
 	}
 	if ev.Type == store.ConversationAdded {
-		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir, settings: ev.Settings}
+		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, custom: ev.CustomTools, workdir: ev.Workdir, settings: ev.Settings}
 		c.order = append(c.order, ev.Conversation)
 		return
 	}
@@ -400,8 +402,10 @@ type Options struct {
 	// Blocks, if they join to exactly System, are stored as separate blocks.
 	Blocks []string
 	// Tools says whether to offer the configured tools.
-	Tools   bool
-	Workdir string
+	Tools bool
+	// Offer, if it isn't nil, is the tools to offer instead, in order. It's used
+	// whatever Tools says, and the options below don't apply to it.
+	Offer []Offer
 	// LeaveOut names tools not to offer.
 	LeaveOut []string
 	// Definitions replace those of the named tools. Only descriptions can differ.
@@ -425,17 +429,19 @@ func (c *Core) NewConversationWith(opts Options) (string, error) {
 		}
 	}
 	var tools store.Ref
-	if opts.Tools {
-		var err error
-		if tools, err = c.storeDefinitions(settings, opts); err != nil {
-			return "", err
-		}
+	var custom []string
+	var err error
+	switch {
+	case opts.Offer != nil:
+		tools, custom, err = c.offered(settings, opts.Offer)
+	case opts.Tools:
+		tools, err = c.storeDefinitions(settings, opts)
+	}
+	if err != nil {
+		return "", err
 	}
 	id := store.NewID()
-	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools, Settings: &settings}
-	if tools != "" {
-		event.Workdir = opts.Workdir
-	}
+	event := &store.Event{Type: store.ConversationAdded, Conversation: id, Tools: tools, CustomTools: custom, Settings: &settings}
 	if err := c.record(event); err != nil {
 		return "", err
 	}
@@ -506,7 +512,7 @@ func (conv *conversation) sessionID() string {
 // hasn't spent anything itself, but what those calls cost still informs its estimates.
 func (conv *conversation) fork(ev *store.Event) *conversation {
 	out := &conversation{
-		id: ev.Conversation, created: ev.Time, tools: conv.tools, workdir: conv.workdir, settings: ev.Settings,
+		id: ev.Conversation, created: ev.Time, tools: conv.tools, custom: conv.custom, workdir: conv.workdir, settings: ev.Settings,
 		lastModel: conv.lastModel, lastHost: conv.lastHost, forkedFrom: ev.ForkedFrom, forkItems: ev.ForkItems, session: conv.sessionID(),
 	}
 	for _, it := range conv.items[:ev.ForkItems] {
@@ -748,7 +754,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	features := conv.features(entries)
 	unanswered := conv.unanswered()
 	tools := conv.tools
-	workdir := conv.workdir
+	custom := slices.Clone(conv.custom)
 	settings := conv.effectiveSettings(c.settings)
 	c.mu.Unlock()
 	model := settings.Model
@@ -872,7 +878,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 		}
 	}
 	if finished.Error == "" {
-		if finished.ToolCalls, err = c.storeCalls(definitions, workdir, settings, res.ToolCalls); err != nil {
+		if finished.ToolCalls, err = c.storeCalls(definitions, custom, settings, res.ToolCalls); err != nil {
 			return err
 		}
 	}
@@ -908,6 +914,7 @@ func (c *Core) renderRequest(conv *conversation, entries []store.Entry, definiti
 		Messages:  messages,
 		SessionID: conv.sessionID(),
 		Tools:     definitions,
+		Effort:    settings.ReasoningEffort,
 	})
 }
 

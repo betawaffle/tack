@@ -31,12 +31,6 @@ type Tool struct {
 	// Timeout overrides the default limit on how long a call can take.
 	Timeout func(store.Settings) time.Duration
 
-	// NeedsWorkdir leaves the tool out of a conversation with no working directory.
-	NeedsWorkdir bool
-
-	// NetworkOption offers a per-call choice to allow the network.
-	NetworkOption bool
-
 	// NoApproval runs the tool without asking. It's only for tools that reach nothing
 	// outside the conversation's own record.
 	NoApproval bool
@@ -63,13 +57,10 @@ type Tool struct {
 // Call is what a tool gets. Arguments were parsed by parseArguments.
 type Call struct {
 	Args     map[string]jsontext.Value
-	Workdir  string
 	Settings store.Settings
 
-	// Execution identifies this run of the call, and Network says it may use the
-	// network. Both are empty during Inspect.
+	// Execution identifies this run of the call. It's empty during Inspect.
 	Execution string
-	Network   bool
 
 	// AddNote records a note. It's nil during Inspect.
 	AddNote func(kind, key, status, text string) error
@@ -88,6 +79,10 @@ type Call struct {
 	// Scratch does an operation on the conversation's scratch and returns what the model
 	// should see. It's nil during Inspect.
 	Scratch func(op, key, text string) (string, error)
+
+	// Context returns the request that led to this call, exactly as it was sent, and the
+	// reply that made the call, as JSON. It's nil during Inspect.
+	Context func() ([]byte, error)
 }
 
 func (t *Tool) define(settings store.Settings) jsontext.Value {
@@ -113,6 +108,10 @@ func (conv *conversation) effectiveSettings(current store.Settings) store.Settin
 type pendingSettings struct {
 	id       string
 	settings store.Settings
+	// A proposal of tools has their definitions, which are empty for none at all.
+	toolsProposed bool
+	tools         store.Ref
+	custom        []string
 }
 
 var (
@@ -123,10 +122,9 @@ var (
 
 // ToolInfo describes a tool for the page.
 type ToolInfo struct {
-	Name         string         `json:"name"`
-	NeedsWorkdir bool           `json:"needs_workdir,omitzero"`
-	NoApproval   bool           `json:"no_approval,omitzero"`
-	Definition   jsontext.Value `json:"definition"`
+	Name       string         `json:"name"`
+	NoApproval bool           `json:"no_approval,omitzero"`
+	Definition jsontext.Value `json:"definition"`
 }
 
 // ToolInfo lists the configured tools.
@@ -135,7 +133,7 @@ func (c *Core) ToolInfo() []ToolInfo {
 	out := make([]ToolInfo, 0, len(c.cfg.Tools))
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		out = append(out, ToolInfo{Name: tool.Name, NeedsWorkdir: tool.NeedsWorkdir, NoApproval: tool.NoApproval, Definition: tool.define(settings)})
+		out = append(out, ToolInfo{Name: tool.Name, NoApproval: tool.NoApproval, Definition: tool.define(settings)})
 	}
 	return out
 }
@@ -189,7 +187,6 @@ func denialText(kind string) string {
 type toolCall struct {
 	store.ToolCall
 	allowed   bool // approved to run, and not since told to stop
-	network   bool // and may use the network
 	started   bool
 	finished  bool
 	output    store.Ref
@@ -268,12 +265,15 @@ func (conv *conversation) applyTool(ev *store.Event) {
 		}
 	case store.SettingsProposed:
 		// A newer proposal replaces an older one. The record keeps both.
-		conv.pendingSettings = &pendingSettings{id: ev.Edit, settings: *ev.Settings}
+		conv.pendingSettings = &pendingSettings{id: ev.Edit, settings: *ev.Settings, toolsProposed: ev.ToolsProposed, tools: ev.Tools, custom: ev.CustomTools}
 	case store.SettingsApplied:
 		if p := conv.pendingSettings; p != nil && p.id == ev.Edit {
 			settings := p.settings
 			conv.settings = &settings
-			if ev.Tools != "" {
+			switch {
+			case p.toolsProposed:
+				conv.tools, conv.custom = p.tools, p.custom
+			case ev.Tools != "":
 				conv.tools = ev.Tools
 			}
 			conv.pendingSettings = nil
@@ -291,7 +291,6 @@ func (conv *conversation) applyTool(ev *store.Event) {
 				continue
 			}
 			call.allowed = choice.Allow
-			call.network = choice.Network
 			if choice.Parts == nil {
 				call.automatic = ev.By == "tack"
 			}
@@ -333,7 +332,7 @@ func (c *Core) storeDefinitions(settings store.Settings, opts Options) (store.Re
 	var definitions []jsontext.Value
 	for i := range c.cfg.Tools {
 		tool := &c.cfg.Tools[i]
-		if (tool.NeedsWorkdir && opts.Workdir == "") || slices.Contains(opts.LeaveOut, tool.Name) {
+		if slices.Contains(opts.LeaveOut, tool.Name) {
 			continue
 		}
 		definition := tool.define(settings)
@@ -495,7 +494,7 @@ func definedNames(definitions []byte) ([]string, error) {
 // conversation was actually offered. A call that can't run still goes to a person:
 // no automatic reply means no loop a model can spend money on. The exception is a tool
 // it was offered that tack no longer has, which failRemovedTools answers.
-func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Settings, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
+func (c *Core) storeCalls(definitions []byte, custom []string, settings store.Settings, calls []openrouter.FunctionCallResult) ([]store.ToolCall, error) {
 	offered, err := definedNames(definitions)
 	if err != nil {
 		return nil, err
@@ -510,11 +509,13 @@ func (c *Core) storeCalls(definitions []byte, workdir string, settings store.Set
 		tool := c.findTool(call.Name)
 		if !slices.Contains(offered, call.Name) {
 			stored.Invalid = fmt.Sprintf("there is no tool named %q", call.Name)
+		} else if slices.Contains(custom, call.Name) {
+			// A person reads it and writes the result, whatever it says.
 		} else if tool == nil {
 			// failRemovedTools answers it.
 		} else if args, err := parseArguments([]byte(call.Arguments)); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
-		} else if flags, err := inspect(tool, Call{Args: args, Workdir: workdir, Settings: settings}); err != nil {
+		} else if flags, err := inspect(tool, Call{Args: args, Settings: settings}); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
 		} else {
 			stored.Flags = flags
@@ -579,7 +580,7 @@ func (c *Core) failRemovedTools(conv *conversation) error {
 	c.mu.Lock()
 	var calls []string
 	for _, call := range conv.openCalls() {
-		if c.findTool(call.Name) == nil && call.Invalid == "" {
+		if c.findTool(call.Name) == nil && call.Invalid == "" && !conv.isCustom(call.Name) {
 			calls = append(calls, call.ID)
 		}
 	}
@@ -770,18 +771,14 @@ func (c *Core) StopTool(convID, callID string) error {
 // runTool runs one approved call. The intent is durable first, so a stop leaves a
 // started call with no finish, which is never run again without asking.
 func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) error {
-	c.mu.Lock()
-	network := call.network
-	c.mu.Unlock()
 	execution := store.NewID()
-	if err := c.record(&store.Event{Type: store.ToolStarted, Conversation: conv.id, ToolCall: call.ID, Execution: execution, Network: network}); err != nil {
+	if err := c.record(&store.Event{Type: store.ToolStarted, Conversation: conv.id, ToolCall: call.ID, Execution: execution}); err != nil {
 		return err
 	}
 	send(Update{Kind: "tool", Text: call.Name, ID: call.ID})
 	defer send(Update{Kind: "tool_done", ID: call.ID})
 	start := time.Now()
 	c.mu.Lock()
-	workdir := conv.workdir
 	settings := conv.effectiveSettings(c.settings)
 	c.mu.Unlock()
 	var artifacts []store.Artifact
@@ -816,7 +813,8 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		return err
 	}
 	scratch := func(op, key, text string) (string, error) { return c.scratchOperation(conv, op, key, text) }
-	output, failure := c.execute(ctx, call, Call{Workdir: workdir, Settings: settings, Execution: execution, Network: network, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch}, func(name string, data []byte) error {
+	callContext := func() ([]byte, error) { return c.callContext(conv, call) }
+	output, failure := c.execute(ctx, call, Call{Settings: settings, Execution: execution, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch, Context: callContext}, func(name string, data []byte) error {
 		block, err := c.cfg.Store.Put(data)
 		if err != nil {
 			return err
@@ -861,7 +859,7 @@ func (c *Core) execute(parent context.Context, call *toolCall, run Call, keep fu
 	// the batch may have changed things. If it no longer looks as it did on the card,
 	// the approval doesn't cover it.
 	run.Args = args
-	flags, err := inspect(tool, Call{Args: args, Workdir: run.Workdir, Settings: run.Settings})
+	flags, err := inspect(tool, Call{Args: args, Settings: run.Settings})
 	if err != nil {
 		return nil, fmt.Errorf("this changed since it was approved: %w", err)
 	}
@@ -923,6 +921,7 @@ func nothingWaitingDiffers(a, b store.Settings) bool {
 	a, b = a.WithDefaults(), b.WithDefaults()
 	a.BudgetUSD, a.BudgetTopUpUSD = b.BudgetUSD, b.BudgetTopUpUSD
 	a.AutoRunCode = b.AutoRunCode
+	a.Host, a.ReasoningEffort = b.Host, b.ReasoningEffort
 	return reflect.DeepEqual(a, b)
 }
 
@@ -931,14 +930,17 @@ func nothingWaitingDiffers(a, b store.Settings) bool {
 func (c *Core) ApplySettings(convID, id string) error {
 	var pending, before store.Settings
 	var current store.Ref
+	var proposedTools bool
 	conv, err := c.reserve(convID, func(conv *conversation) error {
 		if conv.pendingSettings == nil || conv.pendingSettings.id != id {
 			return ErrNoEdit
 		}
 		pending = conv.pendingSettings.settings
+		proposedTools = conv.pendingSettings.toolsProposed
 		before, current = conv.effectiveSettings(c.settings), conv.tools
 		// A budget, or whether to ask next time, has nothing to do with whatever's waiting.
-		if (conv.decision != nil || conv.unanswered()) && !nothingWaitingDiffers(before, pending) {
+		waiting := conv.decision != nil || conv.unanswered()
+		if waiting && (proposedTools || !nothingWaitingDiffers(before, pending)) {
 			return ErrAwaiting
 		}
 		return nil
@@ -948,7 +950,7 @@ func (c *Core) ApplySettings(convID, id string) error {
 	}
 	defer c.release(conv)
 	var tools store.Ref
-	if current != "" {
+	if current != "" && !proposedTools {
 		if tools, err = c.refreshDefinitions(current, before, pending); err != nil {
 			return err
 		}
@@ -975,27 +977,24 @@ func (c *Core) DiscardSettings(convID, id string) error {
 // empty answer denies everything. The model sees text for anything denied, or a default if it's empty.
 // What the decision releases then moves along as a reply does.
 func (c *Core) Decide(convID, decisionID string, allow []string, text string) (<-chan Update, error) {
-	return c.DecideWithNetwork(convID, decisionID, allow, nil, text)
-}
-
-// DecideWithNetwork also lets the calls named in network use the network. They have
-// to be allowed, and to be calls that offer that.
-func (c *Core) DecideWithNetwork(convID, decisionID string, allow, network []string, text string) (<-chan Update, error) {
-	return c.DecideWith(convID, decisionID, Decision{Allow: allow, Network: network, Text: text})
+	return c.DecideWith(convID, decisionID, Decision{Allow: allow, Text: text})
 }
 
 // Decision is an answer to what a conversation is waiting on. Shorten sends only the start
 // and end of those calls' output, for ones that are allowed. AutoRunCode also stops asking
 // about code in this conversation from here on.
 type Decision struct {
-	Allow, Network, Shorten []string
-	Text                    string
-	AutoRunCode             bool
+	Allow, Shorten []string
+	Text           string
+	AutoRunCode    bool
+	// Results answer calls to custom tools, by call ID. The model is given exactly this
+	// text. A call to one that's allowed has to have a result.
+	Results map[string]string
 }
 
 // DecideWith answers a decision.
 func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update, error) {
-	allow, network := d.Allow, d.Network
+	allow := d.Allow
 	var open decision
 	conv, err := c.reserve(convID, func(conv *conversation) error {
 		if conv.decision == nil || conv.decision.id != decisionID {
@@ -1008,12 +1007,16 @@ func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update,
 				return ErrBadChoice
 			}
 		}
-		for _, id := range network {
-			call := conv.tool(id)
-			if !slices.Contains(allow, id) || call == nil {
-				return ErrBadChoice
+		for _, id := range allow {
+			if call := conv.tool(id); conv.isCustom(call.Name) {
+				if _, ok := d.Results[id]; !ok {
+					return ErrBadChoice
+				}
 			}
-			if tool := c.findTool(call.Name); tool == nil || !tool.NetworkOption {
+		}
+		for id := range d.Results {
+			call := conv.tool(id)
+			if !slices.Contains(allow, id) || call == nil || !conv.isCustom(call.Name) || open.kind != store.DecideCalls {
 				return ErrBadChoice
 			}
 		}
@@ -1058,7 +1061,7 @@ func (c *Core) stopAskingAboutCode(conv *conversation) error {
 }
 
 func (c *Core) choices(conv *conversation, open *decision, d Decision) ([]store.Choice, error) {
-	allow, network, text := d.Allow, d.Network, d.Text
+	allow, text := d.Allow, d.Text
 	if strings.TrimSpace(text) == "" {
 		text = denialText(open.kind)
 	}
@@ -1071,7 +1074,7 @@ func (c *Core) choices(conv *conversation, open *decision, d Decision) ([]store.
 		c.mu.Lock()
 		call := *conv.tool(id)
 		c.mu.Unlock()
-		choice := store.Choice{ToolCall: id, Allow: slices.Contains(allow, id), Network: slices.Contains(network, id)}
+		choice := store.Choice{ToolCall: id, Allow: slices.Contains(allow, id)}
 		switch {
 		case call.Invalid != "":
 			if choice.Parts, err = c.parts("This tool call can't run: " + call.Invalid); err != nil {
@@ -1079,6 +1082,10 @@ func (c *Core) choices(conv *conversation, open *decision, d Decision) ([]store.
 			}
 		case !choice.Allow:
 			choice.Parts = denial
+		case open.kind == store.DecideCalls && d.Results != nil && hasKey(d.Results, id):
+			if choice.Parts, err = c.parts(d.Results[id]); err != nil {
+				return nil, err
+			}
 		case open.kind == store.DecideOutput:
 			if slices.Contains(d.Shorten, id) {
 				choice.Parts, err = c.shortenedOutput(&call)
@@ -1148,6 +1155,7 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		Flags:        call.Flags,
 		Error:        call.failure,
 		Compact:      c.isCompact(call.Name),
+		Custom:       conv.isCustom(call.Name),
 		ResultEdited: call.edited,
 		// Only the newest call with an ID can be the one a decision means.
 		Decidable: conv.decision != nil && slices.Contains(conv.decision.calls, call.ID) &&
@@ -1163,13 +1171,9 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 	if call.resolved() {
 		view.Result = c.text(call.result)
 	}
-	view.Network = call.network
 	if tool := c.findTool(call.Name); tool != nil && tool.AutoRun != nil {
 		view.RanAutomatically = call.automatic
 		view.CanAutoRun = view.Decidable && conv.decision.kind == store.DecideCalls && conv.pendingSettings == nil
-	}
-	if tool := c.findTool(call.Name); tool != nil && tool.NetworkOption && view.Decidable && conv.decision.kind != store.DecideOutput {
-		view.NetworkOption = true
 	}
 	interrupted := conv.decision != nil && conv.decision.kind == store.DecideInterrupted && slices.Contains(conv.decision.calls, call.ID)
 	switch {

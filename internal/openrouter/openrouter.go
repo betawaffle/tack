@@ -61,19 +61,31 @@ type Request struct {
 	Messages  []Message
 	SessionID string
 	Tools     jsontext.Value // exact definitions, if there are any
+	// Effort is the reasoning effort to ask for. Empty leaves it out.
+	Effort string
+}
+
+// Reasoning is the reasoning section of a request.
+type Reasoning struct {
+	Effort string `json:"effort"`
 }
 
 // Render produces the exact request body. The same Request always gives the
 // same bytes, which is what keeps a provider's prefix cache working.
 func Render(r Request) ([]byte, error) {
+	var reasoning *Reasoning
+	if r.Effort != "" {
+		reasoning = &Reasoning{Effort: r.Effort}
+	}
 	return json.Marshal(struct {
 		Model     string         `json:"model"`
 		Messages  []Message      `json:"messages"`
 		Provider  Routing        `json:"provider"`
+		Reasoning *Reasoning     `json:"reasoning,omitzero"`
 		SessionID string         `json:"session_id,omitzero"`
 		Stream    bool           `json:"stream"`
 		Tools     jsontext.Value `json:"tools,omitzero"`
-	}{r.Model, r.Messages, r.Routing, r.SessionID, true, r.Tools}, json.Deterministic(true))
+	}{r.Model, r.Messages, r.Routing, reasoning, r.SessionID, true, r.Tools}, json.Deterministic(true))
 }
 
 // Delta is a piece of a reply as it arrives.

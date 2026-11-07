@@ -235,3 +235,47 @@ func noteArguments(call Call) (map[string]string, error) {
 	}
 	return out, nil
 }
+
+// callContext is the request that led to a call, as its exact bytes, and the reply that
+// made the call, shaped like a message in that request. Either is null if it isn't known,
+// as for a call someone wrote.
+func (c *Core) callContext(conv *conversation, call *toolCall) ([]byte, error) {
+	c.mu.Lock()
+	var request store.Ref
+	var finished *store.Event
+	for _, it := range conv.items {
+		if slices.Contains(it.calls, call) {
+			request, finished = it.request, it.finished
+		}
+	}
+	c.mu.Unlock()
+	body := []byte("null")
+	if request != "" {
+		data, err := c.cfg.Store.Get(request)
+		if err != nil {
+			return nil, err
+		}
+		body = data
+	}
+	reply := []byte("null")
+	if finished != nil {
+		messages, err := c.renderMessages([]store.Entry{{Role: "assistant", Parts: refParts(finished.Text), Reasoning: finished.Reasoning, ToolCalls: finished.ToolCalls}})
+		if err != nil {
+			return nil, err
+		}
+		if reply, err = json.Marshal(messages[0], json.Deterministic(true)); err != nil {
+			return nil, err
+		}
+	}
+	out := append([]byte(`{"request":`), body...)
+	out = append(out, `,"reply":`...)
+	out = append(out, reply...)
+	return append(out, "}"...), nil
+}
+
+func refParts(ref store.Ref) []store.Part {
+	if ref == "" {
+		return nil
+	}
+	return []store.Part{{Block: ref}}
+}

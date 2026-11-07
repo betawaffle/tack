@@ -44,21 +44,13 @@ const TOOL_CALLS = {
   hidden: [["echo", JSON.stringify({ text: "safe\u202eevil\u0007 <img src=x onerror=\"window.__pwned=1\">\u{E0041}\nline two" })]],
   boom: [["boom", "{}"]],
   json: [["json", "{}"]],
-  read: [
-    ["read_file", '{"path":"hello.txt"}'],
-    ["read_file", '{"path":"/etc/hostname"}'],
-    ["read_file", '{"path":"private.txt"}'],
-    ["read_file", JSON.stringify({ path: process.env.TACK_TEST_KEY || "" })],
-  ],
-  list: [["list_files", "{}"], ["search_files", '{"pattern":"hel+o"}']],
-  wrong: [["read_file", '{"file":"hello.txt"}']],
   note: [["note", JSON.stringify({ kind: "plan", key: "first", text: "Do the <b>thing</b>", status: "doing" })], ["note", JSON.stringify({ kind: "tool_wish", key: "w", text: "A tool for go test" })]],
   notego: [["note", JSON.stringify({ kind: "concern", key: "c", text: "This looks odd" })]],
   code: [["run_code", JSON.stringify({ language: "python", code: `print(2 + 2)\ntry:\n    open(${JSON.stringify(process.env.TACK_TEST_WORKDIR + "/hello.txt")})\nexcept OSError as e:\n    print("no such file:", e)` })]],
-  sleep: [["run_command", JSON.stringify({ command: "sleep 2; echo finished" })]],
-  long: [["run_command", JSON.stringify({ command: "echo begun; sleep 30" })]],
-  edit: [["edit_file", JSON.stringify({ path: "hello.txt", old_string: "hello", new_string: "goodbye" })]],
-  command: [["run_command", JSON.stringify({ command: `pwd; echo $TACK_TEST_VALUE; cat ${process.env.TACK_TEST_KEY} 2>/dev/null || echo no-key; (exec 3<>/dev/tcp/1.1.1.1/53) 2>/dev/null || echo no-network; exit 3` })]],
+  sleep: [["run_code", JSON.stringify({ language: "python", code: "import time\ntime.sleep(2)\nprint('finished')" })]],
+  long: [["run_code", JSON.stringify({ language: "python", code: "import time\nprint('begun', flush=True)\ntime.sleep(30)" })]],
+  context: [["run_code", JSON.stringify({ language: "python", code: "import json\nc = json.load(open('/conversation/context.json'))\nprint(c['request']['model'], c['reply']['tool_calls'][0]['function']['name'], c['request']['messages'][-1]['content'])" })]],
+  lookup: [["lookup", '{"q":"tea"}']],
 };
 let bodies = [];
 http

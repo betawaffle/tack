@@ -42,10 +42,10 @@ const msgs = (b) => JSON.parse(b).messages;
     await p.waitForTimeout(150);
   };
   await p.goto(B);
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   ok(await p.isVisible("#start"), "start panel shows");
   ok(
-    (await p.inputValue("#system-prompt")).startsWith("You are an AI agent"),
+    (await p.locator("#start-panel .paragraph-text").first().inputValue()).startsWith("You are an AI agent"),
     "default prompt prefilled",
   );
   await p.screenshot({ path: "shots/start-dark.png" });
@@ -366,12 +366,12 @@ const msgs = (b) => JSON.parse(b).messages;
 
   // New conversation with no system prompt; switching
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   ok(
     (await p.locator(".user").count()) === 0 && (await p.isVisible("#start")),
     "new conversation starts clean",
   );
-  await p.fill("#system-prompt", "");
+  await p.evaluate(() => document.querySelectorAll("#start-panel input[data-section-on]").forEach((b) => b.checked && b.click()));
   await fetch(F + "/reset");
   await send("long reply test");
   await p.waitForSelector(".ledger", { timeout: 15000 });
@@ -402,7 +402,7 @@ const msgs = (b) => JSON.parse(b).messages;
   await p.press("#input", "Enter");
   await p.waitForTimeout(300);
   await p.click("#new");
-  await p.waitForFunction(() => document.getElementById("system-prompt").value.length > 0);
+  await p.waitForSelector("#start-panel .section-editor");
   await p.fill("#input", "short elsewhere");
   await p.press("#input", "Enter");
   await p.waitForSelector(".ledger", { timeout: 15000 });

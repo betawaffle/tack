@@ -9,11 +9,9 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -68,11 +66,7 @@ func (f *fixture) call(args map[string]string) core.Call {
 		}
 		out[name] = data
 	}
-	return core.Call{Args: out, Workdir: f.workdir, Settings: store.Settings{
-		SearchSkip:            []string{".git", "node_modules"},
-		CommandEnv:            map[string]string{"PATH": "/usr/bin:/bin", "ONLY_THIS": "yes"},
-		CommandTimeoutSeconds: 5,
-	}}
+	return core.Call{Args: out, Settings: store.Settings{CommandTimeoutSeconds: 5}}
 }
 
 func (f *fixture) run(name string, args map[string]string) (string, error) {
@@ -100,230 +94,11 @@ func TestDefinitionsAreValidAndNamed(t *testing.T) {
 		}
 		definition := tool.Definition
 		if tool.Define != nil {
-			definition = tool.Define(store.Settings{SearchSkip: []string{"x"}})
+			definition = tool.Define(store.Settings{})
 		}
 		if err := json.Unmarshal(definition, &def); err != nil || def.Function.Name != name {
 			t.Errorf("%s: %s, %v", name, definition, err)
 		}
-	}
-}
-
-func TestReadFile(t *testing.T) {
-	f := newFixture(t)
-	f.write("hello.txt", "hi\xff there", 0o644)
-	if got, err := f.run("read_file", map[string]string{"path": "hello.txt"}); err != nil || got != "hi\xff there" {
-		t.Errorf("got %q, %v", got, err)
-	}
-	if got, err := f.run("read_file", map[string]string{"path": filepath.Join(f.workdir, "hello.txt")}); err != nil || !strings.HasPrefix(got, "hi") {
-		t.Errorf("absolute: %q, %v", got, err)
-	}
-	if _, err := f.run("read_file", map[string]string{"path": "missing.txt"}); err == nil {
-		t.Error("missing file should fail")
-	}
-}
-
-func TestTheKeyIsRefusedHoweverItsReached(t *testing.T) {
-	f := newFixture(t)
-	if err := os.Symlink(f.key, filepath.Join(f.workdir, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(f.key, filepath.Join(f.workdir, "hardlink")); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{f.key, "link", "hardlink", "../secret-key"} {
-		got, err := f.run("read_file", map[string]string{"path": path})
-		if err == nil || strings.Contains(got, "the key") || !strings.Contains(err.Error(), "protected") {
-			t.Errorf("%s: got %q, %v", path, got, err)
-		}
-		// It isn't offered for approval, since approving it couldn't do anything.
-		if _, err := f.tools["read_file"].Inspect(f.call(map[string]string{"path": path})); err == nil || !strings.Contains(err.Error(), "protected") {
-			t.Errorf("%s: inspect = %v", path, err)
-		}
-	}
-}
-
-func TestOnlyRegularFilesAreRead(t *testing.T) {
-	f := newFixture(t)
-	fifo := filepath.Join(f.workdir, "fifo")
-	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := f.tools["read_file"].Run(context.Background(), f.call(map[string]string{"path": "fifo"}))
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("a FIFO should be refused")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("reading a FIFO hung")
-	}
-	if _, err := f.tools["read_file"].Inspect(f.call(map[string]string{"path": "fifo"})); err == nil {
-		t.Error("a FIFO shouldn't be offered for approval")
-	}
-	if flags := f.inspect("list_files", map[string]string{"path": "."}); len(flags) != 0 {
-		t.Errorf("a directory is fine to list: %v", flags)
-	}
-	if _, err := f.run("read_file", map[string]string{"path": "."}); err == nil {
-		t.Error("a directory should be refused")
-	}
-	if _, err := f.run("read_file", map[string]string{"path": "/dev/zero"}); err == nil {
-		t.Error("a device should be refused")
-	}
-}
-
-func TestFlags(t *testing.T) {
-	f := newFixture(t)
-	f.write("open.txt", "x", 0o644)
-	f.write("private.txt", "x", 0o600)
-	f.write(filepath.Join(filepath.Dir(f.workdir), "outside.txt"), "x", 0o644)
-	if err := os.Symlink(filepath.Join(filepath.Dir(f.workdir), "outside.txt"), filepath.Join(f.workdir, "sneaky")); err != nil {
-		t.Fatal(err)
-	}
-	for path, want := range map[string][]string{
-		"open.txt":       nil,
-		"missing.txt":    nil,
-		"private.txt":    {FlagPrivate},
-		"../outside.txt": {FlagOutside},
-		"sneaky":         {FlagOutside},
-		"/etc/hostname":  {FlagOutside},
-	} {
-		got := f.inspect("read_file", map[string]string{"path": path})
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: flags = %v, want %v", path, got, want)
-		}
-	}
-}
-
-func TestBadArgumentsAreCaughtBeforeApproval(t *testing.T) {
-	f := newFixture(t)
-	cases := []struct {
-		tool string
-		args string
-	}{
-		{"read_file", `{}`},
-		{"read_file", `{"path":""}`},
-		{"read_file", `{"path":1}`},
-		{"read_file", `{"path":"a","extra":"b"}`},
-		{"read_file", `{"path":"a\u0000b"}`},
-		{"search_files", `{}`},
-		{"search_files", `{"pattern":"("}`},
-		{"list_files", `{"path":true}`},
-	}
-	for _, tc := range cases {
-		var args map[string]jsontext.Value
-		if err := json.Unmarshal([]byte(tc.args), &args); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.tools[tc.tool].Inspect(core.Call{Args: args, Workdir: f.workdir}); err == nil {
-			t.Errorf("%s %s: no error", tc.tool, tc.args)
-		}
-	}
-}
-
-func TestRelativePathsNeedAWorkdir(t *testing.T) {
-	f := newFixture(t)
-	call := f.call(map[string]string{"path": "a.txt"})
-	call.Workdir = ""
-	if _, err := f.tools["read_file"].Inspect(call); err == nil {
-		t.Error("expected an error")
-	}
-}
-
-func TestListFiles(t *testing.T) {
-	f := newFixture(t)
-	f.write("b.txt", "x", 0o644)
-	f.write("sub/inner.txt", "x", 0o644)
-	if err := os.Symlink("b.txt", filepath.Join(f.workdir, "a-link")); err != nil {
-		t.Fatal(err)
-	}
-	got, err := f.run("list_files", map[string]string{})
-	if want := "a-link -> b.txt\nb.txt\nsub/\n"; err != nil || got != want {
-		t.Errorf("got %q, %v", got, err)
-	}
-}
-
-func TestSearchFiles(t *testing.T) {
-	f := newFixture(t)
-	f.write("a.txt", "one\nneedle here\nthree\n", 0o644)
-	f.write("sub/b.txt", "a needle\n", 0o644)
-	f.write("private.txt", "needle\n", 0o600)
-	f.write("bin.dat", "needle\x00\n", 0o644)
-	f.write(".git/config", "needle\n", 0o644)
-	f.write("node_modules/x.js", "needle\n", 0o644)
-	f.write("big.txt", "needle\n"+strings.Repeat("x", 2<<20), 0o644)
-	if err := os.Symlink(f.key, filepath.Join(f.workdir, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("a.txt", filepath.Join(f.workdir, "link2")); err != nil {
-		t.Fatal(err)
-	}
-	got, err := f.run("search_files", map[string]string{"pattern": "need+le"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "a.txt:2:needle here\nsub/b.txt:1:a needle\nSkipped 3 files: 1 not world-readable, 1 large, 1 binary, 0 unreadable.\n"
-	if got != want {
-		t.Errorf("got:\n%s\nwant:\n%s", got, want)
-	}
-	if got, err := f.run("search_files", map[string]string{"pattern": "nothing like this"}); err != nil || !strings.HasPrefix(got, "No matches.") {
-		t.Errorf("got %q, %v", got, err)
-	}
-}
-
-func TestSearchNeverReturnsTheKey(t *testing.T) {
-	f := newFixture(t)
-	if err := os.Chmod(f.key, 0o644); err != nil { // even if its mode is wrong
-		t.Fatal(err)
-	}
-	call := f.call(map[string]string{"pattern": "the key", "path": filepath.Dir(f.key)})
-	out, err := f.tools["search_files"].Run(context.Background(), call)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(out), "the key") && !strings.HasPrefix(string(out), "No matches") {
-		t.Errorf("got %s", out)
-	}
-}
-
-func TestSearchStopsWhenCancelled(t *testing.T) {
-	f := newFixture(t)
-	f.write("a.txt", "x\n", 0o644)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := f.tools["search_files"].Run(ctx, f.call(map[string]string{"pattern": "x"})); err == nil {
-		t.Error("expected an error")
-	}
-}
-
-func TestSearchSkipComesFromTheSnapshot(t *testing.T) {
-	f := newFixture(t)
-	f.write(".git/config", "needle\n", 0o644)
-	f.write("vendor/x.txt", "needle\n", 0o644)
-	search := func(skip []string) string {
-		call := f.call(map[string]string{"pattern": "needle"})
-		call.Settings.SearchSkip = skip
-		out, err := f.tools["search_files"].Run(context.Background(), call)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(out)
-	}
-	if got := search([]string{"vendor"}); !strings.Contains(got, ".git/config") || strings.Contains(got, "vendor/") {
-		t.Errorf("skipping vendor: %s", got)
-	}
-	if got := search(nil); !strings.Contains(got, ".git/config") || !strings.Contains(got, "vendor/x.txt") {
-		t.Errorf("skipping nothing: %s", got)
-	}
-	def := string(f.tools["search_files"].Define(store.Settings{SearchSkip: []string{"vendor"}}))
-	if !strings.Contains(def, "Skips vendor,") {
-		t.Errorf("definition = %s", def)
-	}
-	if def := string(f.tools["search_files"].Define(store.Settings{})); strings.Contains(def, ".git") {
-		t.Errorf("definition = %s", def)
 	}
 }
 
@@ -334,426 +109,6 @@ func (f *fixture) read(path string) string {
 		f.t.Fatal(err)
 	}
 	return string(data)
-}
-
-func TestEditReplacesExactlyOneMatch(t *testing.T) {
-	f := newFixture(t)
-	f.write("a.txt", "one two two\n", 0o640)
-	edit := func(old, new string) (string, error) {
-		return f.run("edit_file", map[string]string{"path": "a.txt", "old_string": old, "new_string": new})
-	}
-	if _, err := edit("missing", "x"); err == nil {
-		t.Error("no match should fail")
-	}
-	if _, err := edit("two", "x"); err == nil || !strings.Contains(err.Error(), "2 times") {
-		t.Errorf("two matches: %v", err)
-	}
-	if f.read("a.txt") != "one two two\n" {
-		t.Error("a failed edit changed the file")
-	}
-	if _, err := edit("one", "uno"); err != nil {
-		t.Fatal(err)
-	}
-	if got := f.read("a.txt"); got != "uno two two\n" {
-		t.Errorf("file = %q", got)
-	}
-	if info, _ := os.Stat(filepath.Join(f.workdir, "a.txt")); info.Mode().Perm() != 0o640 {
-		t.Errorf("mode = %o", info.Mode().Perm())
-	}
-	entries, _ := os.ReadDir(f.workdir)
-	if len(entries) != 1 {
-		t.Errorf("left behind: %v", entries)
-	}
-}
-
-func TestEditKeepsWhatWasThere(t *testing.T) {
-	f := newFixture(t)
-	f.write("a.txt", "before\n", 0o644)
-	call := f.call(map[string]string{"path": "a.txt", "old_string": "before", "new_string": "after"})
-	kept := map[string]string{}
-	call.Keep = func(name string, data []byte) error {
-		kept[name] = string(data)
-		return nil
-	}
-	if _, err := f.tools["edit_file"].Run(context.Background(), call); err != nil {
-		t.Fatal(err)
-	}
-	if kept["before"] != "before\n" {
-		t.Errorf("kept = %v", kept)
-	}
-}
-
-func TestEditCreatesOnlyNewFiles(t *testing.T) {
-	f := newFixture(t)
-	if _, err := f.run("edit_file", map[string]string{"path": "new.txt", "old_string": "", "new_string": "hello"}); err != nil {
-		t.Fatal(err)
-	}
-	if f.read("new.txt") != "hello" {
-		t.Errorf("file = %q", f.read("new.txt"))
-	}
-	args := map[string]string{"path": "new.txt", "old_string": "", "new_string": "again"}
-	if _, err := f.tools["edit_file"].Inspect(f.call(args)); err == nil {
-		t.Error("an existing file shouldn't be offered as a create")
-	}
-	if _, err := f.run("edit_file", args); err == nil || f.read("new.txt") != "hello" {
-		t.Errorf("create over a file: %v, %q", err, f.read("new.txt"))
-	}
-	if _, err := f.run("edit_file", map[string]string{"path": "no/such/dir/x", "old_string": "", "new_string": "x"}); err == nil {
-		t.Error("a missing directory should fail")
-	}
-}
-
-func TestEditThroughASymlinkKeepsTheLink(t *testing.T) {
-	f := newFixture(t)
-	f.write("real.txt", "text\n", 0o644)
-	if err := os.Symlink("real.txt", filepath.Join(f.workdir, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.run("edit_file", map[string]string{"path": "link", "old_string": "text", "new_string": "changed"}); err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Lstat(filepath.Join(f.workdir, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Errorf("link: %v, %v", info, err)
-	}
-	if f.read("real.txt") != "changed\n" {
-		t.Errorf("file = %q", f.read("real.txt"))
-	}
-}
-
-func TestEditRefusesTheKey(t *testing.T) {
-	f := newFixture(t)
-	if err := os.Symlink(f.key, filepath.Join(f.workdir, "link")); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{f.key, "link"} {
-		args := map[string]string{"path": path, "old_string": "the key", "new_string": "x"}
-		if _, err := f.tools["edit_file"].Inspect(f.call(args)); err == nil {
-			t.Errorf("%s: offered for approval", path)
-		}
-		if _, err := f.run("edit_file", args); err == nil {
-			t.Errorf("%s: edited", path)
-		}
-	}
-	if data, _ := os.ReadFile(f.key); string(data) != "the key" {
-		t.Errorf("key file = %q", data)
-	}
-}
-
-func TestEditFlags(t *testing.T) {
-	f := newFixture(t)
-	outside := filepath.Dir(f.workdir)
-	if err := os.Symlink(outside, filepath.Join(f.workdir, "up")); err != nil {
-		t.Fatal(err)
-	}
-	// A new file under a symlinked directory is outside, though the path doesn't say so.
-	flags := f.inspect("edit_file", map[string]string{"path": "up/new.txt", "old_string": "", "new_string": "x"})
-	if !slices.Contains(flags, FlagOutside) {
-		t.Errorf("flags = %v", flags)
-	}
-	for _, args := range []map[string]string{
-		{"path": "a", "old_string": "x"},
-		{"path": "a", "new_string": "x"},
-		{"old_string": "x", "new_string": "y"},
-		{"path": "a", "old_string": "x", "new_string": "x"},
-	} {
-		if _, err := f.tools["edit_file"].Inspect(f.call(args)); err == nil {
-			t.Errorf("%v: no error", args)
-		}
-	}
-}
-
-func TestCommandRunsInTheWorkdirWithOnlyTheConfiguredEnvironment(t *testing.T) {
-	f := newFixture(t)
-	t.Setenv("TACK_SHOULD_NOT_LEAK", "secret-looking")
-	got, err := f.run("run_command", map[string]string{"command": "pwd; env | sort; cat; echo to-stderr >&2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, f.workdir+"\n") || !strings.Contains(got, "ONLY_THIS=yes") || !strings.Contains(got, "to-stderr") {
-		t.Errorf("output = %s", got)
-	}
-	if strings.Contains(got, "TACK_SHOULD_NOT_LEAK") {
-		t.Errorf("the environment leaked: %s", got)
-	}
-}
-
-func TestCommandNeverUsesTacksOwnDirectory(t *testing.T) {
-	f := newFixture(t)
-	for _, workdir := range []string{"", "relative"} {
-		call := f.call(map[string]string{"command": "pwd"})
-		call.Workdir = workdir
-		if out, err := f.tools["run_command"].Run(context.Background(), call); err == nil {
-			t.Errorf("workdir %q ran: %s", workdir, out)
-		}
-		if _, err := f.tools["run_command"].Inspect(call); err == nil {
-			t.Errorf("workdir %q was offered", workdir)
-		}
-	}
-}
-
-func TestCommandFlagIsPermanent(t *testing.T) {
-	f := newFixture(t)
-	if flags := f.inspect("run_command", map[string]string{"command": "true"}); !slices.Equal(flags, []string{FlagCommand}) {
-		t.Errorf("flags = %v", flags)
-	}
-}
-
-func TestCommandExitCodeIsReported(t *testing.T) {
-	f := newFixture(t)
-	got, err := f.run("run_command", map[string]string{"command": "echo out; exit 3"})
-	if err == nil || !strings.Contains(err.Error(), "exit code 3") || got != "out\n" {
-		t.Errorf("got %q, %v", got, err)
-	}
-}
-
-func TestCommandIsKilledWithItsChildren(t *testing.T) {
-	f := newFixture(t)
-	marker := filepath.Join(f.workdir, "still-running")
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	call := f.call(map[string]string{"command": "setsid bash -c 'sleep 1; touch " + marker + "' & echo started; wait"})
-	start := time.Now()
-	out, err := f.tools["run_command"].Run(ctx, call)
-	if err == nil || !strings.Contains(err.Error(), "stopped") || string(out) != "started\n" {
-		t.Errorf("got %q, %v", out, err)
-	}
-	if took := time.Since(start); took > 4*time.Second {
-		t.Errorf("took %s", took)
-	}
-	time.Sleep(1200 * time.Millisecond)
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("a child survived")
-	}
-}
-
-func TestTheSandboxHidesAndProtects(t *testing.T) {
-	f := newFixture(t)
-	outside := filepath.Join(filepath.Dir(f.workdir), "outside.txt")
-	f.write(outside, "outside\n", 0o644)
-	got, err := f.run("run_command", map[string]string{"command": strings.Join([]string{
-		"cat " + outside + " 2>&1 && echo READ-OUTSIDE",
-		"cat " + f.key + " 2>&1 && echo READ-KEY",
-		"touch /usr/nope 2>&1 && echo WROTE-USR",
-		"touch " + outside + "2 2>&1",
-		"touch here && echo WROTE-HERE",
-		"unshare -m true 2>&1 && echo MADE-NAMESPACE",
-		"(exec 3<>/dev/tcp/1.1.1.1/53) 2>&1 && echo CONNECTED",
-		"ls /sys/fs/cgroup 2>&1 && echo SAW-CGROUPS",
-		"true",
-	}, "; ")})
-	if err != nil {
-		t.Fatalf("%v: %s", err, got)
-	}
-	for _, bad := range []string{"READ-OUTSIDE\n", "READ-KEY\n", "WROTE-USR\n", "MADE-NAMESPACE\n", "CONNECTED\n", "SAW-CGROUPS\n"} {
-		if strings.Contains(got, bad) {
-			t.Errorf("%s:\n%s", bad, got)
-		}
-	}
-	if !strings.Contains(got, "WROTE-HERE") {
-		t.Errorf("couldn't write in the working directory:\n%s", got)
-	}
-	// The parents of the working directory are an empty tmpfs in the sandbox, so
-	// that touch may succeed there. What matters is that it doesn't reach the host.
-	if _, err := os.Stat(outside + "2"); err == nil {
-		t.Error("wrote outside")
-	}
-}
-
-func TestAKeyInsideTheWorkdirIsStillHidden(t *testing.T) {
-	f := newFixture(t)
-	inside := filepath.Join(f.workdir, "key-file")
-	f.write(inside, "the inside key", 0o600)
-	tools := map[string]core.Tool{}
-	for _, tool := range All(Options{Protected: []string{inside}}) {
-		tools[tool.Name] = tool
-	}
-	out, err := tools["run_command"].Run(context.Background(), f.call(map[string]string{"command": "cat key-file; ls -la key-file"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(out), "the inside key") {
-		t.Errorf("output = %s", out)
-	}
-}
-
-func TestReadOnlyPathsAreConfigured(t *testing.T) {
-	f := newFixture(t)
-	extra := filepath.Join(filepath.Dir(f.workdir), "tools-dir")
-	f.write(filepath.Join(extra, "note"), "shared\n", 0o644)
-	readable := filepath.Join(filepath.Dir(f.workdir), "writable")
-	f.write(filepath.Join(readable, "note"), "x", 0o644)
-	call := f.call(map[string]string{"command": "cat " + extra + "/note; touch " + extra + "/no 2>&1 | wc -l; touch " + readable + "/yes && echo wrote"})
-	call.Settings.SandboxReadOnly = append(slices.Clone(store.DefaultSandboxReadOnly), extra)
-	call.Settings.SandboxReadWrite = []string{readable}
-	out, err := f.tools["run_command"].Run(context.Background(), call)
-	if err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	if !strings.Contains(string(out), "shared") || !strings.Contains(string(out), "wrote") {
-		t.Errorf("output = %s", out)
-	}
-	if _, err := os.Stat(filepath.Join(extra, "no")); err == nil {
-		t.Error("wrote to a read-only path")
-	}
-}
-
-func TestNetworkIsOnlyThereWhenAllowed(t *testing.T) {
-	f := newFixture(t)
-	count := func(network bool) string {
-		call := f.call(map[string]string{"command": "wc -l < /proc/net/dev"})
-		call.Network = network
-		out, err := f.tools["run_command"].Run(context.Background(), call)
-		if err != nil {
-			t.Fatalf("%v: %s", err, out)
-		}
-		return string(out)
-	}
-	host, err := os.ReadFile("/proc/net/dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(string(host), "\n") <= 3 {
-		t.Skip("this machine only has loopback")
-	}
-	if off, on := count(false), count(true); off == on {
-		t.Errorf("the same interfaces either way: %q", off)
-	}
-}
-
-func TestTheSandboxArgumentsAreKept(t *testing.T) {
-	f := newFixture(t)
-	call := f.call(map[string]string{"command": "true"})
-	kept := map[string]string{}
-	call.Keep = func(name string, data []byte) error {
-		kept[name] = string(data)
-		return nil
-	}
-	if _, err := f.tools["run_command"].Run(context.Background(), call); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(kept["sandbox"], "--unshare-all") {
-		t.Errorf("kept = %v", kept)
-	}
-}
-
-func TestLimitsComeFromSettings(t *testing.T) {
-	f := newFixture(t)
-	f.write("big.txt", "0123456789", 0o644)
-	call := f.call(map[string]string{"path": "big.txt"})
-	call.Settings.MaxReadBytes = 4
-	out, err := f.tools["read_file"].Run(context.Background(), call)
-	if string(out) != "0123" || err == nil {
-		t.Errorf("got %q, %v", out, err)
-	}
-}
-
-func TestEditIsMarkedAsTacksOwnMessage(t *testing.T) {
-	f := newFixture(t)
-	if !f.tools["edit_file"].TackWritten || f.tools["run_command"].TackWritten || f.tools["read_file"].TackWritten {
-		t.Error("only edit_file writes its own message")
-	}
-	for name, tool := range f.tools {
-		if !tool.NeedsWorkdir && name != "run_code" {
-			t.Errorf("%s doesn't need a working directory", name)
-		}
-	}
-}
-
-func TestBackgroundChildrenCantHangACommand(t *testing.T) {
-	f := newFixture(t)
-	marker := filepath.Join(f.workdir, "left-running")
-	start := time.Now()
-	got, _ := f.run("run_command", map[string]string{"command": "(sleep 8; touch " + marker + ") & echo done"})
-	if !strings.Contains(got, "done") {
-		t.Errorf("output = %q", got)
-	}
-	if took := time.Since(start); took > 7*time.Second {
-		t.Errorf("took %s", took)
-	}
-}
-
-func TestBadCommandsAreCaughtBeforeApproval(t *testing.T) {
-	f := newFixture(t)
-	for _, args := range []map[string]string{{"command": ""}, {"command": "  "}, {"command": "a\x00b"}, {"cmd": "ls"}} {
-		if _, err := f.tools["run_command"].Inspect(f.call(args)); err == nil {
-			t.Errorf("%v: no error", args)
-		}
-	}
-}
-
-func TestGitStaysReadOnly(t *testing.T) {
-	f := newFixture(t)
-	dir := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = f.workdir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	dir("init", "-q")
-	f.write("a.txt", "a\n", 0o644)
-	got, err := f.run("run_command", map[string]string{"command": strings.Join([]string{
-		"touch .git/hooks/pre-commit 2>/dev/null && echo WROTE-HOOK",
-		"echo '[core]' >> .git/config 2>/dev/null && echo WROTE-CONFIG",
-		"git add a.txt 2>/dev/null && echo ADDED",
-		"git status --short",
-		"touch b.txt && echo WROTE-SOURCE",
-	}, "; ")})
-	if err != nil {
-		t.Fatalf("%v: %s", err, got)
-	}
-	for _, bad := range []string{"WROTE-HOOK\n", "WROTE-CONFIG\n", "ADDED\n"} {
-		if strings.Contains(got, bad) {
-			t.Errorf("%s:\n%s", bad, got)
-		}
-	}
-	if !strings.Contains(got, "?? a.txt") || !strings.Contains(got, "WROTE-SOURCE") {
-		t.Errorf("git status and source changes should still work:\n%s", got)
-	}
-	if _, err := os.Stat(filepath.Join(f.workdir, ".git/hooks/pre-commit")); err == nil {
-		t.Error("a hook reached the host")
-	}
-}
-
-func TestStoppingACommandAsksFirstWithACgroup(t *testing.T) {
-	if os.Getenv("TACK_TEST_CGROUP") == "" {
-		t.Skip("needs a delegated cgroup")
-	}
-	groups, err := cgroup.Setup()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := newFixture(t)
-	tools := map[string]core.Tool{}
-	for _, tool := range All(Options{Cgroups: groups}) {
-		tools[tool.Name] = tool
-	}
-	run := func(command string, timeout time.Duration) (string, error, time.Duration) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		call := f.call(map[string]string{"command": command})
-		call.Execution = store.NewID()
-		call.Settings.StopGraceSeconds = 2
-		start := time.Now()
-		out, err := tools["run_command"].Run(ctx, call)
-		return string(out), err, time.Since(start)
-	}
-	// A clean exit gets a chance.
-	got, err, took := run("trap 'echo cleaning up; exit 0' TERM; echo started; sleep 30 & wait", 300*time.Millisecond)
-	if err == nil || !strings.Contains(got, "cleaning up") || took > 1500*time.Millisecond {
-		t.Errorf("clean: %q, %v, %s", got, err, took)
-	}
-	// One that ignores the signal is killed after the grace period, children and all.
-	marker := filepath.Join(f.workdir, "survived")
-	got, err, took = run("trap '' TERM; setsid bash -c 'trap \"\" TERM; sleep 4; touch "+marker+"' & sleep 30", 300*time.Millisecond)
-	if err == nil || took < 2*time.Second || took > 5*time.Second {
-		t.Errorf("ignored: %q, %v, %s", got, err, took)
-	}
-	time.Sleep(4 * time.Second)
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("a child survived")
-	}
 }
 
 func runCode(t *testing.T, f *fixture, code string) (string, error) {
@@ -841,22 +196,14 @@ print("tmp", open("/tmp/mine").read())
 	}
 }
 
-func TestCodeNeedsNoWorkingDirectoryAndIgnoresSettings(t *testing.T) {
+func TestCodeStillNeedsApprovalAndIsCapped(t *testing.T) {
 	f := newFixture(t)
-	if _, err := os.Stat(python); err != nil {
-		t.Skip("no python here")
+	if f.tools["run_code"].NoApproval {
+		t.Error("it should still need approval")
 	}
-	// A conversation's settings can widen what commands see, but never what code sees.
-	call := f.call(map[string]string{"language": "python", "code": "import os\nprint(os.path.exists('/etc/passwd'), os.path.exists(" + fmt.Sprintf("%q", f.workdir) + "))"})
-	call.Workdir = ""
-	call.Settings.SandboxReadOnly = []string{"/etc", f.workdir}
-	call.Network = true
-	out, err := f.tools["run_code"].Run(context.Background(), call)
-	if err != nil || string(out) != "False False\n" {
-		t.Errorf("out = %q, %v", out, err)
-	}
-	if f.tools["run_code"].NeedsWorkdir || f.tools["run_code"].NetworkOption || f.tools["run_code"].NoApproval {
-		t.Error("it should need no directory, offer no network, and still need approval")
+	got, err := runCode(t, f, "import sys\nsys.stdout.write('x' * (17 << 20))")
+	if len(got) != outputBytes || err == nil || !strings.Contains(err.Error(), "were dropped") {
+		t.Errorf("capped = %d bytes, %v", len(got), err)
 	}
 }
 
@@ -872,17 +219,10 @@ func TestCodeLimitsHold(t *testing.T) {
 	if err != nil || strings.Contains(got, "WROTE") {
 		t.Errorf("big = %q, %v", got, err)
 	}
-	// Output is capped, and it says so.
-	call := f.call(map[string]string{"language": "python", "code": "print('y' * 100000)"})
-	call.Settings.MaxReadBytes = 1000
-	out, err := f.tools["run_code"].Run(context.Background(), call)
-	if len(out) != 1000 || err == nil || !strings.Contains(err.Error(), "were dropped") {
-		t.Errorf("capped = %d bytes, %v", len(out), err)
-	}
 	// Stopping it ends everything it started.
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	call = f.call(map[string]string{"language": "python", "code": "import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\ntime.sleep(60)"})
+	call := f.call(map[string]string{"language": "python", "code": "import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\ntime.sleep(60)"})
 	started := time.Now()
 	_, err = f.tools["run_code"].Run(ctx, call)
 	if err == nil || !strings.Contains(err.Error(), "the code was stopped") {
@@ -992,15 +332,19 @@ func TestCodeOutputStaysInOrder(t *testing.T) {
 
 // keeper runs code the way a conversation does, carrying what's kept from call to call.
 type keeper struct {
-	f     *fixture
-	kept  []byte
-	files map[string][]byte
-	saved int
+	f       *fixture
+	kept    []byte
+	files   map[string][]byte
+	context []byte
+	saved   int
 }
 
 func (k *keeper) run(code string, ctx context.Context) (string, error) {
 	call := k.f.call(map[string]string{"language": "python", "code": code})
 	call.Workspace, call.Files = k.kept, k.files
+	if k.context != nil {
+		call.Context = func() ([]byte, error) { return k.context, nil }
+	}
 	call.Execution = store.NewID()
 	call.SaveWorkspace = func(data []byte) error {
 		k.kept = data
@@ -1123,18 +467,20 @@ func TestCodeThatBreaksSavingLosesOnlyItsOwnFiles(t *testing.T) {
 
 func TestCodeCanReadTheConversationButNotChangeIt(t *testing.T) {
 	f := newFixture(t)
-	k := &keeper{f: f, files: map[string][]byte{"notes.json": []byte(`[{"kind":"plan","key":"a","text":"b"}]`), "scratch.json": []byte(`{"x":"y"}`)}}
+	k := &keeper{f: f, files: map[string][]byte{"notes.json": []byte(`[{"kind":"plan","key":"a","text":"b"}]`), "scratch.json": []byte(`{"x":"y"}`)},
+		context: []byte(`{"request":{"model":"m"},"reply":{"role":"assistant"}}`)}
 	got, err := k.run(`
 import json
-print(json.load(open("/conversation/notes.json"))[0]["text"], json.load(open("/conversation/scratch.json"))["x"])
-for path in ["/conversation/notes.json", "/conversation/new"]:
+context = json.load(open("/conversation/context.json"))
+print(json.load(open("/conversation/notes.json"))[0]["text"], json.load(open("/conversation/scratch.json"))["x"], context["request"]["model"], context["reply"]["role"])
+for path in ["/conversation/notes.json", "/conversation/context.json", "/conversation/new"]:
     try:
         open(path, "w")
         print("REACHED", path)
     except OSError:
         pass
 `, context.Background())
-	if err != nil || got != "b y\n" {
+	if err != nil || got != "b y m assistant\n" {
 		t.Errorf("%q, %v", got, err)
 	}
 }
@@ -1152,15 +498,5 @@ func TestBadCodeIsCaughtBeforeApproval(t *testing.T) {
 		if _, err := f.tools["run_code"].Inspect(f.call(args)); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
-	}
-}
-
-func TestCommandOutputIsCappedWhateverItsSize(t *testing.T) {
-	f := newFixture(t)
-	call := f.call(map[string]string{"command": "head -c 5000000 /dev/zero"})
-	call.Settings.MaxReadBytes = 1000
-	out, err := f.tools["run_command"].Run(context.Background(), call)
-	if len(out) != 1000 || err == nil || !strings.Contains(err.Error(), "were dropped") {
-		t.Errorf("capped = %d bytes, %v", len(out), err)
 	}
 }

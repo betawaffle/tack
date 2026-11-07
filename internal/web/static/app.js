@@ -17,9 +17,6 @@ const views = new Map();
 const settingsOpen = new Set();
 // The fork being set up, if any: which conversation, and how many items it keeps.
 let draftFork = null;
-// Which conversations have their tool definitions showing, and those definitions.
-const definitionsOpen = new Set();
-const definitionsShown = new Map();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -579,7 +576,7 @@ function setControls(id, running) {
     box.append(cancel);
   }
   if (running.tool) {
-    box.append(button("Stop command", "mini net", () => postJSON(`/api/conversations/${id}/tools/${running.tool}/stop`)));
+    box.append(button("Stop the tool", "mini net", () => postJSON(`/api/conversations/${id}/tools/${running.tool}/stop`)));
   }
 }
 
@@ -778,7 +775,7 @@ function renderToolCall(call, decision) {
   if (args?.language) head.append(el("span", "tag", args.language));
   head.append(el("span", "tag", STATE_LABELS[call.state] || call.state));
   for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
-  if (call.network) head.append(el("span", "tag unused tool-flag", "Network allowed"));
+  if (call.custom) head.append(el("span", "tag", "custom"));
   if (call.ran_automatically) head.append(el("span", "tag", "Ran without asking"));
   head.append(el("span", "tool-preview", callPreview(call)), el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
   node.append(head);
@@ -816,15 +813,17 @@ function renderToolCall(call, decision) {
     // With one call, the buttons say it all. With several, they start out allowed.
     box.checked = true;
     label.hidden = decision.calls.length === 1;
-    label.append(box, el("span", "", DECISION_TEXT[decision.kind].allow));
+    label.append(box, el("span", "", call.custom ? "Answer this call" : DECISION_TEXT[decision.kind].allow));
     node.append(label);
-    if (call.network_option) {
-      const network = el("label", "tool-allow tool-network");
-      const netBox = el("input");
-      netBox.type = "checkbox";
-      netBox.dataset.network = call.id;
-      network.append(netBox, el("span", "", "Allow network for this call"));
-      node.append(network);
+    if (call.custom) {
+      // Nothing runs for a custom tool. What's written here is exactly what the model gets.
+      const result = el("textarea", "custom-result");
+      result.rows = 3;
+      result.spellcheck = false;
+      result.dataset.result = call.id;
+      result.placeholder = "The result the model gets";
+      result.setAttribute("aria-label", `Result of ${call.name}`);
+      node.append(el("div", "hint", "Result"), result);
     }
   }
   return node;
@@ -859,7 +858,8 @@ function decisionCard(conv) {
   const card = el("div", "decision-card");
   const single = decision.calls.length === 1;
   const row = el("div", "row decision-row");
-  row.append(el("strong", "", single ? text.single : text.title));
+  const answersOnly = decision.kind === "tool_calls" && conv.items.flatMap((item) => item.tool_calls || []).filter((c) => decision.calls.includes(c.id)).every((c) => c.custom);
+  row.append(el("strong", "", answersOnly ? (single ? "Answer this call?" : "Answer these calls?") : single ? text.single : text.title));
   const label = el("details", "denial");
   label.append(el("summary", "", "What the model's told about anything denied"));
   const area = el("textarea");
@@ -869,18 +869,24 @@ function decisionCard(conv) {
   const ticked = () => [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice);
   card.dataset.decision = decision.id;
   const answer = async (allow, shorten, autoRun) => {
-    const network = [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network).filter((id) => allow.includes(id));
-    await call(conv.id, undefined, { id: decision.id, allow, network, shorten, autoRun, denial_text: area.value });
+    const results = {};
+    for (const box of $("list").querySelectorAll("textarea[data-result]")) {
+      if (allow.includes(box.dataset.result)) results[box.dataset.result] = box.value;
+    }
+    await call(conv.id, undefined, { id: decision.id, allow, results, shorten, autoRun, denial_text: area.value });
   };
   const go = button("", "mini spends", () => answer(ticked()));
   go.id = "decide";
+  // Answering a custom tool's call runs nothing, so the button says so when that's all it does.
+  const custom = new Set(conv.items.flatMap((item) => item.tool_calls || []).filter((c) => c.custom).map((c) => c.id));
   const relabel = () => {
     const allowed = ticked().length;
     const denied = decision.calls.length - allowed;
+    const verb = ticked().every((id) => custom.has(id)) ? "Answer" : text.verb;
     if (!allowed) go.textContent = "Deny all";
-    else if (single) go.textContent = text.verb;
-    else if (!denied) go.textContent = `${text.verb} ${allowed}`;
-    else go.textContent = `${text.verb} ${allowed}, deny ${denied}`;
+    else if (single) go.textContent = verb;
+    else if (!denied) go.textContent = `${verb} ${allowed}`;
+    else go.textContent = `${verb} ${allowed}, deny ${denied}`;
   };
   relabel();
   card.addEventListener("refresh", relabel);
@@ -1179,14 +1185,21 @@ function renderSystem(item) {
   const target = `system:${item.message}`;
   editable(node, target, () => {
     const draft = Boolean(draftFork);
-    const form = editor(item.pending ? item.pending.text : (item.removed ? "" : item.text), async ({ text }) => {
+    const initial = item.pending ? item.pending.text : (item.removed ? "" : item.text);
+    // The tools go with the first system message, which is where models are told about them.
+    const conv = draftFork ? draftFork.conv : shown.conv;
+    const first = conv?.items.find((i) => i.role === "system");
+    const tools = first && first.message === item.message ? toolsPanel(conv, true) : null;
+    const form = editor(initial, async ({ text }) => {
+      if (tools?.changed()) await tools.hold();
       if (draft) {
         stageEdit(target, { text }, () => node.replaceWith(renderSystem(stagedItem(item))));
         return;
       }
-      await postConversation(id, `system/${item.message}/edits`, { text });
+      if (text !== initial || !tools) await postConversation(id, `system/${item.message}/edits`, { text });
       await show(id);
     }, () => form.remove(), draft);
+    if (tools) form.querySelector(":scope > textarea").after(tools);
     node.append(form);
     return form;
   });
@@ -1298,7 +1311,7 @@ function forkSettingsPanel(conv) {
     area.value = JSON.stringify(conv.config_settings, null, 2);
   }));
   node.append(area, el("div", "hint", "These take effect when the fork starts."), row);
-  if (conv.tools) node.append(definitionsPanel(conv));
+  node.append(toolsPanel(conv));
   return node;
 }
 
@@ -1329,37 +1342,29 @@ function settingsPanel(conv) {
     }),
   );
   node.append(area, el("div", "hint", "Changes are held until you apply them."), row);
-  if (conv.tools) {
-    // This one applies straight away: it only changes whether to ask next time.
-    const label = el("label", "check");
-    const auto = el("input");
-    auto.type = "checkbox";
-    auto.id = "conv-auto-run";
-    auto.checked = Boolean(conv.settings.auto_run_code);
-    auto.disabled = Boolean(conv.pending_settings);
-    auto.addEventListener("change", async () => {
-      const proposal = await postJSON(`/api/conversations/${conv.id}/settings`, { ...conv.settings, auto_run_code: auto.checked });
-      await postJSON(`/api/conversations/${conv.id}/settings/${(await proposal.json()).proposal}/apply`);
-      await show(conv.id);
-    });
-    label.append(auto, "Run code without asking");
-    node.append(label);
-  }
-  if (conv.tools) node.append(definitionsPanel(conv));
+  node.append(toolsPanel(conv));
   const again = el("div", "row");
   again.append(button("Start another like this", "mini net", () => startLike(conv)));
   node.append(again);
   if (conv.pending_settings) {
     const pending = el("div", "pending");
-    pending.append(
-      exact(JSON.stringify(conv.pending_settings.settings, null, 2)),
-      el("div", "hint", "Changing the model, host or tool settings means the next call misses the cache, usually from the start."),
-    );
+    if (conv.pending_settings.tools) {
+      const definitions = conv.pending_settings.definitions ?? [];
+      pending.append(
+        el("div", "hint", definitions.length ? "The tools would become these, in order:" : "The conversation would offer no tools."),
+        exact(definitions.length ? JSON.stringify(definitions, null, 2) : ""),
+        el("div", "hint", "Tools are part of the start of every request, so the next call would miss the whole cache."),
+      );
+    } else {
+      pending.append(
+        exact(JSON.stringify(conv.pending_settings.settings, null, 2)),
+        el("div", "hint", "Changing the model, host or tool settings means the next call misses the cache, usually from the start."),
+      );
+    }
     const actions = el("div", "row");
     actions.append(
       button("Apply", "mini primary net", async () => {
         await postConversation(conv.id, `settings/${conv.pending_settings.id}/apply`);
-        definitionsShown.delete(conv.id);
         await show(conv.id);
       }),
       button("Discard", "mini net", async () => {
@@ -1370,36 +1375,6 @@ function settingsPanel(conv) {
     pending.append(actions);
     node.append(pending);
   }
-  return node;
-}
-
-// The exact definitions a conversation sends, fetched when they're opened.
-function definitionsPanel(conv) {
-  const node = el("details", "definitions");
-  node.open = definitionsOpen.has(conv.id);
-  const body = el("div");
-  const fill = () => {
-    body.replaceChildren(exact(definitionsShown.get(conv.id) ?? "Loading…"));
-  };
-  node.append(el("summary", "", "Tool definitions it sends"), body);
-  fill();
-  node.addEventListener("toggle", async () => {
-    if (!node.open) {
-      definitionsOpen.delete(conv.id);
-      definitionsShown.delete(conv.id);
-      return;
-    }
-    definitionsOpen.add(conv.id);
-    // A redrawn panel that's already open fires this too.
-    if (definitionsShown.has(conv.id)) return;
-    try {
-      const res = await api(`/api/conversations/${conv.id}/tools`);
-      definitionsShown.set(conv.id, JSON.stringify(await res.json(), null, 2));
-    } catch (err) {
-      definitionsShown.set(conv.id, String(err.message || err));
-    }
-    fill();
-  });
   return node;
 }
 
@@ -1632,6 +1607,7 @@ async function setAllowance(pico) {
 // Whatever a settings box being set up says, the line under the message box follows.
 document.addEventListener("input", (event) => {
   if (event.target !== stagedSettingsBox()) return;
+  refreshQuick();
   try {
     const usd = JSON.parse(event.target.value).budget_usd;
     if (usd > 0) spendInfo.allowance = Math.round(usd * 1e12);
@@ -1647,10 +1623,12 @@ function showMeta(conv) {
   const stats = conv.items.filter((i) => i.stats).map((i) => i.stats);
   const parts = [conv.model.replace(/^.*\//, "")];
   if (conv.host) parts.push(conv.host);
+  if (conv.settings?.reasoning_effort) parts.push(`effort ${conv.settings.reasoning_effort}`);
   if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
   parts.push(`this month: ${money(conv.budget.period_here_pico)} here, ${money(conv.budget.period_all_pico)} all of tack`);
   $("meta").replaceChildren(...parts.map((p) => el("span", "", p)));
+  loadQuickChoices().then(refreshQuick).catch(ignoreUnreachable);
 }
 
 async function show(id, polling, force) {
@@ -1749,250 +1727,6 @@ async function startNew() {
   shown = { id: null, revision: 0, busy: false, conv: null };
   refreshMessageFields();
   await refreshList();
-}
-
-// The start panel. The checkboxes build the text, and the text is what gets sent.
-// Once it's edited by hand, the checkboxes stop applying until it's reset.
-let start = null;
-
-// Tools that need a working directory drop out without one, and only if none are
-// left does the conversation count as having no tools.
-function offersTools() {
-  const workdir = $("workdir")?.value ?? "";
-  return start.tools && start.defaults.tools.some((t) => !t.no_approval && !start.leftOut.has(t.name) && (workdir || !t.needs_workdir));
-}
-
-function chosenSections() {
-  return start.defaults.sections.filter((s) => {
-    if (s.for === "tools") return offersTools();
-    if (s.for === "no-tools") return !offersTools();
-    if (s.for === "workdir") return offersTools() && Boolean($("workdir")?.value);
-    return !start.off.has(s.name);
-  });
-}
-
-function composePrompt() {
-  const workdir = $("workdir")?.value ?? "";
-  return chosenSections().map((s) => s.text.replaceAll("{{workdir}}", workdir)).join("\n\n");
-}
-
-function isEdited() {
-  return $("system-prompt").value !== composePrompt();
-}
-
-function refreshPrompt() {
-  $("system-prompt").value = composePrompt();
-  markEdited();
-}
-
-function markEdited() {
-  const edited = isEdited();
-  for (const box of $("prompt-options").querySelectorAll("input[data-section]")) box.disabled = edited;
-  $("prompt-reset").hidden = !edited;
-}
-
-function setupStart(defaults) {
-  defaults.tools = defaults.tools || [];
-  start = { defaults, tools: defaults.tools.length > 0, off: new Set(), leftOut: new Set(), editors: new Map() };
-  setupStartDetails();
-  const options = $("prompt-options");
-  options.replaceChildren();
-  if (start.tools) {
-    const row = el("div", "prompt-row");
-    const offer = el("label", "check");
-    const box = el("input");
-    box.type = "checkbox";
-    box.id = "offer-tools";
-    box.checked = true;
-    offer.append(box, "Offer tools");
-    const autoRun = el("label", "check");
-    const autoRunBox = el("input");
-    autoRunBox.type = "checkbox";
-    autoRunBox.id = "start-auto-run";
-    autoRun.append(autoRunBox, "Run code without asking");
-    autoRunBox.addEventListener("change", () => {
-      const text = $("start-settings");
-      const parsed = JSON.parse(text.value);
-      if (autoRunBox.checked) parsed.auto_run_code = true;
-      else delete parsed.auto_run_code;
-      text.value = JSON.stringify(parsed, null, 2);
-    });
-    const where = el("input");
-    where.id = "workdir";
-    where.type = "text";
-    where.value = defaults.workdir;
-    where.setAttribute("aria-label", "Working directory");
-    where.placeholder = "Working directory. Tools that need one are left out without it";
-    box.addEventListener("change", () => {
-      const edited = isEdited();
-      start.tools = box.checked;
-      where.disabled = !box.checked;
-      if (!edited) refreshPrompt();
-      else markEdited();
-    });
-    where.addEventListener("input", () => {
-      // Compare against the old value first, so a hand edit isn't overwritten.
-      const typed = where.value;
-      where.value = start.workdir ?? defaults.workdir;
-      const edited = isEdited();
-      where.value = typed;
-      start.workdir = typed;
-      if (!edited) refreshPrompt();
-      else markEdited();
-    });
-    row.append(offer, autoRun, where);
-    options.append(row);
-  }
-  const row = el("div", "prompt-row");
-  for (const section of defaults.sections) {
-    if (section.for) continue;
-    const label = el("label", "check");
-    const box = el("input");
-    box.type = "checkbox";
-    box.checked = true;
-    box.dataset.section = section.name;
-    label.title = section.text;
-    box.addEventListener("change", () => {
-      if (box.checked) start.off.delete(section.name);
-      else start.off.add(section.name);
-      refreshPrompt();
-    });
-    label.append(box, section.name);
-    row.append(label);
-  }
-  const reset = button("Use the sections again", "mini", refreshPrompt);
-  reset.id = "prompt-reset";
-  row.append(reset);
-  options.append(row);
-  refreshPrompt();
-}
-
-// The tools and settings a new conversation starts with. Each description gets its
-// own box, so editing one doesn't mean writing JSON, and the tool's definition is
-// otherwise left exactly as it came.
-function setupStartDetails() {
-  const area = $("start-details");
-  area.replaceChildren();
-  if (start.tools) {
-    const tools = el("details", "start-settings");
-    tools.append(el("summary", "", "Tools and their descriptions"));
-    for (const tool of start.defaults.tools) tools.append(toolEditor(tool));
-    tools.append(el("div", "hint", "This is what the model is told about each tool. An empty box sends no description."));
-    area.append(tools);
-  }
-  const settings = el("details", "start-settings");
-  settings.append(el("summary", "", "Settings"));
-  const text = el("textarea");
-  text.id = "start-settings";
-  text.rows = 12;
-  text.spellcheck = false;
-  text.setAttribute("aria-label", "Settings for this conversation");
-  text.value = JSON.stringify(start.defaults.settings, null, 2);
-  settings.append(text);
-  area.append(settings);
-  // A box for the one setting worth having to hand. The settings text stays what counts.
-  text.addEventListener("input", syncAutoRunBox);
-  queueMicrotask(syncAutoRunBox);
-}
-
-function toolEditor(tool) {
-  const fn = tool.definition.function;
-  const node = el("div", "tool-editor");
-  const offer = el("label", "check");
-  const box = el("input");
-  box.type = "checkbox";
-  box.checked = true;
-  box.dataset.tool = tool.name;
-  box.addEventListener("change", () => setToolOffered(tool.name, box.checked));
-  offer.append(box, tool.name);
-  node.append(offer);
-  const describe = (label, value) => {
-    const area = el("textarea");
-    area.value = value ?? "";
-    area.rows = Math.max(2, Math.ceil(area.value.length / 80) + 1);
-    area.spellcheck = false;
-    area.setAttribute("aria-label", label);
-    node.append(el("div", "hint", label), area);
-    return area;
-  };
-  const editor = { tool, box, description: describe(`${tool.name} description`, fn.description), parameters: new Map() };
-  editor.description.dataset.description = tool.name;
-  for (const [name, property] of Object.entries(fn.parameters?.properties ?? {})) {
-    editor.parameters.set(name, describe(`${tool.name}: ${name}`, property.description));
-  }
-  start.editors.set(tool.name, editor);
-  return node;
-}
-
-function setToolOffered(name, offered) {
-  const edited = isEdited();
-  if (offered) start.leftOut.delete(name);
-  else start.leftOut.add(name);
-  if (!edited) refreshPrompt();
-  else markEdited();
-}
-
-// editedDefinition is the tool's definition with what's in the boxes, or null if
-// that's no different. Keys keep their order, so nothing else about it changes.
-function editedDefinition(editor) {
-  const next = structuredClone(editor.tool.definition);
-  const place = (holder, value) => {
-    if (value === "") delete holder.description;
-    else holder.description = value;
-  };
-  place(next.function, editor.description.value);
-  for (const [name, area] of editor.parameters) place(next.function.parameters.properties[name], area.value);
-  return JSON.stringify(next) === JSON.stringify(editor.tool.definition) ? null : next;
-}
-
-function newConversationBody() {
-  const edited = isEdited();
-  const definitions = {};
-  for (const [name, editor] of start.editors) {
-    const definition = editedDefinition(editor);
-    if (definition && !start.leftOut.has(name)) definitions[name] = definition;
-  }
-  return {
-    system: $("system-prompt").value,
-    sections: edited ? [] : chosenSections().map((s) => s.name),
-    tools: start.tools,
-    workdir: start.tools ? $("workdir").value : "",
-    leave_out: [...start.leftOut],
-    definitions,
-    // Left alone, the config decides when the conversation starts, not when the
-    // page was loaded.
-    settings: $("start-settings").value === JSON.stringify(start.defaults.settings, null, 2) ? undefined : JSON.parse($("start-settings").value),
-  };
-}
-
-// startLike opens the start panel set up the way a conversation was, to run it again.
-async function startLike(conv) {
-  const res = await api(`/api/conversations/${conv.id}/tools`);
-  const definitions = await res.json();
-  await startNew();
-  const first = conv.items[0];
-  if (start.tools) {
-    const offered = conv.tools;
-    if ($("offer-tools").checked !== offered) $("offer-tools").click();
-    if (conv.workdir) {
-      $("workdir").value = conv.workdir;
-      $("workdir").dispatchEvent(new Event("input"));
-    }
-    for (const [name, editor] of start.editors) {
-      const used = definitions.find((d) => d.function.name === name);
-      const absent = offered && !used && (conv.workdir || !editor.tool.needs_workdir);
-      if (editor.box.checked === Boolean(absent)) editor.box.click();
-      if (!used) continue;
-      editor.description.value = used.function.description ?? "";
-      for (const [parameter, area] of editor.parameters) {
-        area.value = used.function.parameters?.properties?.[parameter]?.description ?? "";
-      }
-    }
-  }
-  $("start-settings").value = JSON.stringify(conv.settings, null, 2);
-  $("start-settings").dispatchEvent(new Event("input"));
-  $("system-prompt").value = first && first.role === "system" ? first.text : "";
-  markEdited();
 }
 
 function ignoreUnreachable(err) {
@@ -2171,7 +1905,7 @@ async function call(id, message, decision) {
     pinToTop(shownUser ?? reply.node);
     let res;
     if (decision) {
-      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, network: decision.network, shorten: decision.shorten, auto_run_code: decision.autoRun, denial_text: decision.denial_text }, expected);
+      res = await postJSON(`/api/conversations/${id}/decisions/${decision.id}`, { allow: decision.allow, results: decision.results, shorten: decision.shorten, auto_run_code: decision.autoRun, denial_text: decision.denial_text }, expected);
     } else if (message !== undefined) {
       res = await postJSON(`/api/conversations/${id}/messages`, message, expected);
     } else {
@@ -2265,6 +1999,7 @@ async function startFork() {
   location.hash = id;
   setOpenMode(true);
   for (const [target, values] of edits) {
+    if (target === "tools") continue;
     const [kind, name] = target.split(/:(.*)/s);
     if (kind === "system") {
       const edit = await postJSON(`/api/conversations/${id}/system/${name}/edits`, { text: values.text });
@@ -2277,6 +2012,10 @@ async function startFork() {
   }
   if (settings) {
     const proposal = await postJSON(`/api/conversations/${id}/settings`, settings);
+    await postJSON(`/api/conversations/${id}/settings/${(await proposal.json()).proposal}/apply`);
+  }
+  if (edits.has("tools")) {
+    const proposal = await postJSON(`/api/conversations/${id}/tools`, { tools: edits.get("tools").offers });
     await postJSON(`/api/conversations/${id}/settings/${(await proposal.json()).proposal}/apply`);
   }
   await show(id);
@@ -2494,8 +2233,6 @@ $("list").addEventListener("change", (event) => {
     document.querySelector(".decision-card")?.dispatchEvent(new Event("refresh"));
   }
 });
-
-$("system-prompt").addEventListener("input", markEdited);
 
 $("reload").addEventListener("click", async () => {
   const note = $("reload-note");
@@ -2773,7 +2510,7 @@ function captureConversation() {
       id: card.dataset.decision,
       denial: card.querySelector("textarea").value,
       allow: [...$("list").querySelectorAll("input[data-choice]:checked")].map((b) => b.dataset.choice),
-      network: [...$("list").querySelectorAll("input[data-network]:checked")].map((b) => b.dataset.network),
+      results: Object.fromEntries([...$("list").querySelectorAll("textarea[data-result]")].map((b) => [b.dataset.result, b.value])),
     },
     budget: $("budget-amount") && { value: $("budget-amount").value, unit: $("budget-amount").dataset.unit },
   };
@@ -2796,58 +2533,12 @@ function restoreConversation(staged) {
       for (const box of $("list").querySelectorAll(`input[data-${attr}]`)) box.checked = ids.includes(box.dataset[attr]);
     };
     tick("choice", staged.decision.allow);
-    tick("network", staged.decision.network);
+    for (const box of $("list").querySelectorAll("textarea[data-result]")) {
+      if (staged.decision.results?.[box.dataset.result] !== undefined) box.value = staged.decision.results[box.dataset.result];
+    }
     card.dispatchEvent(new Event("refresh"));
   }
   if ($("budget-amount") && staged.budget) $("budget-amount").restore(staged.budget.value, staged.budget.unit);
-}
-
-function syncAutoRunBox() {
-  const box = $("start-auto-run");
-  if (!box) return;
-  try {
-    box.checked = Boolean(JSON.parse($("start-settings").value).auto_run_code);
-  } catch {
-    // It's being edited, and the box can catch up.
-  }
-}
-
-function captureStart() {
-  const tools = {};
-  for (const [name, editor] of start.editors) {
-    tools[name] = { description: editor.description.value, parameters: Object.fromEntries([...editor.parameters].map(([p, area]) => [p, area.value])) };
-  }
-  return {
-    system: $("system-prompt").value,
-    tools: start.tools,
-    workdir: $("workdir")?.value,
-    off: [...start.off],
-    leftOut: [...start.leftOut],
-    descriptions: tools,
-    settings: $("start-settings").value,
-  };
-}
-
-function restoreStart(saved) {
-  if ($("offer-tools") && $("offer-tools").checked !== saved.tools) $("offer-tools").click();
-  if ($("workdir") && saved.workdir !== undefined) {
-    $("workdir").value = saved.workdir;
-    $("workdir").dispatchEvent(new Event("input"));
-  }
-  for (const box of $("prompt-options").querySelectorAll("input[data-section]")) {
-    if (box.checked === saved.off.includes(box.dataset.section)) box.click();
-  }
-  for (const [name, editor] of start.editors) {
-    if (editor.box.checked === saved.leftOut.includes(name)) editor.box.click();
-    const tool = saved.descriptions[name];
-    if (!tool) continue;
-    editor.description.value = tool.description;
-    for (const [parameter, area] of editor.parameters) area.value = tool.parameters[parameter] ?? area.value;
-  }
-  $("start-settings").value = saved.settings;
-  $("start-settings").dispatchEvent(new Event("input"));
-  $("system-prompt").value = saved.system;
-  markEdited();
 }
 
 function captureStaging() {
