@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Requests · tack</title>
+<meta name="tack-page" content="{{page_version}}" data-required="{{page_required}}">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/requests.css">
+<script src="/static/json.js" defer></script>
+<script src="/static/requests.js" defer></script>
+</head>
+<body class="requests-page">
+<aside id="sidebar">
+  <a class="brand" href="/" aria-label="tack, back to conversations">
+    <svg class="tack" viewBox="0 0 24 24" aria-hidden="true">
+      <path class="tack-pin" d="M12 13 L12 23 L12.9 13 Z M12 13 L11.1 13 L12 23 Z"/>
+      <ellipse class="tack-head" cx="12" cy="8.5" rx="9" ry="6.5"/>
+      <ellipse class="tack-shine" cx="9" cy="6.6" rx="3.2" ry="1.5"/>
+    </svg>
+    <span>tack</span>
+  </a>
+  <button class="new" id="blank" type="button"><span aria-hidden="true">+</span> New request</button>
+  <div class="start-from">
+    <label class="field-label" for="recorded">Start from a recorded request</label>
+    <select id="recorded"><option value="">Loading…</option></select>
+    <button class="mini" id="load-recorded" type="button">Load it</button>
+  </div>
+  <h2 class="side-head">Sent from here</h2>
+  <nav id="history" aria-label="Requests sent from here"></nav>
+</aside>
+<main class="requests-main">
+  <header id="head">
+    <h1 id="title">Request</h1>
+    <div id="meta">Sent exactly as shown, with your key, and recorded like any other call.</div>
+  </header>
+  <div class="requests-body">
+    <form id="request-form" class="request-form" autocomplete="off"></form>
+    <section class="request-side">
+      <div class="send-row">
+        <button class="mini spends" id="send" type="button">Send</button>
+        <button class="mini" id="cancel" type="button" hidden>Cancel</button>
+        <span id="size" class="hint"></span>
+      </div>
+      <div id="problems" class="problems" role="alert"></div>
+      <details id="preview-box" open>
+        <summary>Body as it will be sent</summary>
+        <div class="row"><button class="mini view" id="pretty" type="button" aria-pressed="false">Indent</button><button class="mini" id="copy" type="button">Copy</button></div>
+        <pre id="preview" class="json"></pre>
+      </details>
+      <div id="result"></div>
+    </section>
+  </div>
+</main>
+<div id="toast" role="status" hidden></div>
+</body>
+</html>

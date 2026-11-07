@@ -92,6 +92,9 @@ func (c *Core) checkDrained() {
 			return
 		}
 	}
+	if c.manualRunning() {
+		return
+	}
 	c.closedDrained = true
 	close(c.drained)
 }

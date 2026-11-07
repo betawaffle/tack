@@ -61,6 +61,8 @@ type Core struct {
 	nextChanges []string
 	// What models have shown they accept or don't, also from the record.
 	capabilities map[capabilityKey]capability
+	// Requests written by hand, outside any conversation.
+	manual []*manualCall
 	// This run, which isn't.
 	status        Status
 	restarting    bool
@@ -147,7 +149,8 @@ type item struct {
 	features     []string // the unusual things in its request
 	override     *edit    // what someone changed its reply to
 	requestBytes int
-	cost         Pico // what it counted as
+	request      store.Ref // the exact body sent
+	cost         Pico      // what it counted as
 	finished     *store.Event
 	calls        []*toolCall // what a usable reply asked for
 }
@@ -232,6 +235,9 @@ func (c *Core) apply(ev *store.Event) {
 	case store.CapabilityForgotten:
 		delete(c.capabilities, capabilityKey{ev.Model, ev.Host, ev.Feature})
 		return
+	case store.ManualCallStarted, store.ManualCallFinished:
+		c.applyManual(ev)
+		return
 	}
 	if ev.Type == store.ConversationAdded {
 		c.convs[ev.Conversation] = &conversation{id: ev.Conversation, created: ev.Time, tools: ev.Tools, workdir: ev.Workdir, settings: ev.Settings}
@@ -273,7 +279,7 @@ func (c *Core) apply(ev *store.Event) {
 			conv.lastHost = routing.Order[0]
 			host = routing.Order[0]
 		}
-		conv.items = append(conv.items, &item{callID: ev.Call, requestBytes: ev.RequestBytes, time: ev.Time, model: ev.Model, host: host, features: ev.Features})
+		conv.items = append(conv.items, &item{callID: ev.Call, requestBytes: ev.RequestBytes, request: ev.Request, time: ev.Time, model: ev.Model, host: host, features: ev.Features})
 	case store.CallFinished:
 		for _, it := range conv.items {
 			if it.callID == ev.Call {

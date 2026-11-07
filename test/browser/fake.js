@@ -77,7 +77,7 @@ http
       }
       bodies.push(data);
       const b = JSON.parse(data);
-      const last = b.messages[b.messages.length - 1].content;
+      const last = String(b.messages?.[b.messages.length - 1]?.content ?? "");
       if (/^refuse/.test(last)) {
         res.statusCode = 400;
         res.end('{"error":{"message":"not allowed here"}}');
@@ -88,10 +88,16 @@ http
         res.end('{"error":{"message":"upstream exploded"}}');
         return;
       }
+      if (b.stream !== true) {
+        // Asked not to stream: the whole reply in one object.
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ id: "g", provider: "FakeHost", choices: [{ finish_reason: "stop", message: { role: "assistant", content: "A whole reply.", reasoning: "All at once." } }], usage: { prompt_tokens: 7, completion_tokens: 3, cost: 0.000002 } }));
+        return;
+      }
       res.setHeader("Content-Type", "text/event-stream");
       const send = (o) => res.write("data: " + JSON.stringify(o) + "\n\n");
       const slow = /^slow/.test(last);
-      const final = b.messages[b.messages.length - 1];
+      const final = b.messages?.[b.messages.length - 1] ?? {};
     if (final.role === "user" && /^tools /.test(last)) {
       const calls = TOOL_CALLS[last.slice(6)] || [];
       send({ id: "g", provider: "FakeHost", choices: [{ delta: { reasoning: "Let me use a tool." } }] });

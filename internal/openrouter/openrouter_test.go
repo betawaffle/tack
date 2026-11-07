@@ -232,3 +232,38 @@ func TestRedirectsAreNotFollowed(t *testing.T) {
 		t.Errorf("res = %+v", res)
 	}
 }
+
+func TestWholeReply(t *testing.T) {
+	const text = `{"id":"g1","provider":"Morph","usage":{"prompt_tokens":5},"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"Hi","reasoning":"hmm","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{\"a\":1}"}},{"id":"c2","type":"function","function":{"name":"g","arguments":"{}"}}]}}]}`
+	c := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		io.WriteString(w, text)
+	})
+	var raw bytes.Buffer
+	var deltas []Delta
+	res, err := c.Do(context.Background(), []byte(`{"stream":false}`), &raw, func(d Delta) { deltas = append(deltas, d) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.String() != text {
+		t.Errorf("raw bytes changed:\n%q", raw.String())
+	}
+	if res.Text != "Hi" || res.Reasoning != "hmm" || res.Host != "Morph" || res.GenerationID != "g1" || res.FinishReason != "tool_calls" || res.Error != "" {
+		t.Errorf("res = %+v", res)
+	}
+	if len(res.ToolCalls) != 2 || res.ToolCalls[0] != (FunctionCallResult{"c1", "f", `{"a":1}`}) || res.ToolCalls[1].Name != "g" {
+		t.Errorf("tool calls = %+v", res.ToolCalls)
+	}
+	if !bytes.Equal(res.Usage, jsontext.Value(`{"prompt_tokens":5}`)) || len(deltas) != 1 {
+		t.Errorf("usage %s, deltas %d", res.Usage, len(deltas))
+	}
+
+	bad := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, "{nope")
+	})
+	res, err = bad.Do(context.Background(), []byte("{}"), io.Discard, nil)
+	if err != nil || res.ParseErrors != 1 || res.Error == "" {
+		t.Errorf("bad JSON: err %v, res %+v", err, res)
+	}
+}

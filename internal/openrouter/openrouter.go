@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -111,23 +112,68 @@ type chunk struct {
 	Provider string         `json:"provider"`
 	Usage    jsontext.Value `json:"usage"`
 	Error    jsontext.Value `json:"error"`
+	Choices  []chunkChoice  `json:"choices"`
+}
+
+type chunkChoice struct {
+	Delta struct {
+		Content          string      `json:"content"`
+		Reasoning        string      `json:"reasoning"`
+		ReasoningContent string      `json:"reasoning_content"`
+		ToolCalls        []chunkCall `json:"tool_calls"`
+	} `json:"delta"`
+	FinishReason string         `json:"finish_reason"`
+	Error        jsontext.Value `json:"error"`
+}
+
+type chunkCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// wholeReply is a reply that wasn't streamed. Its choices have a message where a
+// stream's chunks have a delta.
+type wholeReply struct {
+	ID       string         `json:"id"`
+	Provider string         `json:"provider"`
+	Usage    jsontext.Value `json:"usage"`
+	Error    jsontext.Value `json:"error"`
 	Choices  []struct {
-		Delta struct {
+		Message struct {
 			Content          string `json:"content"`
 			Reasoning        string `json:"reasoning"`
 			ReasoningContent string `json:"reasoning_content"`
 			ToolCalls        []struct {
-				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
 				} `json:"function"`
 			} `json:"tool_calls"`
-		} `json:"delta"`
+		} `json:"message"`
 		FinishReason string         `json:"finish_reason"`
 		Error        jsontext.Value `json:"error"`
 	} `json:"choices"`
+}
+
+// chunk turns it into one chunk holding everything, so it's read the same way.
+func (w *wholeReply) chunk() *chunk {
+	ch := &chunk{ID: w.ID, Provider: w.Provider, Usage: w.Usage, Error: w.Error}
+	ch.Choices = make([]chunkChoice, len(w.Choices))
+	for i, choice := range w.Choices {
+		out := &ch.Choices[i]
+		out.FinishReason, out.Error = choice.FinishReason, choice.Error
+		m := choice.Message
+		out.Delta.Content, out.Delta.Reasoning, out.Delta.ReasoningContent = m.Content, m.Reasoning, m.ReasoningContent
+		for j, call := range m.ToolCalls {
+			out.Delta.ToolCalls = append(out.Delta.ToolCalls, chunkCall{Index: j, ID: call.ID, Function: call.Function})
+		}
+	}
+	return ch
 }
 
 // maxToolCalls bounds the index a stream can name, since the index sizes a slice.
@@ -210,6 +256,26 @@ func (c *Client) Do(ctx context.Context, body []byte, raw io.Writer, onDelta fun
 
 	var text, reasoning strings.Builder
 	defer func() { res.Text, res.Reasoning = text.String(), reasoning.String() }()
+
+	if mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mediaType == "application/json" {
+		// A request that didn't ask to stream gets the whole reply in one object.
+		data, err := io.ReadAll(io.TeeReader(resp.Body, raw))
+		if err != nil {
+			res.Error = errorText(ctx, err)
+			return res, err
+		}
+		var whole wholeReply
+		if err := json.Unmarshal(data, &whole, json.RejectUnknownMembers(false)); err != nil {
+			res.ParseErrors++
+			res.Error = "the reply wasn't the JSON it said it was"
+			return res, nil
+		}
+		c.apply(&res, whole.chunk(), &text, &reasoning, start, onDelta)
+		if res.Error == "" && res.FinishReason == "" {
+			res.Error = "the reply had no finish reason"
+		}
+		return res, nil
+	}
 
 	r := bufio.NewReader(io.TeeReader(resp.Body, raw))
 	for {

@@ -485,3 +485,4 @@ button:disabled { opacity: .45; cursor: default; }
 .thinking, .tool-output { position: relative; }
 .thinking > .view-row, .tool-output > .view-row { position: absolute; top: 0; right: 0; margin: 0; }
 .thinking:not([open]) > .view-row { display: none; }
+a.mini { display: inline-block; text-decoration: none; }

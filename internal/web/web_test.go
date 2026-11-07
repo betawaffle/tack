@@ -108,7 +108,7 @@ func TestSystemPromptFlow(t *testing.T) {
 
 func TestPageAndPolicy(t *testing.T) {
 	s := site(t)
-	for _, path := range []string{"/", "/static/app.js", "/static/style.css", "/static/markdown.js"} {
+	for _, path := range []string{"/", "/static/app.js", "/static/style.css", "/static/markdown.js", "/requests", "/static/requests.js", "/static/requests.css"} {
 		resp, err := http.Get(s.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -339,4 +339,35 @@ func TestAnActionBasedOnAnOldRevisionIsRefused(t *testing.T) {
 	if got := hold("nonsense"); got.StatusCode != http.StatusBadRequest {
 		t.Errorf("nonsense: %d", got.StatusCode)
 	}
+}
+
+func TestManualRequests(t *testing.T) {
+	s := site(t)
+	if page := get(t, s.URL+"/requests"); !strings.Contains(page, "/static/requests.js") || strings.Contains(page, "{{page_version}}") {
+		t.Errorf("page = %q", page)
+	}
+	post(t, s.URL+"/api/manual-calls", `{"messages":[]}`, http.StatusBadRequest)
+	body := `{"model":"m","messages":[{"role":"user","content":"Hi"}],"stream":true}`
+	lines := post(t, s.URL+"/api/manual-calls", body, http.StatusOK)
+	var first struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(strings.SplitN(lines, "\n", 2)[0]), &first); err != nil || first.Kind != "call" || first.ID == "" {
+		t.Fatalf("first update %q: %v", lines, err)
+	}
+	if list := get(t, s.URL+"/api/manual-calls"); !strings.Contains(list, first.ID) {
+		t.Errorf("list = %s", list)
+	}
+	if detail := get(t, s.URL+"/api/manual-calls/"+first.ID); !strings.Contains(detail, `"request":`) {
+		t.Errorf("detail = %s", detail)
+	}
+	if got := get(t, s.URL+"/api/recorded-calls/"+first.ID); got != body {
+		t.Errorf("recorded request %q", got)
+	}
+	if calls := get(t, s.URL+"/api/recorded-calls"); !strings.Contains(calls, first.ID) {
+		t.Errorf("recorded calls = %s", calls)
+	}
+	post(t, s.URL+"/api/manual-calls/"+first.ID+"/cancel", "", http.StatusConflict)
+	post(t, s.URL+"/api/manual-calls/nope/cancel", "", http.StatusNotFound)
 }

@@ -123,6 +123,11 @@ const (
 	PauseCleared         = "pause_cleared"
 	NoteAdded            = "note_added"
 	ScratchChanged       = "scratch_changed"
+	// ManualCallStarted and ManualCallFinished are a request someone wrote by hand, sent
+	// outside any conversation. They have the fields of model_call_started and
+	// model_call_finished, with the request's provider section as routing.
+	ManualCallStarted  = "manual_call_started"
+	ManualCallFinished = "manual_call_finished"
 )
 
 // Note is an item on a conversation's page. The text is a block, like other content.
@@ -274,7 +279,8 @@ func Known(eventType string) bool {
 		TackStarted, RestartRequested, ConversationAdded, ConversationForked, UserMessage, SystemMessage, EditProposed, EditApplied, EditDiscarded,
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
-		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged:
+		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged,
+		ManualCallStarted, ManualCallFinished:
 		return true
 	}
 	return false

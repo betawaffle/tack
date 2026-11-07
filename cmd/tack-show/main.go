@@ -7,6 +7,8 @@
 //	tack-show -full teapot    without shortening anything
 //	tack-show -sent teapot    also what each model call actually sent
 //	tack-show -events teapot  also its raw events
+//	tack-show -manual         list requests sent from the request page
+//	tack-show -manual last    one of them, by "last" or the start of its ID
 package main
 
 import (
@@ -39,6 +41,7 @@ func main() {
 	sent := flag.Bool("sent", false, "also show what each model call sent")
 	events := flag.Bool("events", false, "also show the conversation's raw events")
 	counts := flag.Bool("tokens", false, "compare counted tokens with what hosts reported, for every call in the record")
+	manual := flag.Bool("manual", false, "list requests sent from the request page, or show one")
 	flag.Parse()
 
 	dir := *dataDir
@@ -63,6 +66,12 @@ func main() {
 	}
 	if *counts {
 		if err := compareTokens(os.Stdout, st); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if *manual {
+		if err := showManual(os.Stdout, c, strings.Join(flag.Args(), " "), limit); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -341,9 +350,9 @@ func compareTokens(w io.Writer, st *store.Store) error {
 	exact, total := 0, 0
 	err := st.Replay(func(ev *store.Event) error {
 		switch ev.Type {
-		case store.CallStarted:
+		case store.CallStarted, store.ManualCallStarted:
 			calls[ev.Call] = started{ev.Model, ev.Request}
-		case store.CallFinished:
+		case store.CallFinished, store.ManualCallFinished:
 			call, ok := calls[ev.Call]
 			counter, known := tokens.For(call.model)
 			if !ok || !known || len(ev.Usage) == 0 {
@@ -359,19 +368,98 @@ func compareTokens(w io.Writer, st *store.Store) error {
 			if err != nil {
 				return err
 			}
+			where := ev.Conversation
+			if ev.Type == store.ManualCallFinished {
+				where = "manual"
+			}
 			counted, err := counter.Request(body)
 			if err != nil {
-				fmt.Fprintf(w, "%s %s: %v\n", ev.Conversation, ev.Call, err)
+				fmt.Fprintf(w, "%s %s: %v\n", where, ev.Call, err)
 				return nil
 			}
 			total++
 			if counted == usage.PromptTokens {
 				exact++
 			}
-			fmt.Fprintf(w, "%s %s %s counted %d, reported %d, off by %d\n", ev.Conversation, ev.Call, call.model, counted, usage.PromptTokens, counted-usage.PromptTokens)
+			fmt.Fprintf(w, "%s %s %s counted %d, reported %d, off by %d\n", where, ev.Call, call.model, counted, usage.PromptTokens, counted-usage.PromptTokens)
 		}
 		return nil
 	}, func(string, int) {})
 	fmt.Fprintf(w, "%d of %d exact\n", exact, total)
 	return err
+}
+
+// showManual lists the requests sent from the request page, or shows one in full.
+func showManual(w io.Writer, c *core.Core, query string, limit int) error {
+	all := c.ManualCalls() // newest first
+	if query == "" {
+		if len(all) == 0 {
+			fmt.Fprintln(w, "No requests have been sent from the request page.")
+		}
+		for _, m := range all {
+			fmt.Fprintf(w, "%s  %s  %s  %s\n", m.ID, m.Time.Format("2006-01-02 15:04"), m.Model, manualState(m))
+		}
+		return nil
+	}
+	var id string
+	for _, m := range all {
+		if query == "last" || strings.HasPrefix(m.ID, query) {
+			id = m.ID
+			break
+		}
+	}
+	if id == "" {
+		return fmt.Errorf("no request matches %q", query)
+	}
+	d, err := c.ManualCall(id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "Request %s, sent %s\n%s  %s\n", d.ID, d.Time.Format("2006-01-02 15:04:05"), d.Model, manualState(d.ManualSummary))
+	if d.Tokens > 0 {
+		fmt.Fprintf(w, "counted %d prompt tokens here\n", d.Tokens)
+	}
+	if len(d.Usage) > 0 {
+		fmt.Fprintf(w, "usage %s\n", d.Usage)
+	}
+	fmt.Fprintf(w, "\n--- request\n%s\n", shorten(d.Request, limit))
+	if d.Reasoning != "" {
+		fmt.Fprintf(w, "\n--- reasoning\n%s\n", shorten(d.Reasoning, limit))
+	}
+	if d.Text != "" {
+		fmt.Fprintf(w, "\n--- text\n%s\n", shorten(d.Text, limit))
+	}
+	for _, call := range d.ToolCalls {
+		fmt.Fprintf(w, "\n--- tool call %s %s\n%s\n", call.Name, call.ID, shorten(call.Arguments, limit))
+	}
+	if d.Text == "" && d.Reasoning == "" && d.Response != "" {
+		fmt.Fprintf(w, "\n--- raw response\n%s\n", shorten(d.Response, limit))
+	}
+	return nil
+}
+
+func manualState(m core.ManualSummary) string {
+	var parts []string
+	if m.Host != "" {
+		parts = append(parts, m.Host)
+	}
+	switch {
+	case m.Running:
+		parts = append(parts, "running")
+	case m.Interrupted:
+		parts = append(parts, "interrupted")
+	}
+	if m.Status != 0 {
+		parts = append(parts, fmt.Sprintf("HTTP %d", m.Status))
+	}
+	if m.FinishReason != "" {
+		parts = append(parts, "finished: "+m.FinishReason)
+	}
+	if m.CostUSD != 0 {
+		parts = append(parts, fmt.Sprintf("$%g", m.CostUSD))
+	}
+	if m.Error != "" {
+		parts = append(parts, "error: "+m.Error)
+	}
+	return strings.Join(parts, ", ")
 }

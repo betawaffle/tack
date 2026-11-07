@@ -269,6 +269,23 @@ bytes for what it keeps, so the cache still applies up to the first change. It c
 keep a tool call that's still waiting. Forking doesn't undo anything: a file that a later
 tool call changed stays changed.
 
+## Custom requests
+
+**Custom requests** in the sidebar opens a page for writing a request body by hand and
+sending it, outside any conversation. It has a field for each part of OpenRouter's chat
+request: the model and fallbacks, provider routing, messages of every role with every kind of
+content part, function tools and tool choice, reasoning, sampling, response format and the
+rest. Anything without a field of its own, like plugins or server tools, goes in an "Other
+fields" box as JSON, and each object has one of those for keys it doesn't know. The body is
+shown exactly as it will be sent, with its size and, for models tack can count, its tokens.
+
+It can start from any recorded request, a conversation's or one sent from here, and loading one
+and sending it unchanged sends the same bytes. It's sent with the usual key and headers and
+recorded the same way as a conversation's calls, as `manual_call_started` and
+`manual_call_finished`, raw response included. A request that doesn't ask to stream gets its
+reply whole, and that's read too. Nothing checks the body: what OpenRouter says about it is
+the result. Nothing runs the tool calls that come back. A restart waits for one that's running.
+
 ## Reading the record
 
 `tack-show` prints conversations from the record. It only reads, so it's safe beside a
@@ -282,6 +299,9 @@ tack-show teapot          # by part of its first message, or its ID
 tack-show -full teapot    # without shortening anything
 tack-show -sent teapot    # also what each call sent, with the real roles
 tack-show -events teapot  # also its raw events
+tack-show -manual         # requests sent from the custom request page
+tack-show -manual last    # one of them, by "last" or the start of its ID
+tack-show -tokens         # counted tokens against what hosts reported, for every call
 ```
 
 ## Testing

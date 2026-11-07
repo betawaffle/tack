@@ -1,0 +1,69 @@
+/* The request page. It shares the main page's colors, sidebar and header. */
+.requests-main { overflow: hidden; }
+.requests-body {
+  flex: 1; min-height: 0; overflow-y: auto; display: grid; gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 16px 18px 40px; align-items: start;
+}
+.request-side { position: sticky; top: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.send-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.send-row .hint { margin: 0; }
+.problems { color: var(--warn); font-size: 12.5px; white-space: pre-wrap; }
+.problems:empty { display: none; }
+#preview { max-height: 45vh; overflow: auto; }
+.start-from { display: flex; flex-direction: column; gap: 6px; padding: 0 8px; }
+.start-from select { width: 100%; }
+.side-head { margin: 6px 8px 0; font: 600 12px/1.3 var(--ui); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+#history { display: flex; flex-direction: column; gap: 1px; }
+
+.request-form input[type="text"], .request-form textarea, .request-form select, .start-from select {
+  padding: 3px 7px; background: var(--surface); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; font: 12.5px var(--mono); min-width: 0;
+}
+.request-form textarea { width: 100%; resize: vertical; }
+.request-form .mono { font-family: var(--mono); }
+.rq-group { margin: 0 0 14px; padding: 8px 10px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.rq-group > legend { padding: 0 4px; font: 600 13px var(--ui); }
+.rq-field { display: grid; grid-template-columns: minmax(120px, 34%) minmax(0, 1fr); align-items: start; gap: 4px 10px; margin: 5px 0; }
+.rq-field > .rq-label { padding-top: 4px; color: var(--muted); font-size: 12.5px; }
+.rq-object { margin: 4px 0; }
+details.rq-object, details.rq-list, details.rq-extra { padding: 2px 0 2px 10px; border-left: 2px solid var(--line); }
+details.rq-object > summary, details.rq-list > summary, details.rq-extra > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margin-left: -10px; padding-left: 8px; }
+.rq-extra .rq-field { grid-template-columns: minmax(0, 1fr); }
+.rq-extra .rq-field > .rq-label { display: none; }
+.rq-checks { margin: 5px 0; padding: 0; border: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.rq-checks > legend { float: left; width: 34%; min-width: 120px; color: var(--muted); font-size: 12.5px; padding: 0; }
+.rq-check { font: 12.5px var(--mono); }
+.rq-check input { accent-color: var(--link); }
+.rq-map { margin: 5px 0; }
+.rq-map > .rq-label { color: var(--muted); font-size: 12.5px; }
+.rq-map-row { display: flex; gap: 6px; margin: 4px 0; }
+.rq-map-row input { flex: 1; }
+.rq-items { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 6px; }
+.rq-item { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.rq-item-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rq-number { min-width: 1.6em; color: var(--muted); font: 12px var(--mono); }
+.rq-variant-pick { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.rq-variant-pick select, .rq-custom { min-width: 0; }
+.rq-content-head { margin-bottom: 4px; }
+.rq-result { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.rq-result-head { display: flex; flex-direction: column; gap: 2px; }
+.rq-result-head .hint { margin: 0; font-family: var(--mono); }
+.rq-reasoning, .rq-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.45 var(--mono); }
+.rq-reasoning { color: var(--muted); }
+.rq-reasoning:empty, .rq-text:empty { display: none; }
+.rq-section > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.rq-section pre { max-height: 50vh; overflow: auto; }
+.rq-error { margin: 0; color: var(--warn); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 1100px) {
+  .requests-body { grid-template-columns: minmax(0, 1fr); }
+  .request-side { position: static; }
+}
+@media (max-width: 760px) {
+  .requests-page #sidebar { position: static; transform: none; width: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .requests-page { flex-direction: column; height: auto; }
+  .requests-main { overflow: visible; height: auto; }
+  .requests-body { padding: 12px 16px 32px; overflow: visible; }
+  .rq-field { grid-template-columns: minmax(0, 1fr); }
+  .rq-checks > legend { float: none; width: 100%; }
+}

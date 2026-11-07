@@ -26,7 +26,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/style.css static/app.js static/markdown.js static/json.js static/money.js static/highlight.js
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/markdown.js static/json.js static/money.js static/highlight.js
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -59,6 +59,15 @@ var pageVersion = sync.OnceValue(func() string {
 // indexPage is the page, told what it is.
 var indexPage = sync.OnceValue(func() []byte {
 	data, err := static.ReadFile("static/index.html")
+	if err != nil {
+		panic(err)
+	}
+	return []byte(strings.NewReplacer("{{page_version}}", pageVersion(), "{{page_required}}", strconv.Itoa(pageRequired)).Replace(string(data)))
+})
+
+// requestsPage is the page for sending hand-written requests.
+var requestsPage = sync.OnceValue(func() []byte {
+	data, err := static.ReadFile("static/requests.html")
 	if err != nil {
 		panic(err)
 	}
@@ -116,6 +125,14 @@ func Handler(c *core.Core, defaults func() Defaults, reload func() (Reload, erro
 	mux.HandleFunc("POST /api/conversations/{id}/settings", s.current(s.proposeSettings))
 	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/apply", s.current(s.applySettings))
 	mux.HandleFunc("POST /api/conversations/{id}/settings/{proposal}/discard", s.current(s.discardSettings))
+	mux.HandleFunc("GET /requests", s.requests)
+	mux.HandleFunc("GET /api/manual-calls", s.manualCalls)
+	mux.HandleFunc("POST /api/manual-calls", s.current(s.sendManual))
+	mux.HandleFunc("POST /api/manual-calls/count", s.countManual)
+	mux.HandleFunc("GET /api/manual-calls/{id}", s.manualCall)
+	mux.HandleFunc("POST /api/manual-calls/{id}/cancel", s.cancelManual)
+	mux.HandleFunc("GET /api/recorded-calls", s.recordedCalls)
+	mux.HandleFunc("GET /api/recorded-calls/{call}", s.recordedRequest)
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
@@ -224,6 +241,72 @@ func readText(w http.ResponseWriter, r *http.Request, field string) (string, boo
 		return "", false
 	}
 	return body[field], true
+}
+
+func (s *server) requests(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(requestsPage())
+}
+
+func (s *server) manualCalls(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.core.ManualCalls())
+}
+
+func (s *server) manualCall(w http.ResponseWriter, r *http.Request) {
+	d, err := s.core.ManualCall(r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, d)
+}
+
+// sendManual sends the body exactly as it arrived. The first update names the call.
+func (s *server) sendManual(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, updates, err := s.core.SendManual(body)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	stream(w, r, updates)
+}
+
+func (s *server) countManual(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxMessageBytes))
+	if err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]int{"tokens": core.CountManual(body)})
+}
+
+func (s *server) cancelManual(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.CancelManual(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) recordedCalls(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.core.RecordedCalls(500))
+}
+
+func (s *server) recordedRequest(w http.ResponseWriter, r *http.Request) {
+	body, err := s.core.RecordedRequest(r.PathValue("call"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(body)
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
@@ -582,7 +665,8 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork), errors.Is(err, core.ErrBadMessage):
+	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork), errors.Is(err, core.ErrBadMessage),
+		errors.Is(err, core.ErrBadRequest):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, core.ErrStale):
 		w.Header().Set("X-Tack-Stale", "1")

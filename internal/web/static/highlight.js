@@ -8,9 +8,11 @@
     "getattr hasattr hash hex id input int isinstance issubclass iter len list map max min next object oct open ord pow " +
     "print range repr reversed round set setattr slice sorted str sum super tuple type vars zip self cls " +
     "Exception ValueError TypeError KeyError IndexError OSError RuntimeError StopIteration").split(" "));
+  // An unclosed triple-quoted string runs to the end of the text, not the end of a line, which
+  // is what $ means with the m flag.
   const TOKEN = new RegExp([
     /(?<comment>#[^\n]*)/,
-    /(?<string>(?<![\w])[rRbBfFuU]{0,2}(?:"""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:[^"\\\n]|\\[\s\S])*"?|'(?:[^'\\\n]|\\[\s\S])*'?))/,
+    /(?<string>(?<![\w])[rRbBfFuU]{0,2}(?:"""[\s\S]*?(?:"""|(?![\s\S]))|'''[\s\S]*?(?:'''|(?![\s\S]))|"(?:[^"\\\n]|\\[\s\S])*"?|'(?:[^'\\\n]|\\[\s\S])*'?))/,
     /(?<decorator>^[ \t]*@[\w.]+)/,
     /(?<number>\b(?:0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[jJ]?)\b)/,
     /(?<word>\b[^\W\d]\w*\b)/,
