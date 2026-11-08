@@ -35,16 +35,16 @@ const python = "/usr/bin/python3"
 // None of these are settings, so nothing about a conversation can widen the sandbox. Its
 // memory is worked out as it starts, in memory.go.
 const (
-	codeWorkBytes = 16 << 20 // /work, which is kept
+	codeWorkBytes = 256 << 20 // /work, which is kept
 
 	// Threads count as well as processes, and libraries start a thread for each CPU.
 	codePids = 4096
 
 	// codeSavedBytes is the most tack keeps of what's in /work. Compressed files in a full
 	// /work come to less, but many small files take more room in an archive than on disk.
-	codeSavedBytes = 32 << 20
+	codeSavedBytes = codeWorkBytes
 	// codeUnpackedBytes stops tack reading something that unpacks to far more than it's stored as.
-	codeUnpackedBytes = 256 << 20
+	codeUnpackedBytes = 2 * codeWorkBytes
 
 	// codeAutoSendBytes is the most output that goes to the model without asking. It's a
 	// few thousand tokens, and more than that is usually a mistake worth a look.

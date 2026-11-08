@@ -268,7 +268,7 @@ except OSError as e:
 func TestCodeLimitsHold(t *testing.T) {
 	f := newFixture(t)
 	// /work is small.
-	got, err := runCode(t, f, "import os\ntry:\n    open('/work/big', 'wb').write(b'x' * (128 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)\nos.remove('/work/big')")
+	got, err := runCode(t, f, "import os\ntry:\n    open('/work/big', 'wb').write(b'x' * (300 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)\nos.remove('/work/big')")
 	if err != nil || strings.Contains(got, "WROTE") {
 		t.Errorf("big = %q, %v", got, err)
 	}

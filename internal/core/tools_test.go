@@ -1,7 +1,9 @@
 package core
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -2000,8 +2002,9 @@ func keptTool(saw *[]string, output string, failure error) Tool {
 		Definition:    jsontext.Value(`{"type":"function","function":{"name":"kept","parameters":{"type":"object","properties":{}}}}`),
 		AutoSendBytes: 100,
 		Run: func(_ context.Context, call Call) ([]byte, error) {
-			*saw = append(*saw, string(call.Workspace)+"|"+string(call.Files["notes.json"])+"|"+string(call.Files["scratch.json"]))
-			if err := call.SaveWorkspace(append(call.Workspace, 'x')); err != nil {
+			kept := readKept(call.Workspace)
+			*saw = append(*saw, kept+"|"+string(call.Files["notes.json"])+"|"+string(call.Files["scratch.json"]))
+			if err := call.SaveWorkspace(makeKept(kept + "x")); err != nil {
 				return nil, err
 			}
 			return []byte(output), failure
@@ -2183,7 +2186,9 @@ func TestAMachineShortOfMemoryPausesEvenWhatRunsByItself(t *testing.T) {
 	f := newToolFake(t)
 	f.tools[0].AutoRun = func(store.Settings) bool { return true }
 	f.tools[0].AutoSendBytes = 1 << 10
-	f.output = func(string) ([]byte, error) { return []byte("partial"), fmt.Errorf("%w; exit code 137", ErrMachineShort) }
+	f.output = func(string) ([]byte, error) {
+		return []byte("partial"), fmt.Errorf("%w; exit code 137", ErrMachineShort)
+	}
 	c := f.open()
 	id, _ := c.NewConversation("x")
 	f.replyWith(toolStream(callA))
@@ -2193,4 +2198,33 @@ func TestAMachineShortOfMemoryPausesEvenWhatRunsByItself(t *testing.T) {
 	if !conv.Paused || len(f.bodies) != 1 || len(f.runs) != 1 {
 		t.Errorf("paused = %v, %d calls, runs = %v", conv.Paused, len(f.bodies), f.runs)
 	}
+}
+
+// makeKept is an archive like the sandbox leaves, holding one file.
+func makeKept(text string) []byte {
+	var b bytes.Buffer
+	packed := gzip.NewWriter(&b)
+	w := tar.NewWriter(packed)
+	w.WriteHeader(&tar.Header{Name: "kept.txt", Mode: 0o644, Size: int64(len(text)), Typeflag: tar.TypeReg})
+	w.Write([]byte(text))
+	w.Close()
+	packed.Close()
+	return b.Bytes()
+}
+
+// readKept is what the archive's one file says, or nothing.
+func readKept(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	packed, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return "not an archive"
+	}
+	r := tar.NewReader(packed)
+	if _, err := r.Next(); err != nil {
+		return "empty"
+	}
+	text, _ := io.ReadAll(r)
+	return string(text)
 }

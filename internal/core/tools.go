@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/betawaffle/tack/internal/openrouter"
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/workspace"
 )
 
 // Tool is something a model can ask to run. Name and Definition are what the
@@ -191,18 +193,19 @@ func denialText(kind string) string {
 // toolCall is the state of one call, derived from events.
 type toolCall struct {
 	store.ToolCall
-	allowed   bool // approved to run, and not since told to stop
-	started   bool
-	finished  bool
-	output    store.Ref
-	failure   string
-	workspace store.Ref    // the files this call left
-	result    []store.Part // what the model sees; set once it's final
-	released  bool         // the result is the tool's output, not a denial
-	automatic bool         // nobody was asked before it ran
-	edited    bool         // someone changed what the model sees
-	pending   *edit        // a change to that, held until it's applied or discarded
-	channel   []*exchange  // what its code asked tack while it ran
+	allowed        bool // approved to run, and not since told to stop
+	started        bool
+	finished       bool
+	output         store.Ref
+	failure        string
+	workspace      store.Ref    // the files this call left, as an archive
+	workspaceFiles store.Ref    // or as a manifest
+	result         []store.Part // what the model sees; set once it's final
+	released       bool         // the result is the tool's output, not a denial
+	automatic      bool         // nobody was asked before it ran
+	edited         bool         // someone changed what the model sees
+	pending        *edit        // a change to that, held until it's applied or discarded
+	channel        []*exchange  // what its code asked tack while it ran
 }
 
 func (t *toolCall) resolved() bool { return t.result != nil }
@@ -328,7 +331,7 @@ func (conv *conversation) applyTool(ev *store.Event) {
 	case store.ToolFinished:
 		if call := conv.tool(ev.ToolCall); call != nil {
 			call.finished, call.output, call.failure = true, ev.Output, ev.Error
-			call.workspace = ev.Workspace
+			call.workspace, call.workspaceFiles = ev.Workspace, ev.WorkspaceFiles
 		}
 	}
 }
@@ -830,10 +833,16 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		}
 		return c.record(&store.Event{Type: store.NoteAdded, Conversation: conv.id, Note: &store.Note{Kind: kind, Key: key, Status: status, Text: block}})
 	}
-	var workspace store.Ref
+	var workspaceFiles store.Ref
 	saveWorkspace := func(data []byte) error {
-		ref, err := c.cfg.Store.Put(data)
-		workspace = ref
+		manifest, err := workspace.Split(data, math.MaxInt64, func(file []byte) (string, error) {
+			ref, err := c.cfg.Store.Put(file)
+			return string(ref), err
+		})
+		if err != nil {
+			return err
+		}
+		workspaceFiles, err = c.cfg.Store.Put(manifest)
 		return err
 	}
 	kept, files, err := c.codeState(conv)
@@ -861,7 +870,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 		Execution:      execution,
 		Output:         ref,
 		Artifacts:      artifacts,
-		Workspace:      workspace,
+		WorkspaceFiles: workspaceFiles,
 		DurationMillis: time.Since(start).Milliseconds(),
 	}
 	if failure != nil {

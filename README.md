@@ -215,8 +215,11 @@ be given all that's spare. A run the kernel stopped for the machine's sake, rath
 reaching its own limit, pauses the conversation, even one that runs code without asking, so
 nothing else starts into the same shortage until you continue. `/sandbox/limits.json` tells the code what it got.
 None of this is a setting. `/work` is kept
-between calls in a conversation, up to 16 MB, as an archive in the record that's only ever unpacked
-inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.
+between calls in a conversation, up to 256 MB. The sandbox hands tack an archive of it, which tack
+only reads as data and never unpacks on this machine, and keeps in the record as a block per file
+plus a manifest, so a file that didn't change takes no more room. The next run gets an archive
+made from the manifest, unpacked inside its sandbox, so forks go on from what was there at that
+point. Older records, which kept a whole archive per run, still work. `/tmp` starts empty each time.
 Notes and scratch can be read from `/conversation`, and so can `context.json`: the exact
 request that led to the call, under `request`, and the reply that made it, under `reply`, shaped
 like a message in that request.

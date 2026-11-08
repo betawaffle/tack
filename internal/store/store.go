@@ -396,6 +396,9 @@ type Event struct {
 	// tool_finished: the files run_code keeps between calls, as they were left. Absent
 	// means this call didn't change what's kept.
 	Workspace Ref `json:"workspace,omitzero"`
+	// WorkspaceFiles is the same, kept as a manifest of the files, each its own block, so a
+	// file that didn't change takes no more room. Newer records have this instead.
+	WorkspaceFiles Ref `json:"workspace_files,omitzero"`
 }
 
 var errReadOnly = errors.New("this store was opened read-only")

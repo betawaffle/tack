@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/workspace"
 )
 
 // noteItem is the current state of one note. Notes are for the page. The model can't read
@@ -180,11 +181,11 @@ func (c *Core) scratchOperation(conv *conversation, op, key, text string) (strin
 // its notes and scratch as files for reading.
 func (c *Core) codeState(conv *conversation) ([]byte, map[string][]byte, error) {
 	c.mu.Lock()
-	var workspace store.Ref
+	var archive, manifest store.Ref
 	for _, it := range slices.Backward(conv.items) {
 		for _, call := range slices.Backward(it.calls) {
-			if workspace == "" && call.workspace != "" {
-				workspace = call.workspace
+			if archive == "" && manifest == "" {
+				archive, manifest = call.workspace, call.workspaceFiles
 			}
 		}
 	}
@@ -209,11 +210,19 @@ func (c *Core) codeState(conv *conversation) ([]byte, map[string][]byte, error) 
 	if files["scratch.json"], err = json.Marshal(scratch); err != nil {
 		return nil, nil, err
 	}
-	if workspace == "" {
-		return nil, files, nil
+	switch {
+	case manifest != "":
+		data, err := c.cfg.Store.Get(manifest)
+		if err != nil {
+			return nil, nil, err
+		}
+		kept, err := workspace.Join(data, func(blob string) ([]byte, error) { return c.cfg.Store.Get(store.Ref(blob)) })
+		return kept, files, err
+	case archive != "":
+		kept, err := c.cfg.Store.Get(archive)
+		return kept, files, err
 	}
-	kept, err := c.cfg.Store.Get(workspace)
-	return kept, files, err
+	return nil, files, nil
 }
 
 func noteArguments(call Call) (map[string]string, error) {
