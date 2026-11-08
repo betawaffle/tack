@@ -211,7 +211,9 @@ more, but never under 2 GB or over 96 GB, and 4096
 processes and threads. `/tmp` and `/dev/shm` are held in that memory and count against it, so
 each can be as big as the whole limit. Running out kills the whole run, and if the machine itself
 runs short, the kernel kills sandboxes first, which is why sandboxes running at once can each
-be given all that's spare. `/sandbox/limits.json` tells the code what it got.
+be given all that's spare. A run the kernel stopped for the machine's sake, rather than for
+reaching its own limit, pauses the conversation, even one that runs code without asking, so
+nothing else starts into the same shortage until you continue. `/sandbox/limits.json` tells the code what it got.
 None of this is a setting. `/work` is kept
 between calls in a conversation, up to 16 MB, as an archive in the record that's only ever unpacked
 inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.

@@ -732,7 +732,7 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 		failure = errors.Join(failure, fmt.Errorf("the files in /work weren't kept, so they're as they were before this call: %w", err))
 	}
 	if failure != nil {
-		return output, errors.New(strings.ReplaceAll(failure.Error(), "\n", "; "))
+		return output, flattened{failure}
 	}
 	return output, nil
 }

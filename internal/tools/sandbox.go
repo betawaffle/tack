@@ -40,6 +40,12 @@ func (c *capped) Write(p []byte) (int, error) {
 
 func (c *capped) Bytes() []byte { return c.buffer.Bytes() }
 
+// flattened is an error on one line, which still is what it wraps.
+type flattened struct{ error }
+
+func (f flattened) Error() string { return strings.ReplaceAll(f.error.Error(), "\n", "; ") }
+func (f flattened) Unwrap() error { return f.error }
+
 // bwrap is the sandbox. It's an absolute path, so that it can't depend on any PATH.
 const bwrap = "/usr/bin/bwrap"
 
@@ -104,11 +110,19 @@ func (r *reader) runSandboxed(ctx context.Context, cmd *exec.Cmd, call core.Call
 			problems = append(problems, err.Error())
 		}
 	}
+	machineShort := false
 	if group != nil && limits != nil && group.OOMKills() > 0 {
-		problems = append(problems, fmt.Sprintf("it ran out of its %d MB memory limit", limits.Memory>>20))
+		if group.OwnLimitReached() > 0 {
+			problems = append(problems, fmt.Sprintf("it ran out of its %d MB memory limit", limits.Memory>>20))
+		} else {
+			machineShort = true
+		}
 	}
 	if output.dropped > 0 {
 		problems = append(problems, fmt.Sprintf("%d bytes of output past the first %d were dropped", output.dropped, outputBytes))
+	}
+	if machineShort {
+		return output.Bytes(), fmt.Errorf("%w%s", core.ErrMachineShort, strings.Join(append([]string{""}, problems...), "; "))
 	}
 	if len(problems) > 0 {
 		return output.Bytes(), errors.New(strings.Join(problems, "; "))

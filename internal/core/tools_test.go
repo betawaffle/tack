@@ -2178,3 +2178,19 @@ func TestCodeOnlyRunsWithoutAskingAfterOptingIn(t *testing.T) {
 		t.Errorf("it ran after opting out: %q", saw)
 	}
 }
+
+func TestAMachineShortOfMemoryPausesEvenWhatRunsByItself(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].AutoRun = func(store.Settings) bool { return true }
+	f.tools[0].AutoSendBytes = 1 << 10
+	f.output = func(string) ([]byte, error) { return []byte("partial"), fmt.Errorf("%w; exit code 137", ErrMachineShort) }
+	c := f.open()
+	id, _ := c.NewConversation("x")
+	f.replyWith(toolStream(callA))
+	updates, err := c.Send(id, "go")
+	mustFinish(t, updates, err)
+	conv, _ := c.Conversation(id)
+	if !conv.Paused || len(f.bodies) != 1 || len(f.runs) != 1 {
+		t.Errorf("paused = %v, %d calls, runs = %v", conv.Paused, len(f.bodies), f.runs)
+	}
+}

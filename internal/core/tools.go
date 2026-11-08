@@ -867,8 +867,19 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	if failure != nil {
 		finished.Error = failure.Error()
 	}
-	return c.record(finished)
+	if err := c.record(finished); err != nil {
+		return err
+	}
+	// Whatever's next shouldn't start into the same shortage by itself.
+	if errors.Is(failure, ErrMachineShort) {
+		return c.record(&store.Event{Type: store.PauseRequested, Conversation: conv.id})
+	}
+	return nil
 }
+
+// ErrMachineShort is a tool's failure when the whole machine ran short of memory, rather than
+// the tool reaching its own limit. The conversation pauses, even if it runs code by itself.
+var ErrMachineShort = errors.New("the machine ran short of memory, so the kernel stopped this run, and the conversation is paused until the user continues it")
 
 func (c *Core) execute(parent context.Context, conv *conversation, call *toolCall, run Call, keep func(string, []byte) error, send func(Update)) ([]byte, error) {
 	tool := c.findTool(call.Name)

@@ -102,13 +102,19 @@ func (g *Group) Limit(limits Limits) error {
 }
 
 // OOMKills counts the processes the kernel killed for going over the memory limit.
-func (g *Group) OOMKills() int {
+func (g *Group) OOMKills() int { return g.memoryEvent("oom_kill") }
+
+// OwnLimitReached counts the times the group reached its own memory limit. A kill without
+// one was the kernel freeing memory for the whole machine.
+func (g *Group) OwnLimitReached() int { return g.memoryEvent("oom") }
+
+func (g *Group) memoryEvent(name string) int {
 	data, err := os.ReadFile(filepath.Join(g.path, "memory.events"))
 	if err != nil {
 		return 0
 	}
 	for line := range strings.Lines(string(data)) {
-		if rest, ok := strings.CutPrefix(line, "oom_kill "); ok {
+		if rest, ok := strings.CutPrefix(line, name+" "); ok {
 			n, _ := strconv.Atoi(strings.TrimSpace(rest))
 			return n
 		}
