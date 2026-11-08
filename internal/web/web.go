@@ -90,6 +90,10 @@ type Defaults struct {
 	Hosts    []string        `json:"hosts"`
 	Efforts  []string        `json:"efforts"`
 	Date     string          `json:"date"` // what {{date}} would be filled with now
+	// Builtin is what tack would start with if nothing were saved.
+	Builtin prompt.Defaults `json:"builtin"`
+	// Variables are what each {{name}} would be filled with now, with these settings.
+	Variables map[string]string `json:"variables"`
 }
 
 // Reload is the result of reloading the config. NeedsRestart names settings that
@@ -99,8 +103,23 @@ type Reload struct {
 }
 
 // Handler returns the whole site.
-func Handler(c *core.Core, defaults func() Defaults, save func(prompt.Defaults) error, reload func() (Reload, error), hosts []string) http.Handler {
-	s := &server{core: c, defaults: defaults, save: save, reload: reload}
+// Options are what the web side needs from the rest of tack.
+type Options struct {
+	Defaults func() Defaults
+	Save     func(prompt.Defaults) error
+	Reload   func() (Reload, error)
+	// Hosts are the names the page can be reached by, besides localhost.
+	Hosts []string
+	// Variables are what {{name}} fills with, for a conversation with these settings.
+	Variables func(store.Settings) map[string]string
+}
+
+func Handler(c *core.Core, opts Options) http.Handler {
+	hosts := opts.Hosts
+	s := &server{core: c, defaults: opts.Defaults, save: opts.Save, reload: opts.Reload, variables: opts.Variables}
+	if s.variables == nil {
+		s.variables = func(store.Settings) map[string]string { return map[string]string{"date": prompt.Date(time.Now())} }
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.Handle("GET /static/", http.FileServerFS(static))
@@ -237,6 +256,8 @@ type server struct {
 	defaults func() Defaults
 	save     func(prompt.Defaults) error
 	reload   func() (Reload, error)
+	// variables are what {{name}} fills with.
+	variables func(store.Settings) map[string]string
 }
 
 // readText reads the JSON body every write endpoint takes.
@@ -339,7 +360,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	blocks := prompt.Blocks(body.Sections, prompt.Date(time.Now()))
+	blocks := prompt.Blocks(body.Sections, s.variables(s.core.StartSettings(body.Settings)))
 	offer := body.Tools
 	if offer == nil {
 		offer = []core.Offer{}
@@ -395,6 +416,8 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) newDefaults(w http.ResponseWriter, _ *http.Request) {
 	defaults := s.defaults()
+	defaults.Builtin = prompt.Builtin()
+	defaults.Variables = s.variables(s.core.StartSettings(nil))
 	writeJSON(w, defaults)
 }
 

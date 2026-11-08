@@ -22,6 +22,7 @@ import (
 	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/config"
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/docs"
 	"github.com/betawaffle/tack/internal/openrouter"
 	"github.com/betawaffle/tack/internal/prompt"
 	"github.com/betawaffle/tack/internal/secret"
@@ -86,11 +87,12 @@ func main() {
 		log.Fatal(err)
 	}
 	client := openrouter.NewClient(cfg.URL, key)
+	library := docs.Library{TackFS: modelDocs(), UserDir: filepath.Join(filepath.Dir(*configPath), "docs")}
 	c, err := core.New(core.Config{
 		Store:    st,
 		Client:   client,
 		Prices:   client.Endpoints,
-		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups}), core.NoteTools()...),
+		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups, Docs: library, Variables: variables}), core.NoteTools()...),
 		Settings: cfg.Settings,
 	})
 	if err != nil {
@@ -178,7 +180,7 @@ func main() {
 	if name, err := os.Hostname(); err == nil {
 		hosts = append(hosts, name)
 	}
-	server := &http.Server{Addr: cfg.Addr, Handler: web.Handler(c, defaults, save, reload, hosts)}
+	server := &http.Server{Addr: cfg.Addr, Handler: web.Handler(c, web.Options{Defaults: defaults, Save: save, Reload: reload, Hosts: hosts, Variables: variables})}
 	go func() {
 		<-c.Drained()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

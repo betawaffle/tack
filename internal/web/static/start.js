@@ -134,7 +134,7 @@ function propertySummary(name, property, required) {
 function toolsEditor(tools, onChange) {
   const node = el("div", "tools-editor");
   const draw = () => {
-    node.replaceChildren(...tools.map((tool, i) => toolEditor(tools, i, draw, onChange)));
+    node.replaceChildren(allToggle("tool", tools, draw, onChange), ...tools.map((tool, i) => toolEditor(tools, i, draw, onChange)));
     const add = button("+ Custom tool", "mini", () => {
       tools.push(blankTool(tools));
       draw();
@@ -278,12 +278,48 @@ function toolEditor(tools, i, redraw, onChange) {
 
 // Sections.
 
+// normalSection takes a section in the older form, one text, as well as the newer one.
+function normalSection(section) {
+  if (section.paragraphs) return section;
+  const out = { name: section.name, paragraphs: (section.text ?? "").split(PARAGRAPH).map((text) => ({ text })) };
+  if (section.off) out.off = true;
+  return out;
+}
+
+function sectionText(section) {
+  return section.paragraphs.filter((p) => !p.off).map((p) => p.text).join(PARAGRAPH);
+}
+
+function sectionSent(section) {
+  return !section.off && section.paragraphs.some((p) => !p.off);
+}
+
+// allToggle is a pair of buttons that turn every item on or off.
+function allToggle(what, items, redraw, onChange) {
+  const row = el("div", "row all-toggle");
+  for (const [label, off] of [["All on", false], ["All off", true]]) {
+    const b = button(label, "mini", () => {
+      for (const item of items) {
+        if (off) item.off = true;
+        else delete item.off;
+      }
+      redraw();
+      onChange();
+    });
+    b.title = `${off ? "Turn off" : "Turn on"} every ${what}`;
+    b.dataset.all = `${what}-${off ? "off" : "on"}`;
+    row.append(b);
+  }
+  return row;
+}
+
 function sectionsEditor() {
   const node = el("div", "sections-editor");
   const draw = () => {
-    node.replaceChildren(...start.sections.map((_, i) => sectionEditor(i, draw)));
+    start.sections = start.sections.map(normalSection);
+    node.replaceChildren(allToggle("section", start.sections, draw, startChanged), ...start.sections.map((_, i) => sectionEditor(i, draw)));
     node.append(button("+ Section", "mini", () => {
-      start.sections.push({ name: `section_${start.sections.length + 1}`, text: "" });
+      start.sections.push({ name: `section_${start.sections.length + 1}`, paragraphs: [{ text: "" }] });
       draw();
       startChanged();
       node.querySelector(".section-editor:last-of-type textarea")?.focus();
@@ -291,6 +327,13 @@ function sectionsEditor() {
   };
   draw();
   return node;
+}
+
+// unknownVariables names the {{name}}s in text that tack won't fill.
+function unknownVariables(text) {
+  const unknown = [];
+  scanVariables(text, start?.defaults?.variables ?? {}, (name) => name, (name) => unknown.push(name));
+  return unknown;
 }
 
 function sectionEditor(i, redraw) {
@@ -329,18 +372,36 @@ function sectionEditor(i, redraw) {
     }));
   node.append(head);
   const paragraphs = el("div", "paragraphs");
-  const read = () => {
-    section.text = [...paragraphs.querySelectorAll("textarea")].map((a) => a.value).join(PARAGRAPH);
-    startChanged();
-  };
   const drawParagraphs = (focus) => {
-    const parts = section.text.split(PARAGRAPH);
-    paragraphs.replaceChildren(...parts.map((text, j) => {
-      const row = el("div", "paragraph");
-      const area = growing("paragraph-text", text, `Paragraph ${j + 1} of ${section.name}`, read);
-      row.append(area, smallButton("✕", "Remove this paragraph", () => {
-        parts.splice(j, 1);
-        section.text = parts.join(PARAGRAPH);
+    paragraphs.replaceChildren(...section.paragraphs.map((paragraph, j) => {
+      const row = el("div", `paragraph${paragraph.off ? " is-off" : ""}`);
+      const send = el("input");
+      send.type = "checkbox";
+      send.checked = !paragraph.off;
+      send.dataset.paragraphOn = "";
+      send.setAttribute("aria-label", `Send paragraph ${j + 1} of ${section.name}`);
+      send.addEventListener("change", () => {
+        if (send.checked) delete paragraph.off;
+        else paragraph.off = true;
+        row.classList.toggle("is-off", Boolean(paragraph.off));
+        startChanged();
+      });
+      const warn = el("div", "hint paragraph-warning");
+      const check = () => {
+        const unknown = unknownVariables(paragraph.text);
+        warn.textContent = unknown.length ? `tack doesn't fill ${unknown.map((n) => `{{${n}}}`).join(", ")}, so it's sent as written.` : "";
+        warn.hidden = !unknown.length;
+      };
+      const area = growing("paragraph-text", paragraph.text, `Paragraph ${j + 1} of ${section.name}`, (value) => {
+        paragraph.text = value;
+        check();
+        startChanged();
+      });
+      check();
+      const body = el("div", "paragraph-body");
+      body.append(area, warn);
+      row.append(send, body, smallButton("✕", "Remove this paragraph", () => {
+        section.paragraphs.splice(j, 1);
         drawParagraphs();
         startChanged();
       }));
@@ -350,17 +411,152 @@ function sectionEditor(i, redraw) {
   };
   drawParagraphs();
   const add = button("+ Paragraph", "mini", () => {
-    section.text += PARAGRAPH;
-    drawParagraphs(section.text.split(PARAGRAPH).length - 1);
+    section.paragraphs.push({ text: "" });
+    drawParagraphs(section.paragraphs.length - 1);
     startChanged();
   });
   node.append(paragraphs, add);
   return node;
 }
 
+// scanVariables calls back with each {{name}} in text, the same way tack finds them: a name
+// is everything up to the next }}, and one that isn't filled is passed over from its {{.
+function scanVariables(text, variables, onKnown, onUnknown) {
+  let out = "";
+  for (;;) {
+    const open = text.indexOf("{{");
+    if (open < 0) break;
+    const end = text.indexOf("}}", open + 2);
+    if (end < 0) break;
+    const name = text.slice(open + 2, end);
+    if (!Object.hasOwn(variables, name)) {
+      onUnknown?.(name);
+      out += text.slice(0, open + 2);
+      text = text.slice(open + 2);
+      continue;
+    }
+    out += text.slice(0, open) + onKnown(name);
+    text = text.slice(end + 2);
+  }
+  return out + text;
+}
+
+function fill(text, variables) {
+  return scanVariables(text, variables, (name) => variables[name]);
+}
+
+// The variables tack fills, with what they'd be now.
+function variablesList() {
+  const variables = start.defaults.variables ?? {};
+  const node = el("details", "variables");
+  node.append(el("summary", "", "Variables"));
+  node.append(el("div", "hint", "Write {{name}} in any paragraph, and tack fills it in when the conversation starts. These are what they'd be now."));
+  const table = el("div", "variable-table");
+  for (const name of Object.keys(variables).sort()) {
+    table.append(exact(`{{${name}}}`, "variable-name"), exact(variables[name], "variable-value"));
+  }
+  node.append(table);
+  return node;
+}
+
+// Comparing with tack's own sections, the ones it'd start with if nothing were saved.
+
+// paragraphDiff lines up two lists of paragraphs by their text, as kept, removed or added.
+function paragraphDiff(before, after) {
+  const a = before.map((p) => p.text);
+  const b = after.map((p) => p.text);
+  const lengths = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lengths[i][j] = a[i] === b[j] ? lengths[i + 1][j + 1] + 1 : Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      out.push({ kind: "same", text: a[i], offBefore: Boolean(before[i].off), offAfter: Boolean(after[j].off) });
+      i++;
+      j++;
+    } else if (j < b.length && (i === a.length || lengths[i][j + 1] >= lengths[i + 1][j])) {
+      out.push({ kind: "added", text: b[j], offAfter: Boolean(after[j].off) });
+      j++;
+    } else {
+      out.push({ kind: "removed", text: a[i], offBefore: Boolean(before[i].off) });
+      i++;
+    }
+  }
+  return out;
+}
+
+function sameSection(a, b) {
+  return Boolean(a.off) === Boolean(b.off) && JSON.stringify(a.paragraphs.map((p) => [p.text, Boolean(p.off)])) === JSON.stringify(b.paragraphs.map((p) => [p.text, Boolean(p.off)]));
+}
+
+function comparison() {
+  const node = el("details", "start-group comparison");
+  node.append(el("summary", "", "Compared with tack's sections"));
+  const body = el("div");
+  node.append(body);
+  node.draw = () => {
+    if (!node.open) return;
+    const builtin = (start.defaults.builtin?.sections ?? []).map(normalSection);
+    const parts = [el("div", "hint", "tack's own sections are what a new conversation would start with if you'd saved nothing. Sections are matched by name.")];
+    for (const theirs of builtin) {
+      const yours = start.sections.find((s) => s.name === theirs.name);
+      const box = el("div", "compare-section");
+      box.dataset.compare = theirs.name;
+      const head = el("div", "row");
+      head.append(exact(theirs.name, "section-name-text"));
+      if (!yours) {
+        head.append(el("span", "tag", theirs.off ? "not in yours, off in tack's" : "not in yours"));
+        const add = button("Add to yours", "mini", () => {
+          start.sections.push(structuredClone(theirs));
+          redrawStart();
+          node.draw();
+        });
+        add.dataset.addSection = theirs.name;
+        head.append(add);
+        box.append(head);
+        for (const p of theirs.paragraphs) box.append(diffParagraph({ kind: "same", text: p.text, offAfter: Boolean(p.off) }));
+      } else if (sameSection(theirs, yours)) {
+        head.append(el("span", "tag", "the same"));
+        box.append(head);
+      } else {
+        head.append(el("span", "tag", "differs"));
+        if (Boolean(theirs.off) !== Boolean(yours.off)) head.append(el("span", "hint", yours.off ? "off in yours, on in tack's" : "on in yours, off in tack's"));
+        box.append(head);
+        for (const line of paragraphDiff(theirs.paragraphs, yours.paragraphs)) box.append(diffParagraph(line));
+      }
+      parts.push(box);
+    }
+    const mine = start.sections.filter((s) => !builtin.some((b) => b.name === s.name));
+    if (mine.length) parts.push(el("div", "hint", `Only in yours: ${mine.map((s) => s.name).join(", ")}.`));
+    body.replaceChildren(...parts);
+  };
+  node.addEventListener("toggle", node.draw);
+  return node;
+}
+
+function diffParagraph(line) {
+  const mark = { same: " ", added: "+", removed: "−" }[line.kind];
+  const row = el("div", `diff-line is-${line.kind}`);
+  let note = "";
+  if (line.kind === "same" && line.offBefore !== undefined) {
+    if (line.offBefore !== line.offAfter) note = line.offAfter ? "off in yours" : "on in yours, off in tack's";
+  } else if (line.offAfter || line.offBefore) {
+    note = "off";
+  }
+  row.append(el("span", "diff-mark", mark), exact(line.text, "diff-text"));
+  if (note) row.append(el("span", "hint", ` (${note})`));
+  return row;
+}
+
 // The preview is what's sent: the text with today's date, and each definition.
 function systemText() {
-  return start.sections.filter((s) => !s.off).map((s) => s.text.replaceAll("{{date}}", start.defaults.date)).join(PARAGRAPH);
+  const variables = start.defaults.variables ?? { date: start.defaults.date };
+  return start.sections.filter(sectionSent).map((s) => fill(sectionText(s), variables)).join(PARAGRAPH);
 }
 
 function refreshPreview() {
@@ -369,7 +565,7 @@ function refreshPreview() {
   const text = systemText();
   const tools = offers(start.tools).map((o) => o.definition);
   box.replaceChildren(
-    el("div", "hint", text ? `System message, ${count(new TextEncoder().encode(text).length)} bytes. {{date}} is filled in when the conversation starts.` : "No system message."),
+    el("div", "hint", text ? `System message, ${count(new TextEncoder().encode(text).length)} bytes, with variables as they'd be now. They're filled in when the conversation starts.` : "No system message."),
     exact(text || ""),
     el("div", "hint", tools.length ? `Tools, in order` : "No tools."),
     exact(tools.length ? JSON.stringify(tools, null, 2) : ""),
@@ -384,6 +580,7 @@ function startState() {
 
 function startChanged() {
   refreshPreview();
+  document.querySelector(".comparison")?.draw();
   const saveButton = $("save-defaults");
   if (saveButton) saveButton.disabled = startState() === savedState;
 }
@@ -401,7 +598,7 @@ function setupStart(defaults) {
   if (defaults.problem) notes.push(`The saved defaults couldn't be read, so these are tack's own: ${defaults.problem}`);
   start = {
     defaults,
-    sections: structuredClone(defaults.prompt?.sections ?? []),
+    sections: structuredClone(defaults.prompt?.sections ?? []).map(normalSection),
     tools: toolList(defaults.prompt?.tools ?? null, notes),
   };
   const panel = $("start-panel");
@@ -409,11 +606,12 @@ function setupStart(defaults) {
   for (const note of notes) panel.append(el("div", "notice", note));
   const prompt = el("details", "start-group");
   prompt.open = true;
-  prompt.append(el("summary", "", "System prompt"), sectionsEditor());
+  prompt.append(el("summary", "", "System prompt"), sectionsEditor(), variablesList());
   const tools = el("details", "start-group");
   tools.open = true;
   tools.append(el("summary", "", "Tools"), el("div", "hint", "Built-in tools can only have their descriptions changed. You write the result of every call to a custom tool."));
   tools.append(toolsEditor(start.tools, startChanged));
+  const compare = comparison();
   const preview = el("details", "start-group");
   preview.append(el("summary", "", "Exactly what's sent"));
   const body = el("div");
@@ -445,7 +643,7 @@ function setupStart(defaults) {
   });
   reset.id = "reset-defaults";
   actions.append(save, reset);
-  panel.append(prompt, tools, preview, settings, actions);
+  panel.append(prompt, compare, tools, preview, settings, actions);
   savedState = startState();
   startChanged();
   refreshQuick();
@@ -483,7 +681,7 @@ async function startLike(conv) {
   const tools = await conversationTools(conv);
   await startNew();
   const first = conv.items[0];
-  start.sections = first && first.role === "system" ? [{ name: "system", text: first.text }] : [];
+  start.sections = first && first.role === "system" ? [normalSection({ name: "system", text: first.text })] : [];
   start.tools.splice(0, start.tools.length, ...tools);
   $("start-settings").value = JSON.stringify(conv.settings, null, 2);
   $("start-settings").dispatchEvent(new Event("input"));
@@ -503,7 +701,7 @@ function captureStart() {
 
 function restoreStart(saved) {
   if (!saved.sections || !saved.tools) return;
-  start.sections = saved.sections;
+  start.sections = saved.sections.map(normalSection);
   start.tools.splice(0, start.tools.length, ...saved.tools);
   $("start-settings").value = saved.settings;
   $("start-settings").dispatchEvent(new Event("input"));

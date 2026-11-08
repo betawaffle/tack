@@ -970,3 +970,12 @@ func (c *Core) joined(parts []store.Part) (string, error) {
 	}
 	return content.String(), nil
 }
+
+// StartSettings are the settings a new conversation would start with, given these, or
+// tack's own if there are none.
+func (c *Core) StartSettings(given *store.Settings) store.Settings {
+	if given != nil {
+		return given.WithDefaults()
+	}
+	return c.currentSettings()
+}

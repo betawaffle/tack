@@ -21,6 +21,7 @@ import (
 
 	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/store"
 )
 
 // python is the interpreter for run_code. It's an absolute path, so it can't depend on
@@ -206,7 +207,7 @@ func pythonParts(ctx context.Context) (real string, dirs []string, files map[str
 // places in memory to write to. The rest of the tree is read-only and empty. There's no /proc,
 // which also hides the arguments of the sandbox's own processes, and no real /dev. It shares
 // the host's kernel, which is why there's a syscall filter as well.
-func (r *reader) codeArgs(real string, dirs []string, files map[string]string, memory int64) []string {
+func (r *reader) codeArgs(real string, dirs []string, files map[string]string, memory int64, docsDir string) []string {
 	args := []string{"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
 		"--hostname", "sandbox", "--ro-bind", real, real}
 	for _, path := range slices.Sorted(mapKeys(files)) {
@@ -224,6 +225,9 @@ func (r *reader) codeArgs(real string, dirs []string, files map[string]string, m
 				args = append(args, "--ro-bind", "/dev/null", path)
 			}
 		}
+	}
+	if docsDir != "" {
+		args = append(args, "--ro-bind", docsDir, DocsDir)
 	}
 	// Date math needs time zones, and they're nothing private.
 	args = append(args, "--ro-bind-try", "/usr/share/zoneinfo", "/usr/share/zoneinfo")
@@ -286,6 +290,27 @@ func inspectCode(call core.Call) ([]string, error) {
 		return nil, err
 	}
 	return []string{FlagCode}, nil
+}
+
+// writeDocs lays out the documentation as the model reads it, in a new directory on tack's
+// side that's mounted read-only. It's written fresh for each run, so it's always current.
+func (r *reader) writeDocs(settings store.Settings) (string, error) {
+	if r.docs.TackFS == nil && r.docs.UserDir == "" {
+		return "", nil
+	}
+	dir, err := os.MkdirTemp("", "tack-docs-")
+	if err != nil {
+		return "", err
+	}
+	variables := map[string]string{}
+	if r.variables != nil {
+		variables = r.variables(settings)
+	}
+	if err := r.docs.WriteFor(dir, variables); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return dir, nil
 }
 
 // codeLimits is /sandbox/limits.json, what this run was given. Memory covers /tmp and
@@ -368,7 +393,14 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	}
 	memory, release := r.memory.memoryLimit(total, available)
 	defer release()
-	sandbox := r.codeArgs(real, dirs, files, memory)
+	docsDir, err := r.writeDocs(call.Settings)
+	if err != nil {
+		return nil, fmt.Errorf("laying out the documentation: %w", err)
+	}
+	if docsDir != "" {
+		defer os.RemoveAll(docsDir)
+	}
+	sandbox := r.codeArgs(real, dirs, files, memory, docsDir)
 	if call.Keep != nil {
 		if err := call.Keep("sandbox", []byte(strings.Join(sandbox, "\n"))); err != nil {
 			return nil, err

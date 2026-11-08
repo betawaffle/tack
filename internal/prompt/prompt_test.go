@@ -4,6 +4,8 @@ import (
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +13,7 @@ import (
 
 func TestAMissingFileGivesTheBuiltins(t *testing.T) {
 	d, err := Load(filepath.Join(t.TempDir(), "nope.json"))
-	if err != nil || len(d.Sections) != 2 || d.Sections[0].Name != "base" || d.Tools != nil {
+	if err != nil || len(d.Sections) != 5 || d.Sections[0].Name != "base" || d.Tools != nil {
 		t.Errorf("defaults = %+v, %v", d, err)
 	}
 }
@@ -19,7 +21,7 @@ func TestAMissingFileGivesTheBuiltins(t *testing.T) {
 func TestSaveThenLoadKeepsEverythingInOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "prompt.json")
 	want := Defaults{
-		Sections: []Section{{Name: "b", Text: "B\n\nmore"}, {Name: "a", Text: "A", Off: true}},
+		Sections: []Section{{Name: "b", Paragraphs: []Paragraph{{Text: "B"}, {Text: "more", Off: true}}}, {Name: "a", Paragraphs: Split("A"), Off: true}},
 		Tools:    []Tool{{Name: "x", Custom: true, Definition: []byte(`{"type":"function","function":{"name":"x"}}`)}, {Name: "run_code", Off: true}},
 	}
 	if err := Save(path, want); err != nil {
@@ -29,7 +31,7 @@ func TestSaveThenLoadKeepsEverythingInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Sections) != 2 || got.Sections[0] != want.Sections[0] || got.Sections[1] != want.Sections[1] {
+	if !reflect.DeepEqual(got.Sections, want.Sections) {
 		t.Errorf("sections = %+v", got.Sections)
 	}
 	if len(got.Tools) != 2 || got.Tools[0].Name != "x" || !got.Tools[0].Custom || !got.Tools[1].Off || got.Tools[1].Definition != nil {
@@ -49,19 +51,57 @@ func TestABrokenFileIsAnErrorWithTheBuiltins(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if d, err := Load(path); err == nil || len(d.Sections) != 2 {
+	if d, err := Load(path); err == nil || len(d.Sections) != 5 {
 		t.Errorf("defaults = %+v, %v", d, err)
 	}
 }
 
-func TestBlocksSkipWhatsOffAndFillTheDate(t *testing.T) {
-	sections := []Section{{Name: "a", Text: "A"}, {Name: "off", Text: "X", Off: true}, {Name: "b", Text: "on {{date}} and {{date}}"}}
-	got := Blocks(sections, Date(time.Date(2026, 11, 7, 23, 0, 0, 0, time.UTC)))
-	if strings.Join(got, "") != "A\n\non 2026-11-07 and 2026-11-07" || len(got) != 3 {
+func TestBlocksSkipWhatsOffAndFillVariables(t *testing.T) {
+	sections := []Section{
+		{Name: "a", Paragraphs: []Paragraph{{Text: "A"}, {Text: "hidden", Off: true}, {Text: "B"}}},
+		{Name: "off", Paragraphs: Split("X"), Off: true},
+		{Name: "none on", Paragraphs: []Paragraph{{Text: "Y", Off: true}}},
+		{Name: "b", Paragraphs: Split("on {{date}} and {{date}}, {{nope}} {{ date }} {{")},
+	}
+	got := Blocks(sections, map[string]string{"date": Date(time.Date(2026, 11, 7, 23, 0, 0, 0, time.UTC))})
+	if strings.Join(got, "") != "A\n\nB\n\non 2026-11-07 and 2026-11-07, {{nope}} {{ date }} {{" || len(got) != 3 {
 		t.Errorf("blocks = %q", got)
 	}
-	if Blocks(nil, "d") != nil {
+	if Blocks(nil, nil) != nil {
 		t.Error("no sections should give no blocks")
+	}
+	if got := Fill("{{a}}{{b}}}}{{a}", map[string]string{"a": "{{b}}", "b": "x"}); got != "{{b}}x}}{{a}" {
+		t.Errorf("fill = %q", got)
+	}
+}
+
+func TestTheOlderFormStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prompt.json")
+	if err := os.WriteFile(path, []byte(`{"sections":[{"name":"a","text":"one\n\ntwo","off":true}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Load(path)
+	if err != nil || len(d.Sections) != 1 || !d.Sections[0].Off || !reflect.DeepEqual(d.Sections[0].Paragraphs, []Paragraph{{Text: "one"}, {Text: "two"}}) {
+		t.Errorf("loaded = %+v, %v", d, err)
+	}
+}
+
+func TestEveryBuiltinVariableIsOneTackFills(t *testing.T) {
+	known := []string{"date", "model", "host", "tack_revision", "python_version", "memory_min", "memory_max", "work_size", "time_limit", "channel_line_size", "channel_calls", "docs_dir", "tack_docs", "user_docs"}
+	for _, s := range builtin().Sections {
+		text := s.Text()
+		for {
+			i := strings.Index(text, "{{")
+			if i < 0 {
+				break
+			}
+			j := strings.Index(text[i:], "}}")
+			name := text[i+2 : i+j]
+			if !slices.Contains(known, name) {
+				t.Errorf("%s uses {{%s}}", s.Name, name)
+			}
+			text = text[i+j:]
+		}
 	}
 }
 

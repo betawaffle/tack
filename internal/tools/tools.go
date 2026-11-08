@@ -16,6 +16,7 @@ import (
 
 	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/docs"
 	"github.com/betawaffle/tack/internal/store"
 )
 
@@ -29,11 +30,14 @@ type Options struct {
 	Protected []string
 	// Cgroups, if set, gives each run its own cgroup.
 	Cgroups *cgroup.Manager
+	// Docs is the documentation code can read, under /docs, with Variables filled in.
+	Docs      docs.Library
+	Variables func(store.Settings) map[string]string
 }
 
 // All returns every tool.
 func All(opts Options) []core.Tool {
-	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups}
+	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups, docs: opts.Docs, variables: opts.Variables}
 	return []core.Tool{{
 		Name:          "run_code",
 		Definition:    definition("run_code", codeDescription, `{"language":{"type":"string","enum":["python"],"description":"The language it's written in."},"code":{"type":"string","description":"The code to run."}}`, `["language","code"]`),
@@ -56,6 +60,8 @@ type reader struct {
 	protected []string
 	cgroups   *cgroup.Manager
 	memory    budgets
+	docs      docs.Library
+	variables func(store.Settings) map[string]string
 }
 
 // arguments reads a call's strings, refusing anything it doesn't expect.

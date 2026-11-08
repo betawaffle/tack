@@ -63,6 +63,13 @@ http
         res.end(JSON.stringify(bodies));
         return;
       }
+      // OpenRouter's public list of hosts and prices, which tack's estimate uses.
+      if (req.method === "GET" && /^\/v1\/models\/.+\/endpoints$/.test(req.url)) {
+        const price = { prompt: "0.000001", completion: "0.000001", input_cache_read: "0.0000001" };
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ data: { endpoints: [{ tag: "morph/fp8", pricing: price }, { tag: "relace/fp4", pricing: price }] } }));
+        return;
+      }
       if (req.url === "/reset") {
         bodies = [];
         res.end("ok");

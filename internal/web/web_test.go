@@ -39,12 +39,12 @@ func site(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := httptest.NewServer(Handler(c, func() Defaults {
-		return Defaults{Prompt: prompt.Defaults{Sections: []prompt.Section{{Name: "a", Text: "the default"}}}}
-	}, func(d prompt.Defaults) error {
+	s := httptest.NewServer(Handler(c, Options{Defaults: func() Defaults {
+		return Defaults{Prompt: prompt.Defaults{Sections: []prompt.Section{{Name: "a", Paragraphs: prompt.Split("the default")}}}}
+	}, Save: func(d prompt.Defaults) error {
 		saved = &d
 		return nil
-	}, noReload, []string{"framework"}))
+	}, Reload: noReload, Hosts: []string{"framework"}}))
 	t.Cleanup(s.Close)
 	return s
 }

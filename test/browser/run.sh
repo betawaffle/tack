@@ -30,7 +30,7 @@ cat >"$tmp/config.json" <<CONFIG
   "addr": "127.0.0.1:18601",
   "data": "$tmp/data",
   "key": "$tmp/key",
-  "url": "http://127.0.0.1:18600/v1",
+  "url": "http://127.0.0.1:18600/v1/chat/completions",
   "prompt": "$tmp/prompt.json",
   "budget_usd": 1
 }

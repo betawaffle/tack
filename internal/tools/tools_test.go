@@ -15,10 +15,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/docs"
 	"github.com/betawaffle/tack/internal/store"
 )
 
@@ -26,6 +28,7 @@ type fixture struct {
 	t       *testing.T
 	workdir string
 	key     string
+	docs    string
 	tools   map[string]core.Tool
 }
 
@@ -36,7 +39,11 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f.write(f.key, "the key", 0o600)
-	for _, tool := range All(Options{Protected: []string{f.key}}) {
+	f.docs = filepath.Join(base, "docs")
+	f.write(filepath.Join(f.docs, "mine.md"), "Mine, see [[theirs]] on {{model}}.", 0o644)
+	library := docs.Library{TackFS: fstest.MapFS{"theirs.md": {Data: []byte("Tack's.")}}, UserDir: f.docs}
+	variables := func(s store.Settings) map[string]string { return map[string]string{"model": "the model"} }
+	for _, tool := range All(Options{Protected: []string{f.key}, Docs: library, Variables: variables}) {
 		f.tools[tool.Name] = tool
 	}
 	return f
@@ -234,6 +241,26 @@ func TestMemoryIsWhatsSpareWithinBounds(t *testing.T) {
 		t.Errorf("big machine = %d", got)
 	} else {
 		release()
+	}
+}
+
+func TestCodeCanReadTheDocsButNotChangeThem(t *testing.T) {
+	f := newFixture(t)
+	got, err := runCode(t, f, `
+print(open("/docs/user/mine.md").read())
+print(open("/docs/tack/theirs.md").read())
+print("index" if "- [mine](user/mine.md)" in open("/docs/index.md").read() else "no index")
+try:
+    open("/docs/user/mine.md", "w")
+except OSError as e:
+    print("refused", e.errno)
+`)
+	if err != nil || got != "Mine, see [theirs](../tack/theirs.md) on the model.\nTack's.\nindex\nrefused 30\n" {
+		t.Errorf("docs = %q, %v", got, err)
+	}
+	// Each run gets its own copy, and it's gone afterwards.
+	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), "tack-docs-*")); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
 	}
 }
 

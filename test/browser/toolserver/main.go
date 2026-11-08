@@ -30,7 +30,7 @@ func main() {
 	data := flag.String("data", "", "data directory")
 	url := flag.String("url", "", "provider URL, normally the fake one")
 	keyPath := flag.String("key", "", "key file for a real provider; empty means a fake key")
-	model := flag.String("model", "test/model", "model")
+	model := flag.String("model", "deepseek/deepseek-v4.1-flash", "model, one tack can count tokens for, so there's an estimate")
 	flag.Parse()
 
 	key := secret.NewKey("sk-or-fake-key-for-browser-tests")
@@ -50,6 +50,10 @@ func main() {
 		Model:    *model,
 		Settings: store.Settings{BudgetUSD: 1},
 		Routing:  openrouter.Routing{Order: []string{"morph/fp8"}},
+		Prices: func(context.Context, string) ([]openrouter.Endpoint, error) {
+			price := openrouter.Price{Prompt: "0.000001", Completion: "0.000001"}
+			return []openrouter.Endpoint{{Tag: "morph/fp8", Pricing: price}, {Tag: "relace/fp4", Pricing: price}}, nil
+		},
 		Tools: []core.Tool{
 			{Name: "echo", Definition: definition("echo"), Run: func(_ context.Context, call core.Call) ([]byte, error) {
 				var text string
@@ -72,7 +76,7 @@ func main() {
 	}
 	var (
 		mu    sync.Mutex
-		saved = prompt.Defaults{Sections: []prompt.Section{{Name: "test", Text: "Use your tools carefully."}}}
+		saved = prompt.Defaults{Sections: []prompt.Section{{Name: "test", Paragraphs: prompt.Split("Use your tools carefully.")}}}
 	)
 	defaults := func() web.Defaults {
 		mu.Lock()
@@ -85,5 +89,5 @@ func main() {
 		saved = d
 		return nil
 	}
-	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, defaults, save, func() (web.Reload, error) { return web.Reload{}, nil }, nil)))
+	log.Fatal(http.ListenAndServe(*addr, web.Handler(c, web.Options{Defaults: defaults, Save: save, Reload: func() (web.Reload, error) { return web.Reload{}, nil }})))
 }

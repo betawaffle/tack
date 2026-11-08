@@ -54,14 +54,16 @@ let page;
   // The prompt is sections of paragraphs, and the tools are listed in order.
   await fresh();
   await p.screenshot({ path: "shots/start-panel.png", fullPage: true });
-  ok((await sectionNames()).join() === "base,tools", "the built-in sections are there, in order");
+  const builtinNames = "base,tools,facts-model,facts-sandbox,facts-docs";
+  ok((await sectionNames()).join() === builtinNames, "the built-in sections are there, in order");
+  ok(!(await section("facts-sandbox").locator("input[data-section-on]").isChecked()), "the facts sections start off");
   ok((await section("base").locator(".paragraph-text").count()) === 4, "split into paragraphs");
   ok((await toolNames()).join() === "run_code,note,scratch", "and so are the tools");
   ok((await p.locator(".tool-editor[data-tool=run_code] .tool-param-head").first().innerText()).includes('one of "python", required'), "a tool shows what it takes, not just its descriptions");
 
   // Moving, removing, editing and adding.
   await section("tools").locator("button[title='Move up']").click();
-  ok((await sectionNames()).join() === "tools,base", "sections can be moved");
+  ok((await sectionNames()).join().startsWith("tools,base,"), "sections can be moved");
   await section("base").locator(".paragraph").nth(1).locator("button").click();
   await section("base").locator(".paragraph-text").first().fill("Edited first paragraph.");
   await section("base").locator("button", { hasText: "+ Paragraph" }).click();
@@ -69,10 +71,26 @@ let page;
   await p.locator(".sections-editor > button", { hasText: "+ Section" }).click();
   await p.locator(".section-editor").last().locator(".paragraph-text").fill("A new section.");
   await section("tools").locator("input[data-section-on]").uncheck();
+  // A paragraph can be off too, and an unknown variable is pointed out.
+  await section("base").locator("button", { hasText: "+ Paragraph" }).click();
+  await section("base").locator(".paragraph-text").last().fill("Not sent {{nope}}.");
+  ok((await section("base").locator(".paragraph-warning").last().innerText()).includes("{{nope}}"), "an unknown variable is pointed out");
+  await section("base").locator("input[data-paragraph-on]").last().uncheck();
   await p.locator("#start-panel summary", { hasText: "Exactly what's sent" }).click();
   const preview = await p.locator("#start-preview-body pre").first().innerText();
   ok(preview.startsWith("Edited first paragraph.\n\nYou're welcome") && preview.endsWith("An added paragraph.\n\nA new section."), "the preview is exactly what's sent: " + preview.slice(-60));
   ok(!preview.includes("{{date}}") && /started on \d{4}-\d\d-\d\d\./.test(preview), "with the date filled in");
+  ok(!preview.includes("Not sent"), "without the paragraph that's off");
+  // Compared with tack's own.
+  await p.locator("#start-panel summary", { hasText: "Compared with tack's sections" }).click();
+  await p.waitForSelector(".compare-section");
+  ok(await p.locator(".compare-section[data-compare=base] .tag", { hasText: "differs" }).isVisible(), "a changed section shows as different");
+  ok((await p.locator(".compare-section[data-compare=base] .diff-line.is-added").count()) >= 2, "with what was added");
+  ok(await p.locator(".compare-section[data-compare=facts-docs] .tag", { hasText: "the same" }).isVisible(), "and the rest as the same");
+  await section("facts-docs").locator("button[title='Remove this section']").click();
+  await p.locator("button[data-add-section=facts-docs]").click();
+  ok((await sectionNames()).at(-1) === "facts-docs", "a missing one can be added back from tack's");
+  await p.screenshot({ path: "shots/start-compare.png", fullPage: true });
   await p.screenshot({ path: "shots/start-edited.png", fullPage: true });
   await reset();
   await send("short one");
@@ -99,13 +117,21 @@ let page;
   await p.click("#save-defaults");
   await p.waitForFunction(() => document.getElementById("save-defaults").disabled);
   await fresh();
-  ok((await sectionNames()).join() === "intro,tools", "saved defaults come back");
+  ok((await sectionNames()).join() === "intro,tools,facts-model,facts-sandbox,facts-docs", "saved defaults come back");
   ok(!(await section("tools").locator("input[data-section-on]").isChecked()) && !(await p.locator("input[data-offer=scratch]").isChecked()), "with what was off");
   const savedFile = JSON.parse(fs.readFileSync(PROMPT_FILE, "utf8"));
   ok(savedFile.sections[0].name === "intro" && savedFile.tools.length === 3, "they're in the prompt file");
   fs.unlinkSync(PROMPT_FILE);
   await fresh();
-  ok((await sectionNames()).join() === "base,tools", "and without it, tack's own come back");
+  ok((await sectionNames()).join() === builtinNames, "and without it, tack's own come back");
+  // Everything on or off at once.
+  await p.locator("button[data-all=tool-off]").click();
+  ok((await p.locator("#start-panel input[data-offer]:checked").count()) === 0, "every tool can be turned off at once");
+  await p.locator("button[data-all=tool-on]").click();
+  ok((await p.locator("#start-panel input[data-offer]:not(:checked)").count()) === 0, "and on");
+  await p.locator("button[data-all=section-on]").click();
+  ok((await p.locator("#start-panel input[data-section-on]:not(:checked)").count()) === 0, "and every section");
+  await fresh();
 
   // A custom tool, which you answer.
   await p.locator(".tools-editor > button", { hasText: "+ Custom tool" }).click();
@@ -416,12 +442,7 @@ let page;
 
   // Spending, against what tack really reports.
   const spend = await p.locator("#spend").innerText();
-  ok(/Next call about \S+¢\. Up to \S+ before tack asks you again/.test(spend), "the composer says what the next call looks like: " + spend);
-  const estimate = (text) => Number(/about (\S+)¢\./.exec(text)[1]);
-  await p.fill("#input", "x".repeat(200000));
-  const typed = await p.locator("#spend").innerText();
-  ok(estimate(typed) > estimate(spend), "and the estimate grows while typing: " + typed);
-  await p.fill("#input", "");
+  ok(/Next call at least \S+¢, with [\d,]+ tokens so far\. Up to \S+ before tack asks you again/.test(spend), "the composer says the least the next call could cost: " + spend);
 
   // Changing the budget from there. A settings box can't drift from it.
   await p.click("#spend-change");

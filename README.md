@@ -112,9 +112,21 @@ when a conversation starts and never rendered again, because changing the start 
 misses the whole cache. Each section is stored as its own block.
 
 The start panel shows each section as its paragraphs, and you can rename, reorder, turn off,
-add and remove sections and paragraphs. The only thing filled in is `{{date}}`, which becomes
-the date the conversation starts, as `YYYY-MM-DD`. There's no other template language.
-**Exactly what's sent** shows the text and the tool definitions as they'll go out.
+add and remove sections and paragraphs, and turn off single paragraphs. **All on** and
+**All off** do every section, or every tool, at once.
+
+A paragraph can use variables, written `{{name}}`, which tack fills in when the conversation
+starts: `{{date}}` as `YYYY-MM-DD`, the model and host, tack's revision, and facts about
+running code, like the Python version and the limits. **Variables** lists them all with what
+they'd be now. A name is compared whole, and one tack doesn't know is sent as written and
+pointed out under its paragraph. There's no other template language. **Exactly what's sent**
+shows the text and the tool definitions as they'll go out.
+
+tack's own sections include `facts-model`, `facts-sandbox` and `facts-docs`, which are off.
+Each is a list of plain facts about what the model has, one per paragraph, with anything that
+can change without changing tack's code as a variable. **Compared with tack's sections**
+lines yours up with tack's by name, and shows each one as the same, different (paragraph by
+paragraph), or missing from yours, with a button to add it.
 
 Below the sections are the tools, in the order they're offered, each with a box to turn it off.
 A built-in tool shows what each parameter takes, and only its descriptions can be edited: the
@@ -122,7 +134,7 @@ rest is what its code relies on. **Whole definition** shows it exactly.
 
 **Save as default** writes the sections and tools, including what's turned off, to the `prompt`
 file, and **Back to the default** loads it again. Without the file, new conversations start
-from tack's own `base` and `tools` sections and every built-in tool. The file holds personal
+from tack's own sections and every built-in tool. The file holds personal
 text, so it's yours, not part of tack. **Start another like this** fills the panel in from a
 conversation, with its whole system message as one section.
 
@@ -130,6 +142,18 @@ A conversation's tools can change later, from the editor for its first system me
 its settings panel. Like settings, the change is held until you apply it, and it can't be
 applied while a call is waiting. Tools come first in every request, so the next call misses
 the whole cache.
+
+## Documentation for the model
+
+Some things are better read when they're needed than kept in every prompt. Code can read
+documentation under `/docs`, written fresh for each run: `/docs/tack` is tack's, from
+[`docs/model`](docs/model) in this repository, so it changes along with the code, and
+`/docs/user` is yours, the Markdown files in a `docs` directory next to the config file
+(only regular files, up to 16 MB in all). `/docs/index.md` lists every page. Pages can use the
+same `{{name}}` variables as prompts, and link to each other with `[[Page]]` or
+`[[Page|label]]`, where a page's name is its path without `.md`, looked for in the same tree
+first. The model reads those as relative Markdown links. The `facts-docs` section says where
+the documentation is.
 
 ## Custom tools
 
