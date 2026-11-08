@@ -29,13 +29,29 @@ const msgs = (b) => JSON.parse(b).messages;
     if (m.type() === "error" && !/502|409/.test(m.text())) errs.push(m.text());
   });
   p.on("pageerror", (e) => errs.push("pageerror " + e.message));
+  // The page looks idle before a send has even started: a new conversation is created
+  // first, and only then does the call make the page busy. So send notes when the send
+  // button goes off, and idle waits for that before it waits for the button to come back.
   const send = async (t) => {
     await p.fill("#input", t);
+    await p.evaluate(() => {
+      window.__busySeen = false;
+      const b = document.getElementById("send");
+      const seen = new MutationObserver(() => {
+        if (!b.disabled) return;
+        window.__busySeen = true;
+        seen.disconnect();
+      });
+      seen.observe(b, { attributes: true, attributeFilter: ["disabled"] });
+    });
     await p.press("#input", "Enter");
   };
   const idle = async () => {
     await p.waitForFunction(
-      () => !document.getElementById("send").disabled && !document.querySelector(".waiting-note"),
+      () =>
+        window.__busySeen !== false &&
+        !document.getElementById("send").disabled &&
+        !document.querySelector(".waiting-note"),
       null,
       { timeout: 15000 },
     );
