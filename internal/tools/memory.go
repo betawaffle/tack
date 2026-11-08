@@ -20,8 +20,9 @@ const (
 	codeMemoryMargin = 8 << 30
 )
 
-// budgets keeps track of the memory each running sandbox was given, so that two
-// starting together don't each count the same free memory.
+// budgets hands out memory. Sandboxes running at once can each be given what's spare, so
+// together they can be promised more than there is: if the machine runs short, the kernel
+// kills a sandbox first, and nothing else.
 type budgets struct {
 	mu      sync.Mutex
 	running map[*int64]bool
@@ -64,9 +65,6 @@ func (b *budgets) memoryLimit(total, available int64) (limit int64, release func
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	spare := available - max(codeMemoryMargin, total/10)
-	for promised := range b.running {
-		spare -= *promised
-	}
 	// Whole pages, so /tmp's size is exactly the limit.
 	limit = min(max(spare, codeMemoryMin), codeMemoryMax) &^ (4<<10 - 1)
 	if b.running == nil {

@@ -148,7 +148,7 @@ the whole cache.
 ## Documentation for the model
 
 Some things are better read when they're needed than kept in every prompt. Code can read
-documentation under `/docs`, written fresh for each run: `/docs/tack` is tack's, from
+documentation under `/docs`, written fresh for each run: `/docs/harness` is tack's, from
 [`docs/model`](docs/model) in this repository, so it changes along with the code, and
 `/docs/user` is yours, the Markdown files in a `docs` directory next to the config file
 (only regular files, up to 16 MB in all). `/docs/index.md` lists every page. Pages can use the
@@ -207,10 +207,11 @@ read-only. It has no `/proc`, no network, no other programs and nothing installe
 syscall filter allows only what ordinary Python needs (x86-64 only). When tack has a delegated cgroup,
 each run gets as much memory as the machine has available as it starts (which leaves out what the
 kernel can take back, like the page cache), less a margin of 8 GB or a tenth of the machine, whichever is
-more, and less what other running sandboxes were given, but never under 2 GB or over 96 GB, and 4096
+more, but never under 2 GB or over 96 GB, and 4096
 processes and threads. `/tmp` and `/dev/shm` are held in that memory and count against it, so
 each can be as big as the whole limit. Running out kills the whole run, and if the machine itself
-runs short, the kernel kills sandboxes first. `/sandbox/limits.json` tells the code what it got.
+runs short, the kernel kills sandboxes first, which is why sandboxes running at once can each
+be given all that's spare. `/sandbox/limits.json` tells the code what it got.
 None of this is a setting. `/work` is kept
 between calls in a conversation, up to 16 MB, as an archive in the record that's only ever unpacked
 inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.

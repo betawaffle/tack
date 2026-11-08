@@ -306,13 +306,13 @@ function markCommentedLines() {
 async function showTarget(f) {
   if (PAGE === "code") {
     if (f.path.startsWith(`${codeState.docsDir}/`)) {
-      location.href = `/docs#tack/${f.path.slice(codeState.docsDir.length + 1)}`;
+      location.href = `/docs#harness/${f.path.slice(codeState.docsDir.length + 1)}`;
       return;
     }
     location.hash = `#${f.path}${f.start_line ? `:L${f.start_line}${f.end_line !== f.start_line ? `-${f.end_line}` : ""}` : ""}`;
   } else {
-    const page = docsState.pages.find((p) => p.tree === "tack" && `${docsState.sourceDir}/${p.path}` === f.path);
-    if (page) location.hash = `#tack/${page.path}${f.start_line ? `:L${f.start_line}${f.end_line !== f.start_line ? `-${f.end_line}` : ""}` : ""}`;
+    const page = docsState.pages.find((p) => p.tree === "harness" && `${docsState.sourceDir}/${p.path}` === f.path);
+    if (page) location.hash = `#harness/${page.path}${f.start_line ? `:L${f.start_line}${f.end_line !== f.start_line ? `-${f.end_line}` : ""}` : ""}`;
   }
 }
 
@@ -425,7 +425,7 @@ async function showCode() {
     return;
   }
   if (path.startsWith(`${codeState.docsDir}/`)) {
-    location.replace(`/docs#tack/${path.slice(codeState.docsDir.length + 1)}`);
+    location.replace(`/docs#harness/${path.slice(codeState.docsDir.length + 1)}`);
     return;
   }
   const file = await getJSON(`/api/source/file?path=${encodeURIComponent(path)}`);
@@ -484,7 +484,7 @@ async function reloadPages() {
 
 function drawDocsTree(current) {
   const parts = [];
-  for (const [tree, title] of [["tack", "tack's"], ["user", "Yours"]]) {
+  for (const [tree, title] of [["harness", "The harness's"], ["user", "Yours"]]) {
     parts.push(el("h2", "side-head", title));
     const paths = docsState.pages.filter((p) => p.tree === tree).map((p) => p.path);
     if (!paths.length) parts.push(el("p", "hint tree-empty", tree === "user" ? "None yet." : "None."));
@@ -494,7 +494,7 @@ function drawDocsTree(current) {
 }
 
 function sourcePath(page) {
-  return page.tree === "tack" ? `${docsState.sourceDir}/${page.path}` : null;
+  return page.tree === "harness" ? `${docsState.sourceDir}/${page.path}` : null;
 }
 
 async function showDoc() {
@@ -514,7 +514,7 @@ async function showDoc() {
     $("view-title").textContent = "Documentation";
     $("view-actions").replaceChildren();
     main.replaceChildren(
-      el("p", "", "Code the model runs can read these under /docs: tack's in /docs/tack, and yours in /docs/user, with /docs/index.md listing them all."),
+      el("p", "", "Code the model runs can read these under /docs: the harness's in /docs/harness, and yours in /docs/user, with /docs/index.md listing them all."),
       el("p", "hint", "tack's pages are part of its code, so they change when it does, and you can comment on them like the rest of the code. Yours are files in the docs directory next to tack's config, and you can add, change and remove them here. Pages link to each other with [[Page]] or [[Page|label]], where a page's name is its path without .md. The model reads those as relative Markdown links, and {{name}} variables filled in, as For the model shows."),
     );
     drawComments();
@@ -523,7 +523,7 @@ async function showDoc() {
   const page = await getJSON(`/api/docs/page?tree=${encodeURIComponent(tree)}&path=${encodeURIComponent(path)}`);
   docsState.page = page;
   if (page.revision !== state.revision) showError("tack has been deployed since this page loaded. Reload it to see what's running now.");
-  $("view-title").textContent = `${tree === "tack" ? "tack's" : "Yours"}: ${path}`;
+  $("view-title").textContent = `${tree === "harness" ? "The harness's" : "Yours"}: ${path}`;
   for (const b of document.querySelectorAll("[data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === docsState.mode));
   const actions = [];
   const source = sourcePath(page);

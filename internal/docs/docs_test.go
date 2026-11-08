@@ -37,7 +37,7 @@ func TestPagesComeFromBothTreesAndLinksBecomeRelative(t *testing.T) {
 	for _, p := range pages {
 		names = append(names, p.Tree+":"+p.Name())
 	}
-	if strings.Join(names, ",") != "tack:limits/memory,tack:sandbox,user:deep/er/page,user:notes" {
+	if strings.Join(names, ",") != "harness:limits/memory,harness:sandbox,user:deep/er/page,user:notes" {
 		t.Fatalf("pages = %v", names)
 	}
 	vars := map[string]string{"python_version": "3.14.1"}
@@ -50,7 +50,7 @@ func TestPagesComeFromBothTreesAndLinksBecomeRelative(t *testing.T) {
 	if got := ForModel(pages, pages[2], vars); got != "[notes](../../notes.md)" {
 		t.Errorf("deep = %q", got)
 	}
-	if got := ForModel(pages, pages[3], vars); got != "Mine. See [sandbox](../tack/sandbox.md) and [limits/memory](../tack/limits/memory.md)." {
+	if got := ForModel(pages, pages[3], vars); got != "Mine. See [sandbox](../harness/sandbox.md) and [limits/memory](../harness/limits/memory.md)." {
 		t.Errorf("notes = %q", got)
 	}
 
@@ -59,7 +59,7 @@ func TestPagesComeFromBothTreesAndLinksBecomeRelative(t *testing.T) {
 		t.Fatal(err)
 	}
 	index, _ := os.ReadFile(filepath.Join(dir, "index.md"))
-	if !strings.Contains(string(index), "- [limits/memory](tack/limits/memory.md)") || !strings.Contains(string(index), "- [deep/er/page](user/deep/er/page.md)") {
+	if !strings.Contains(string(index), "- [limits/memory](harness/limits/memory.md)") || !strings.Contains(string(index), "- [deep/er/page](user/deep/er/page.md)") {
 		t.Errorf("index = %s", index)
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, "user", "deep", "er", "page.md")); err != nil || string(data) != "[notes](../../notes.md)" {

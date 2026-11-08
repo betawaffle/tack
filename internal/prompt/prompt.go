@@ -138,7 +138,7 @@ User messages may be queued while tools run, and then delivered together with th
 			{Text: `The process running the code has file descriptor 10 open, a socket to the harness. Writing {"tool": name, "arguments": object} on one line calls a tool, and one line comes back, {"result": text} or {"error": text}. Lines can be up to {{channel_line_size}}, and a run can make up to {{channel_calls}} calls. Every tool you're offered can be called this way, except run_code.`},
 		}},
 		{Name: "facts-docs", Off: true, Paragraphs: []Paragraph{
-			{Text: "Documentation you can read with run_code is in {{docs_dir}}. {{tack_docs}} describes the harness and changes along with it, and {{user_docs}} is the user's own. {{docs_dir}}/index.md lists every page."},
+			{Text: "Documentation you can read with run_code is in {{docs_dir}}. {{harness_docs}} describes the harness and changes along with it, and {{user_docs}} is the user's own. {{docs_dir}}/index.md lists every page."},
 			{Text: "Pages link to each other with relative Markdown links."},
 		}},
 	}}

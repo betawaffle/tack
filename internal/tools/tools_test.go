@@ -225,9 +225,9 @@ func TestMemoryIsWhatsSpareWithinBounds(t *testing.T) {
 	if want := int64(78*gib - 125*gib/10); first != want {
 		t.Errorf("first = %d, want %d", first, want)
 	}
-	// What's promised to a running sandbox isn't spare, but there's always the least.
+	// Another running at the same time gets as much: they can overcommit.
 	second, releaseSecond := b.memoryLimit(125*gib, 78*gib)
-	if second != codeMemoryMin {
+	if second != first {
 		t.Errorf("second = %d", second)
 	}
 	releaseFirst()
@@ -249,14 +249,14 @@ func TestCodeCanReadTheDocsButNotChangeThem(t *testing.T) {
 	f := newFixture(t)
 	got, err := runCode(t, f, `
 print(open("/docs/user/mine.md").read())
-print(open("/docs/tack/theirs.md").read())
+print(open("/docs/harness/theirs.md").read())
 print("index" if "- [mine](user/mine.md)" in open("/docs/index.md").read() else "no index")
 try:
     open("/docs/user/mine.md", "w")
 except OSError as e:
     print("refused", e.errno)
 `)
-	if err != nil || got != "Mine, see [theirs](../tack/theirs.md) on the model.\nTack's.\nindex\nrefused 30\n" {
+	if err != nil || got != "Mine, see [theirs](../harness/theirs.md) on the model.\nTack's.\nindex\nrefused 30\n" {
 		t.Errorf("docs = %q, %v", got, err)
 	}
 	// Each run gets its own copy, and it's gone afterwards.

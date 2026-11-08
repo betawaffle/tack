@@ -19,8 +19,8 @@ import (
 
 // The trees, by the name of their directory in what the model reads.
 const (
-	Tack = "tack"
-	User = "user"
+	Harness = "harness"
+	User    = "user"
 )
 
 // Limits on the user's tree, which is read for every run of code.
@@ -76,7 +76,7 @@ func (l Library) Pages() ([]Page, error) {
 			if err != nil {
 				return err
 			}
-			out = append(out, Page{Tree: Tack, Path: p, Text: string(data)})
+			out = append(out, Page{Tree: Harness, Path: p, Text: string(data)})
 			return nil
 		})
 		if err != nil {
@@ -282,7 +282,7 @@ func Index(pages []Page) string {
 	var b strings.Builder
 	b.WriteString("# Documentation\n")
 	for _, tree := range []struct{ name, about string }{
-		{Tack, "tack's, which describes the harness and changes along with it"},
+		{Harness, "the harness's own, which change along with it"},
 		{User, "the user's own"},
 	} {
 		fmt.Fprintf(&b, "\n## %s\n\nThese pages are %s.\n\n", tree.name, tree.about)
@@ -307,7 +307,7 @@ func (l Library) WriteFor(dir string, variables map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for _, tree := range []string{Tack, User} {
+	for _, tree := range []string{Harness, User} {
 		if err := os.MkdirAll(filepath.Join(dir, tree), 0o755); err != nil {
 			return err
 		}

@@ -214,7 +214,7 @@ func (s *server) docPage(w http.ResponseWriter, r *http.Request) {
 		// For reading: the variables filled, and the links as they're written.
 		"filled": prompt.Fill(page.Text, variables),
 	}
-	if page.Tree == docs.Tack {
+	if page.Tree == docs.Harness {
 		out["source"] = path.Join(s.modelDocsDir, page.Path)
 	}
 	writeJSON(w, out)

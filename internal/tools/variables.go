@@ -13,9 +13,9 @@ import (
 
 // Where documentation is in the sandbox.
 const (
-	DocsDir     = "/docs"
-	TackDocsDir = DocsDir + "/tack"
-	UserDocsDir = DocsDir + "/user"
+	DocsDir        = "/docs"
+	HarnessDocsDir = DocsDir + "/harness"
+	UserDocsDir    = DocsDir + "/user"
 )
 
 // PythonVersion asks the interpreter code runs with what version it is. It isn't cached,
@@ -45,7 +45,7 @@ func Variables(ctx context.Context, settings store.Settings, site string) map[st
 		"channel_calls":     fmt.Sprint(core.ChannelCalls),
 		"auto_send_size":    fmt.Sprintf("%d KiB", codeAutoSendBytes>>10),
 		"docs_dir":          DocsDir,
-		"tack_docs":         TackDocsDir,
+		"harness_docs":      HarnessDocsDir,
 		"user_docs":         UserDocsDir,
 	}
 	if version, err := PythonVersion(ctx); err == nil {

@@ -84,14 +84,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
 
   // The documentation: tack's, rendered, with links between pages.
   await p.goto(B + "/docs");
-  await p.waitForSelector("#tree a[href='#tack/sandbox.md']");
+  await p.waitForSelector("#tree a[href='#harness/sandbox.md']");
   ok((await p.locator("#tree a", { hasText: "sandbox.md" }).count()) === 1, "tack's pages are listed");
   await p.locator("#tree a", { hasText: "sandbox.md" }).click();
   await p.click("[data-mode=rendered]");
   await p.waitForSelector(".doc-prose h1");
   ok((await p.innerText(".doc-prose h1")) === "The run_code sandbox", "a page is rendered");
   const link = p.locator(".doc-prose a", { hasText: "tool-channel" }).first();
-  ok((await link.getAttribute("href")) === "#tack/tool-channel.md", "[[links]] go to the page they name");
+  ok((await link.getAttribute("href")) === "#harness/tool-channel.md", "[[links]] go to the page they name");
   await p.screenshot({ path: "shots/docs.png", fullPage: true });
   await p.click("[data-mode=model]");
   const model = await p.innerText(".raw-page");
@@ -115,7 +115,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(fs.readFileSync(path.join(DOCS, "notes/mine.md"), "utf8") === "# Mine\n\nSee [[sandbox]] and [[nowhere]].\n", "a page of yours is saved in the docs directory");
   await p.click("[data-mode=rendered]");
   await p.waitForSelector(".doc-prose h1");
-  ok((await p.locator(".doc-prose a", { hasText: "sandbox" }).getAttribute("href")) === "#tack/sandbox.md", "it links to tack's pages");
+  ok((await p.locator(".doc-prose a", { hasText: "sandbox" }).getAttribute("href")) === "#harness/sandbox.md", "it links to tack's pages");
   ok(await p.locator(".broken-link", { hasText: "[[nowhere]]" }).isVisible(), "and a link to nothing shows");
   await p.click("button:has-text('Edit')");
   await p.fill("#page-path", "renamed.md");
