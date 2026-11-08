@@ -1047,7 +1047,11 @@ func chainStream(n *int, cost string) string {
 func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 	f := newToolFake(t)
 	f.noteTools()
-	f.settings = store.Settings{BudgetUSD: 0.0025}
+	f.settings = store.Settings{BudgetUSD: 0.0015}
+	// At this price even the cheapest next call, a couple of hundred tokens, costs more
+	// than the 0.0005 that's left after the first.
+	f.model = "deepseek/deepseek-v4.1-flash"
+	f.prices = []openrouter.Endpoint{{Tag: "morph/fp8", Pricing: openrouter.Price{Prompt: "0.00001", Completion: "0.00001"}}}
 	n := 0
 	f.handler = func(w http.ResponseWriter) { io.WriteString(w, chainStream(&n, "0.001")) }
 	c := f.open()
@@ -1056,18 +1060,17 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 	if got := finish(t, updates); err != nil || got.Kind != "done" {
 		t.Fatalf("%+v, %v", got, err)
 	}
-	// 0.002 spent, and another 0.001 is expected, which would go over.
-	if n := len(f.bodies); n != 2 {
+	if n := len(f.bodies); n != 1 {
 		t.Fatalf("%d calls", n)
 	}
 	conv, _ := c.Conversation(id)
-	if !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.002) || !conv.CanReply || conv.Budget.Estimate <= picoFromUSD(0.001) {
+	if !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.001) || !conv.CanReply || !conv.Budget.EstimateKnown || conv.Budget.Estimate <= picoFromUSD(0.0005) {
 		t.Errorf("budget = %+v", conv.Budget)
 	}
 
 	// It survives a restart, and allowing more starts from what's been spent.
 	c = f.open()
-	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.002) {
+	if conv, _ := c.Conversation(id); !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.001) {
 		t.Errorf("after a restart: %+v", conv.Budget)
 	}
 	if err := c.AllowBudget(id, 0); !errors.Is(err, ErrBadSettings) {
@@ -1077,18 +1080,18 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv, _ = c.Conversation(id)
-	if conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0021) {
+	if conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0011) {
 		t.Errorf("allowed = %+v", conv.Budget)
 	}
 
 	// Even that little lets the next call go, since someone asked, and it's what applies.
 	updates, err = c.Reply(id)
 	mustFinish(t, updates, err)
-	if n := len(f.bodies); n != 3 {
+	if n := len(f.bodies); n != 2 {
 		t.Errorf("%d calls", n)
 	}
 	conv, _ = c.Conversation(id)
-	if !conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0021) {
+	if !conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0011) {
 		t.Errorf("budget = %+v", conv.Budget)
 	}
 
@@ -1097,7 +1100,7 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 	updates, err = c.Send(id, "two")
 	mustFinish(t, updates, err)
 	conv, _ = c.Conversation(id)
-	if conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0055) {
+	if conv.Budget.Stopped || conv.Budget.Limit != picoFromUSD(0.0035) {
 		t.Errorf("after a message: %+v", conv.Budget)
 	}
 }
@@ -1169,13 +1172,34 @@ func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
 	}
 }
 
-func TestBudgetEstimatesGrowWithTheRequest(t *testing.T) {
-	conv := &conversation{recentCosts: []Pico{picoFromUSD(0.001), picoFromUSD(0.002)}, lastRequestBytes: 100}
-	if got := conv.estimate(100); got != picoFromUSD(0.002) {
-		t.Errorf("same size = %v", got)
+func TestTheEstimateIsTheLeastACallCouldCost(t *testing.T) {
+	endpoints := []openrouter.Endpoint{
+		{Tag: "a", Pricing: openrouter.Price{Prompt: "0.00000002", InputCacheRead: "0.000000004"},
+			Overrides: []openrouter.Price{{Prompt: "0.00000001", InputCacheRead: "0.000000006"}}},
+		{Tag: "b", Pricing: openrouter.Price{Prompt: "0.000000005"}, Discount: 0.5},
+		{Tag: "c", Pricing: openrouter.Price{Prompt: "nonsense"}},
 	}
-	if got := conv.estimate(200); got != picoFromUSD(0.004) {
-		t.Errorf("twice the size = %v", got)
+	// The cheapest of a host's prices, whatever the time of day.
+	if r, ok := ratesFor(endpoints, "a"); !ok || r.uncached != 10000 || r.cached != 4000 {
+		t.Errorf("a = %+v", r)
+	}
+	// A discount comes off, and with no cache price, cached input costs the same.
+	if r, ok := ratesFor(endpoints, "b"); !ok || r.uncached != 2500 || r.cached != 2500 {
+		t.Errorf("b = %+v", r)
+	}
+	// Any host could take a call with none chosen.
+	if r, ok := ratesFor(endpoints, ""); !ok || r.uncached != 2500 || r.cached != 2500 {
+		t.Errorf("any = %+v", r)
+	}
+	if _, ok := ratesFor(endpoints, "c"); ok {
+		t.Error("prices that can't be read gave rates")
+	}
+	// Only as much as has been processed before can be cached.
+	if got := minimumCost(rates{10, 1}, 100, 30); got != 70*10+30 {
+		t.Errorf("cost = %v", got)
+	}
+	if got := minimumCost(rates{10, 1}, 100, 500); got != 100 {
+		t.Errorf("all cached = %v", got)
 	}
 }
 
@@ -1641,12 +1665,12 @@ func TestForkKeepsTheStartAndGoesItsOwnWay(t *testing.T) {
 		if len(kept.Notes) != 1 || len(other.Notes) != 0 {
 			t.Errorf("notes = %+v and %+v", kept.Notes, other.Notes)
 		}
-		// Its budget only counts what it spent itself, but it knows what calls cost.
+		// Its budget only counts what it spent itself.
 		copied, err := c.Conversation(whole)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if copied.Budget.Spent != 0 || copied.Budget.Estimate != original.Budget.Estimate || original.Budget.Estimate == 0 {
+		if copied.Budget.Spent != 0 || original.Budget.Spent == 0 {
 			t.Errorf("budget = %+v, original %+v", copied.Budget, original.Budget)
 		}
 	}

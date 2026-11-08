@@ -2,7 +2,10 @@ package core
 
 import (
 	"bytes"
+	"cmp"
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +42,8 @@ type fake struct {
 	store    *store.Store
 	tools    []Tool
 	settings store.Settings
+	model    string
+	prices   []openrouter.Endpoint
 }
 
 func newFake(t *testing.T) *fake {
@@ -75,9 +80,15 @@ func (f *fake) open() *Core {
 	}
 	f.store = st
 	c, err := New(Config{
-		Store:    st,
-		Client:   openrouter.NewClient(f.server.URL, secret.NewKey(testKey)),
-		Model:    "test/model",
+		Store:  st,
+		Client: openrouter.NewClient(f.server.URL, secret.NewKey(testKey)),
+		Model:  cmp.Or(f.model, "test/model"),
+		Prices: func(context.Context, string) ([]openrouter.Endpoint, error) {
+			if f.prices == nil {
+				return nil, errors.New("no prices")
+			}
+			return f.prices, nil
+		},
 		Routing:  openrouter.Routing{Order: []string{"morph/fp8"}},
 		Tools:    f.tools,
 		Settings: f.settings,

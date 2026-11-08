@@ -126,12 +126,11 @@ type BudgetView struct {
 	Stopped    bool `json:"stopped,omitzero"`
 	PeriodHere Pico `json:"period_here_pico"`
 	PeriodAll  Pico `json:"period_all_pico"`
-	// For estimating the next call while it's being written: the most expensive recent
-	// call, the size of the last request, and the size of the next if nothing's added.
-	// Allowance is what someone setting things going next would allow.
-	RecentCost Pico `json:"recent_cost_pico"`
-	LastBytes  int  `json:"last_bytes"`
-	NextBytes  int  `json:"next_bytes"`
+	// EstimateKnown says Estimate is the least the next call could cost, if nothing's
+	// added. Without prices or a way to count tokens there's no estimate. Allowance is
+	// what someone setting things going next would allow.
+	EstimateKnown bool `json:"estimate_known,omitzero"`
+	NextBytes     int  `json:"next_bytes"`
 	// NextTokens is the input tokens of the next call if nothing's added, for a model tack
 	// can count for. Zero means it can't.
 	NextTokens int  `json:"next_tokens,omitzero"`
@@ -272,19 +271,22 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 	full := effective.WithDefaults()
 	period := billingPeriod(time.Now())
 	out.Budget = BudgetView{
-		Limit: conv.budgetLimit(effective), Spent: conv.spent, Estimate: conv.maxRecentCost(), TopUp: picoFromUSD(full.BudgetTopUpUSD), Stopped: conv.budgetStopped,
+		Limit: conv.budgetLimit(effective), Spent: conv.spent, TopUp: picoFromUSD(full.BudgetTopUpUSD), Stopped: conv.budgetStopped,
 		PeriodHere: conv.spentByPeriod[period], PeriodAll: c.spentInPeriod(period),
-		RecentCost: conv.maxRecentCost(), LastBytes: conv.lastRequestBytes, Allowance: picoFromUSD(full.BudgetUSD),
+		Allowance: picoFromUSD(full.BudgetUSD),
 	}
 	// Only for an estimate, so one that can't be worked out just goes without.
 	if definitions, err := c.definitions(conv.tools); err == nil {
 		if body, err := c.renderRequest(conv, conv.context(), definitions, effective); err == nil {
 			out.Budget.NextBytes = len(body)
 			out.Budget.NextTokens = countRequest(effective.Model, body)
+			if endpoints, ok := c.cachedPrices(effective.Model); ok {
+				out.Budget.Estimate, out.Budget.EstimateKnown = c.minimumFor(endpoints, effective, body)
+			}
 		}
 	}
 	if conv.budgetStopped {
-		out.Budget.Estimate = conv.stoppedEstimate
+		out.Budget.Estimate, out.Budget.EstimateKnown = conv.stoppedEstimate, true
 	}
 	out.Paused = conv.paused
 	out.WaitingToolCalls = conv.openWritten()

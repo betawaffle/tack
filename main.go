@@ -85,9 +85,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	client := openrouter.NewClient(cfg.URL, key)
 	c, err := core.New(core.Config{
 		Store:    st,
-		Client:   openrouter.NewClient(cfg.URL, key),
+		Client:   client,
+		Prices:   client.Endpoints,
 		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups}), core.NoteTools()...),
 		Settings: cfg.Settings,
 	})

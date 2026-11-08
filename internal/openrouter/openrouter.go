@@ -405,3 +405,65 @@ func recordableHeaders(h http.Header) map[string][]string {
 	out.Del("Set-Cookie")
 	return out
 }
+
+// Price is what a host charges, in dollars per token, as OpenRouter lists it.
+type Price struct {
+	Prompt         string `json:"prompt"`
+	Completion     string `json:"completion"`
+	InputCacheRead string `json:"input_cache_read,omitzero"`
+}
+
+// Endpoint is one host's offer of a model. Overrides are other prices that apply at
+// certain times, and Discount is a fraction taken off.
+type Endpoint struct {
+	Tag       string  `json:"tag"`
+	Pricing   Price   `json:"pricing"`
+	Overrides []Price `json:"-"`
+	Discount  float64 `json:"-"`
+}
+
+type endpointWire struct {
+	Tag     string `json:"tag"`
+	Pricing struct {
+		Price
+		Discount  float64 `json:"discount"`
+		Overrides []Price `json:"overrides"`
+	} `json:"pricing"`
+}
+
+// Endpoints asks OpenRouter which hosts offer a model and what they charge. It's public,
+// so it goes without the key, to the models API next to the configured URL.
+func (c *Client) Endpoints(ctx context.Context, model string) ([]Endpoint, error) {
+	base, ok := strings.CutSuffix(c.URL, "/chat/completions")
+	if !ok {
+		return nil, fmt.Errorf("can't find the models API next to %s", c.URL)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models/"+model+"/endpoints", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "tack")
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing %s's hosts: %s", model, res.Status)
+	}
+	var body struct {
+		Data struct {
+			Endpoints []endpointWire `json:"endpoints"`
+		} `json:"data"`
+	}
+	if err := json.UnmarshalRead(io.LimitReader(res.Body, 16<<20), &body); err != nil {
+		return nil, fmt.Errorf("listing %s's hosts: %w", model, err)
+	}
+	var out []Endpoint
+	for _, e := range body.Data.Endpoints {
+		out = append(out, Endpoint{Tag: e.Tag, Pricing: e.Pricing.Price, Overrides: e.Pricing.Overrides, Discount: e.Pricing.Discount})
+	}
+	return out, nil
+}

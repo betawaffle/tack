@@ -646,7 +646,7 @@ function budgetCard(conv) {
   const node = el("div", "budget-card");
   node.append(
     el("strong", "", "Budget reached"),
-    el("div", "hint", `${money(left(b))} of what you allowed is left, and the next call looks like about ${tackMoney.rough(b.estimate_pico)}, so tack didn't start it.`),
+    el("div", "hint", `${money(left(b))} of what you allowed is left, and the next call would cost at least ${tackMoney.rough(b.estimate_pico)}, so tack didn't start it.`),
     el("div", "hint", `Spent this month: ${money(b.period_here_pico)} in this conversation, ${money(b.period_all_pico)} across all of tack.`),
   );
   const row = el("div", "row");
@@ -1564,19 +1564,11 @@ function setBusy(busy) {
 let spendInfo = null;
 let spendEditing = false;
 
-function bytesOf(text) {
-  return new TextEncoder().encode(JSON.stringify(text)).length;
-}
 
-// The same sum the server does, with what's being typed. It doesn't know what's unsent
-// in a fork, so that uses recent costs as they are.
+// The least the next call could cost, from the server. Anything typed only adds to it, so
+// it's still the least.
 function estimateNext(budget) {
-  const base = budget.recent_cost_pico;
-  if (!base) return null;
-  if (draftFork || !budget.last_bytes) return base;
-  const typed = $("input").value;
-  const next = budget.next_bytes + (typed ? bytesOf(typed) : 0);
-  return next > budget.last_bytes ? Math.round((base * next) / budget.last_bytes) : base;
+  return budget.estimate_known ? budget.estimate_pico : null;
 }
 
 function refreshSpend() {
@@ -1594,7 +1586,7 @@ function refreshSpend() {
   let text = "";
   if (spendInfo.budget) {
     const estimate = estimateNext(spendInfo.budget);
-    text = estimate === null ? "No estimate yet for the next call. " : `Next call about ${tackMoney.rough(estimate)}${spendInfo.budget.next_tokens ? `, with ${count(spendInfo.budget.next_tokens)} tokens so far` : ""}. `;
+    text = estimate === null ? "No estimate for the next call. " : `Next call at least ${tackMoney.rough(estimate)}${spendInfo.budget.next_tokens ? `, with ${count(spendInfo.budget.next_tokens)} tokens so far` : ""}. `;
   }
   if (spendEditing) {
     line.querySelector(".spend-estimate").textContent = text;

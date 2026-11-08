@@ -70,7 +70,7 @@ These are only defaults, copied into each new conversation, which owns them afte
 | Setting | Default | |
 |---|---|---|
 | `model`, `host` | `deepseek/deepseek-v4.1-flash-1017`, `morph/fp8` | |
-| `budget_usd`, `budget_top_up_usd` | `0.001` each | Where the budget starts, and what the add box starts with |
+| `budget_usd`, `budget_top_up_usd` | `0.01` each (a cent) | Where the budget starts, and what the add box starts with |
 | `reasoning_effort` | none | Sent as `reasoning.effort`: `max`, `xhigh`, `high`, `medium`, `low`, `minimal` or `none`. None leaves it to the host |
 | `auto_run_code` | `false` | Run code without asking |
 | `command_timeout_seconds` | `120` | The limit for running code |
@@ -199,14 +199,19 @@ before asking for a reply. A held message can't be edited or removed yet.
 
 A budget says how much the model can spend without you getting involved. Violet buttons call the
 model, and each time you press one, `budget_usd` starts again from there. That first call
-always goes, and the line under the message box says what it looks likely to cost as you type.
+always goes, and the line under the message box says the least the next call could cost.
 Click the amount on that line to change it for this conversation. Amounts are in cents unless you
 switch them to dollars, and tack counts money in whole picodollars, so nothing drifts.
 After that the budget is soft: tack doesn't start another call if the allowance is spent or
-that call looks likely to go over, and it offers a box to allow more from there, but it never
-interrupts a call for it. Estimates come from recent calls scaled by how much the request has
-grown, so a cache miss can go over. A cancelled call doesn't report a cost, so it counts as the
-most expensive recent one.
+even the least that call could cost would go over, and it offers a box to allow more from there,
+but it never interrupts a call for it. That least is exact arithmetic, not a guess: the
+request's input tokens, counted with the model's tokenizer, at the host's cheapest listed price
+at any time of day, with as many of them as any one earlier call to the model processed counted
+at its cheapest cached price, and a reply of nothing. Prices come from OpenRouter's public list of
+hosts, asked for without the key and kept for ten minutes. A call nearly always costs more than
+this, by however long its reply is, and with a model tack can't count tokens for, or no prices,
+there's no estimate and only what's been spent stops a call. A cancelled call doesn't report a
+cost, so it counts as the most expensive recent one.
 
 After calls that ran without you, the conversation shows what they cost in all. To help you
 decide how much to allow, the page shows what's been spent this calendar month, in this

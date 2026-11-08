@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/json/v2"
 	"fmt"
-	"math"
 	"slices"
 	"time"
 
@@ -16,7 +15,7 @@ import (
 // doesn't start a call that it expects to go over, but it never interrupts one for it.
 // Spending comes from what OpenRouter reports for each call.
 
-// recentCostsKept is how many calls the estimate looks at.
+// recentCostsKept is how many calls a cut-off call's cost is taken from.
 const recentCostsKept = 3
 
 func usageCost(ev *store.Event) (Pico, bool) {
@@ -80,18 +79,6 @@ func (conv *conversation) maxRecentCost() Pico {
 		return 0
 	}
 	return slices.Max(conv.recentCosts)
-}
-
-// estimate guesses the next call's cost from recent ones, scaled by how much the
-// request has grown. A cache miss or a long reply can cost more, which is part of why
-// the budget is soft. The first call has nothing to go on.
-func (conv *conversation) estimate(requestBytes int) Pico {
-	estimate := conv.maxRecentCost()
-	if conv.lastRequestBytes > 0 && requestBytes > conv.lastRequestBytes {
-		// It's only a guess, so a float is fine here, and multiplying first could overflow.
-		estimate = Pico(math.Round(float64(estimate) * float64(requestBytes) / float64(conv.lastRequestBytes)))
-	}
-	return estimate
 }
 
 // budgetLimit is the total spending that the next call shouldn't go past.

@@ -191,10 +191,10 @@ func (s Settings) WithDefaults() Settings {
 	fill(&s.OutputWaitSeconds, 5)
 	fill(&s.StopGraceSeconds, 5)
 	if s.BudgetUSD == 0 {
-		s.BudgetUSD = 0.001
+		s.BudgetUSD = 0.01
 	}
 	if s.BudgetTopUpUSD == 0 {
-		s.BudgetTopUpUSD = 0.001
+		s.BudgetTopUpUSD = 0.01
 	}
 	return s
 }

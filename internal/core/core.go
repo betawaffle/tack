@@ -42,6 +42,8 @@ type Config struct {
 	Model   string
 	Routing openrouter.Routing
 	Tools   []Tool // offered to new conversations
+	// Prices lists what each host charges for a model. Without it, there's no estimate.
+	Prices func(ctx context.Context, model string) ([]openrouter.Endpoint, error)
 	// Settings are what new conversations start with. Model and Routing fill in for
 	// a Settings without them.
 	Settings store.Settings
@@ -66,6 +68,11 @@ type Core struct {
 	manual []*manualCall
 	// codeCalls are calls running code made to custom tools, waiting for a person, by ID.
 	codeCalls map[string]*waitingCodeCall
+	// Prices by model, as last asked, and which are being asked for.
+	priceCache     map[string]modelPrices
+	fetchingPrices map[string]bool
+	// processed is the most tokens one call to each model has processed.
+	processed map[string]int
 	// This run, which isn't.
 	status        Status
 	restarting    bool
@@ -94,7 +101,6 @@ type conversation struct {
 	spent, budgetAdded Pico
 	spentByPeriod      map[string]Pico
 	recentCosts        []Pico
-	lastRequestBytes   int
 	budgetStopped      bool
 	stoppedEstimate    Pico
 	// The allowance from the last time a person set things going, which applies from
@@ -274,7 +280,6 @@ func (c *Core) apply(ev *store.Event) {
 			it.sent = true
 		}
 		conv.lastModel = ev.Model
-		conv.lastRequestBytes = ev.RequestBytes
 		conv.budgetStopped = false
 		conv.freshAllowance = false
 		host := ""
@@ -289,6 +294,7 @@ func (c *Core) apply(ev *store.Event) {
 			if it.callID == ev.Call {
 				it.finished = ev
 				it.cost = conv.addCost(ev)
+				c.noteProcessed(it.model, ev)
 				c.learn(it, ev)
 				if usable(ev) {
 					for _, call := range ev.ToolCalls {
@@ -530,7 +536,6 @@ func (conv *conversation) fork(ev *store.Event) *conversation {
 			out.addCost(it.finished)
 		}
 		if it.requestBytes > 0 {
-			out.lastRequestBytes = it.requestBytes
 		}
 		out.items = append(out.items, &kept)
 	}
@@ -774,10 +779,13 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	if err != nil {
 		return err
 	}
-	// The budget is soft: this only decides whether to start the call.
+	// The budget is soft: this only decides whether to start the call, which it does
+	// unless even the least it could cost would go over.
+	endpoints, _ := c.prices(context.Background(), model)
 	c.mu.Lock()
 	limit := conv.budgetLimit(settings)
-	spent, estimate := conv.spent, conv.estimate(len(body))
+	estimate, _ := c.minimumFor(endpoints, settings, body)
+	spent := conv.spent
 	asked := conv.freshAllowance
 	c.mu.Unlock()
 	if !asked && (spent >= limit || spent+estimate > limit) {
