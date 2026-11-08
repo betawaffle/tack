@@ -298,7 +298,7 @@ const money = tackMoney.format;
 
 function ledger(s, controls) {
   const row = el("div", "ledger");
-  // Only the cost and time show until the reply is pointed at; the rest is for a closer look.
+  // Only the cost and time show; the rest is in the box's tooltip, so nothing moves on hover.
   if (s.host) row.append(el("span", "detail", s.host));
   const cache = el("span", "cache detail");
   cache.title = `${count(s.cached_tokens)} of ${count(s.prompt_tokens)} input tokens came from the cache`;
@@ -312,6 +312,7 @@ function ledger(s, controls) {
   out.title = `${count(s.reasoning_tokens)} of these were reasoning`;
   row.append(out, el("span", "", money(s.cost_pico)));
   row.append(el("span", "detail", `${seconds(s.ttft_ms)} first`), el("span", "", seconds(s.duration_ms)));
+  row.title = [...row.querySelectorAll(".detail")].map((d) => d.textContent).join("\n");
   if (controls) row.append(controls);
   return row;
 }
@@ -1650,7 +1651,7 @@ function showMeta(conv) {
   if (conv.workdir) parts.push(conv.workdir);
   if (stats.length) parts.push(`${stats.length} ${stats.length === 1 ? "call" : "calls"}`);
   parts.push(`this month: ${money(conv.budget.period_here_pico)} here, ${money(conv.budget.period_all_pico)} all of tack`);
-  // Just the model shows; the rest is there when the header is pointed at.
+  // Just the model shows; the rest is in its tooltip.
   $("meta").replaceChildren(...parts.map((p, i) => el("span", i ? "detail" : "", p)));
   $("meta").title = parts.join("\n");
   loadQuickChoices().then(refreshQuick).catch(ignoreUnreachable);
