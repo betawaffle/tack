@@ -186,6 +186,16 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 .meter i { display: block; height: 100%; background: var(--muted); }
 .ledger-actions { display: inline-flex; gap: 4px; margin-left: auto; }
 
+/* What's about a reply or the conversation stays out of the way until it's pointed at. On a
+   touch screen, nothing can be, so the buttons always show and the details don't. */
+.ledger .detail, #meta .detail { display: none; }
+.assistant:hover .ledger .detail, .assistant:focus-within .ledger .detail, #meta:hover .detail { display: inline-flex; }
+@media (hover: hover) {
+  .assistant .fork-row, .assistant .ledger-actions { opacity: 0; transition: opacity .12s; }
+  .assistant:hover .fork-row, .assistant:focus-within .fork-row,
+  .assistant:hover .ledger-actions, .assistant:focus-within .ledger-actions { opacity: 1; }
+}
+
 .mini {
   padding: 1px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent;
   color: var(--muted); font: 11.5px/1.6 var(--ui);

@@ -71,6 +71,14 @@ http
         res.end(JSON.stringify({ data: { endpoints: [{ tag: "morph/fp8", pricing: price, context_length: 100000, max_completion_tokens: 1000 }, { tag: "relace/fp4", pricing: price, context_length: 100000, max_completion_tokens: 1000 }] } }));
         return;
       }
+      // What a call cost, which tack asks when a reply ended without saying. It's never
+      // known here, so a cancelled call's guessed cost doesn't change in the middle of a
+      // test; the lookup itself is tested in Go.
+      if (req.method === "GET" && req.url.startsWith("/v1/generation?")) {
+        res.statusCode = 404;
+        res.end("{}");
+        return;
+      }
       if (req.url === "/reset") {
         bodies = [];
         res.end("ok");
