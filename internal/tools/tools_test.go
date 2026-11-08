@@ -209,17 +209,45 @@ func TestCodeStillNeedsApprovalAndIsCapped(t *testing.T) {
 	}
 }
 
+func TestMemoryIsWhatsSpareWithinBounds(t *testing.T) {
+	var b budgets
+	const gib = 1 << 30
+	// A tenth of 125 GB is left, and the rest is spare.
+	first, releaseFirst := b.memoryLimit(125*gib, 78*gib)
+	if want := int64(78*gib - 125*gib/10); first != want {
+		t.Errorf("first = %d, want %d", first, want)
+	}
+	// What's promised to a running sandbox isn't spare, but there's always the least.
+	second, releaseSecond := b.memoryLimit(125*gib, 78*gib)
+	if second != codeMemoryMin {
+		t.Errorf("second = %d", second)
+	}
+	releaseFirst()
+	releaseSecond()
+	// The margin is at least 8 GB, and there's a most.
+	if got, release := b.memoryLimit(16*gib, 12*gib); got != 4*gib {
+		t.Errorf("small machine = %d", got)
+	} else {
+		release()
+	}
+	if got, release := b.memoryLimit(1024*gib, 1000*gib); got != codeMemoryMax {
+		t.Errorf("big machine = %d", got)
+	} else {
+		release()
+	}
+}
+
 func TestCodeLimitsHold(t *testing.T) {
 	f := newFixture(t)
-	// None of the places it can write are unlimited.
-	got, err := runCode(t, f, "import os\nfor path in ['/work/big', '/dev/shm/big']:\n    try:\n        open(path, 'wb').write(b'x' * (128 << 20))\n        print('WROTE', path)\n    except OSError as e:\n        print('full', e.errno)\n    os.remove(path)")
+	// /work is small.
+	got, err := runCode(t, f, "import os\ntry:\n    open('/work/big', 'wb').write(b'x' * (128 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)\nos.remove('/work/big')")
 	if err != nil || strings.Contains(got, "WROTE") {
 		t.Errorf("big = %q, %v", got, err)
 	}
-	// /tmp is small.
-	got, err = runCode(t, f, "try:\n    open('/tmp/big', 'wb').write(b'x' * (128 << 20))\n    print('WROTE')\nexcept OSError as e:\n    print('full', e.errno)")
-	if err != nil || strings.Contains(got, "WROTE") {
-		t.Errorf("big = %q, %v", got, err)
+	// /tmp and /dev/shm are as big as the memory limit they share, which it can read.
+	got, err = runCode(t, f, "import json, os\nlimits = json.load(open('/sandbox/limits.json'))\nfor path in ['/tmp', '/dev/shm']:\n    s = os.statvfs(path)\n    print(path, s.f_blocks * s.f_frsize == limits['memory_bytes'])\nprint(limits['memory_bytes'] >= 2 << 30, limits['processes_and_threads'], limits['time_limit_seconds'])")
+	if err != nil || got != "/tmp True\n/dev/shm True\nTrue 4096 5\n" {
+		t.Errorf("limits = %q, %v", got, err)
 	}
 	// Stopping it ends everything it started.
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

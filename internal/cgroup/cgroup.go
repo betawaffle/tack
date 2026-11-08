@@ -94,6 +94,10 @@ func (g *Group) Limit(limits Limits) error {
 	if err := write("memory.swap.max", "0"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// Running out kills the whole group at once, rather than leaving it half there.
+	if err := write("memory.oom.group", "1"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return write("pids.max", strconv.Itoa(limits.Pids))
 }
 

@@ -43,6 +43,9 @@ func (c *capped) Bytes() []byte { return c.buffer.Bytes() }
 // bwrap is the sandbox. It's an absolute path, so that it can't depend on any PATH.
 const bwrap = "/usr/bin/bwrap"
 
+// choom sets how readily the kernel kills a process when memory runs out.
+const choom = "/usr/bin/choom"
+
 // within reports whether path is dir or something under it.
 func within(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)

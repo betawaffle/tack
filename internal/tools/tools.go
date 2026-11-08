@@ -55,6 +55,7 @@ func definition(name, description, properties, required string) jsontext.Value {
 type reader struct {
 	protected []string
 	cgroups   *cgroup.Manager
+	memory    budgets
 }
 
 // arguments reads a call's strings, refusing anything it doesn't expect.

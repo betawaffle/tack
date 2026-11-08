@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"debug/elf"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -26,15 +27,13 @@ import (
 // any PATH.
 const python = "/usr/bin/python3"
 
-// None of these are settings, so nothing about a conversation can widen the sandbox.
+// None of these are settings, so nothing about a conversation can widen the sandbox. Its
+// memory is worked out as it starts, in memory.go.
 const (
-	codeTmpBytes  = 64 << 20 // /tmp, which is gone after each call
 	codeWorkBytes = 16 << 20 // /work, which is kept
-	codeShmBytes  = 16 << 20 // /dev/shm, which multiprocessing needs for its locks
 
-	// What it can use, /tmp and /work included, since they're held in memory.
-	codeMemoryBytes = 2 << 30
-	codePids        = 256
+	// Threads count as well as processes, and libraries start a thread for each CPU.
+	codePids = 4096
 
 	// codeSavedBytes is the most tack keeps of what's in /work. Compressed files in a full
 	// /work come to less, but many small files take more room in an archive than on disk.
@@ -47,7 +46,7 @@ const (
 	codeAutoSendBytes = 8 << 10
 )
 
-const codeDescription = "Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to 16 MB. /tmp is empty each time, and holds up to 64 MB. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. File descriptor 10 is a socket to the harness: write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to 64 KB, and a run can make up to 200 calls. It has Python's standard library and no other packages. It's limited to 2 GB of memory and 256 processes. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own."
+var codeDescription = fmt.Sprintf("Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to %d MB. /tmp is empty each time. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. The process running your code has file descriptor 10 open, a socket to the harness; there's no /proc or /dev/fd, so use it by number, as socket.socket(fileno=10). Write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to %d KB, and a run can make up to %d calls. It has Python's standard library and no other packages. Its memory limit is set as it starts, from what the machine has free, between %d and %d GB, and files in /tmp and /dev/shm count against it. /sandbox/limits.json has this run's limits. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own.", codeWorkBytes>>20, core.ChannelLineBytes>>10, core.ChannelCalls, codeMemoryMin>>30, codeMemoryMax>>30)
 
 // File descriptors in the sandbox. bwrap consumes the first four itself.
 const (
@@ -59,6 +58,7 @@ const (
 	fdKeptOut
 	fdContext
 	fdChannel // what the model's code talks to tack through
+	fdLimits
 )
 
 // codeStart runs in the sandbox around the model's code, which gets its own process and can't
@@ -206,7 +206,7 @@ func pythonParts(ctx context.Context) (real string, dirs []string, files map[str
 // places in memory to write to. The rest of the tree is read-only and empty. There's no /proc,
 // which also hides the arguments of the sandbox's own processes, and no real /dev. It shares
 // the host's kernel, which is why there's a syscall filter as well.
-func (r *reader) codeArgs(real string, dirs []string, files map[string]string) []string {
+func (r *reader) codeArgs(real string, dirs []string, files map[string]string, memory int64) []string {
 	args := []string{"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
 		"--hostname", "sandbox", "--ro-bind", real, real}
 	for _, path := range slices.Sorted(mapKeys(files)) {
@@ -231,14 +231,16 @@ func (r *reader) codeArgs(real string, dirs []string, files map[string]string) [
 		args = append(args, "--dev-bind", device, device)
 	}
 	args = append(args,
-		"--size", strconv.Itoa(codeTmpBytes), "--tmpfs", "/tmp",
+		// These two share the memory limit with everything else, so each can be as big.
+		"--size", strconv.FormatInt(memory, 10), "--tmpfs", "/tmp",
+		"--size", strconv.FormatInt(memory, 10), "--tmpfs", "/dev/shm",
 		"--size", strconv.Itoa(codeWorkBytes), "--tmpfs", "/work",
-		"--size", strconv.Itoa(codeShmBytes), "--tmpfs", "/dev/shm",
 		// A file rather than stdin, because multiprocessing has to be able to load it again.
 		"--ro-bind-data", strconv.Itoa(fdCode), "/code/main.py",
 		"--ro-bind-data", strconv.Itoa(fdNotes), "/conversation/notes.json",
 		"--ro-bind-data", strconv.Itoa(fdScratch), "/conversation/scratch.json",
 		"--ro-bind-data", strconv.Itoa(fdContext), "/conversation/context.json",
+		"--ro-bind-data", strconv.Itoa(fdLimits), "/sandbox/limits.json",
 		"--seccomp", strconv.Itoa(fdFilter),
 		// Last, because the root is an unlimited place to write until it's read-only.
 		"--remount-ro", "/",
@@ -275,7 +277,7 @@ func inspectCode(call core.Call) ([]string, error) {
 	if strings.ContainsRune(args["code"], 0) {
 		return nil, errors.New("the code has a NUL in it")
 	}
-	for _, needed := range []string{bwrap, python} {
+	for _, needed := range []string{bwrap, choom, python} {
 		if _, err := os.Stat(needed); err != nil {
 			return nil, fmt.Errorf("running code needs %s, and it isn't there", needed)
 		}
@@ -284,6 +286,19 @@ func inspectCode(call core.Call) ([]string, error) {
 		return nil, err
 	}
 	return []string{FlagCode}, nil
+}
+
+// codeLimits is /sandbox/limits.json, what this run was given. Memory covers /tmp and
+// /dev/shm too, which are held in it.
+type codeLimits struct {
+	Memory       int64 `json:"memory_bytes"`
+	Work         int   `json:"work_bytes"`
+	Saved        int   `json:"work_saved_bytes"`
+	Pids         int   `json:"processes_and_threads"`
+	Seconds      int   `json:"time_limit_seconds"`
+	ChannelLine  int   `json:"channel_line_bytes"`
+	ChannelCalls int   `json:"channel_calls"`
+	ChannelBytes int   `json:"channel_bytes"`
 }
 
 // feed starts writing data to a pipe, for the sandbox to read, and returns the end to give it.
@@ -347,7 +362,13 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	sandbox := r.codeArgs(real, dirs, files)
+	total, available, err := meminfo()
+	if err != nil {
+		return nil, err
+	}
+	memory, release := r.memory.memoryLimit(total, available)
+	defer release()
+	sandbox := r.codeArgs(real, dirs, files, memory)
 	if call.Keep != nil {
 		if err := call.Keep("sandbox", []byte(strings.Join(sandbox, "\n"))); err != nil {
 			return nil, err
@@ -404,6 +425,15 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	tackEnd, codeEnd := os.NewFile(uintptr(pair[0]), "channel"), os.NewFile(uintptr(pair[1]), "channel for code")
 	defer tackEnd.Close()
 	extra = append(extra, codeEnd)
+	limits, err := json.Marshal(codeLimits{Memory: memory, Work: codeWorkBytes, Saved: codeSavedBytes, Pids: codePids,
+		Seconds: s.CommandTimeoutSeconds, ChannelLine: core.ChannelLineBytes, ChannelCalls: core.ChannelCalls, ChannelBytes: core.ChannelBytes}, json.Deterministic(true))
+	if err != nil {
+		return nil, err
+	}
+	if in, err = feed(limits); err != nil {
+		return nil, err
+	}
+	extra = append(extra, in)
 	serveCtx, stopServing := context.WithCancel(ctx)
 	served := make(chan error, 1)
 	go func() {
@@ -424,12 +454,14 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 		kept <- data
 	}()
 
-	cmd := exec.CommandContext(ctx, bwrap, append(sandbox, real, "-I", "-S", "-c", codeStart)...)
+	// choom makes it the first thing the kernel kills if the whole machine runs short,
+	// and then runs bwrap in its place.
+	cmd := exec.CommandContext(ctx, choom, append([]string{"-n", "1000", "--", bwrap}, append(sandbox, real, "-I", "-S", "-c", codeStart)...)...)
 	// Somewhere that's always there. It's tack's side of things, which code never sees.
 	cmd.Dir = "/"
 	cmd.Env = codeEnv
 	cmd.ExtraFiles = extra
-	output, failure := r.runSandboxed(ctx, cmd, call, s, "code", &cgroup.Limits{Memory: codeMemoryBytes, Pids: codePids})
+	output, failure := r.runSandboxed(ctx, cmd, call, s, "code", &cgroup.Limits{Memory: memory, Pids: codePids})
 	stopServing()
 	tackEnd.Close()
 	if err := <-served; err != nil {

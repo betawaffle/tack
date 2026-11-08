@@ -148,8 +148,14 @@ and command tools tack used to have, and a call to one of those fails by itself.
 required. Its sandbox
 has only the interpreter, the standard library and the libraries they load, plus time zones, all
 read-only. It has no `/proc`, no network, no other programs and nothing installed on the machine. A
-syscall filter allows only what ordinary Python needs (x86-64 only), and limits of 2 GB of memory and
-256 processes apply when tack has a delegated cgroup. None of this is a setting. `/work` is kept
+syscall filter allows only what ordinary Python needs (x86-64 only). When tack has a delegated cgroup,
+each run gets as much memory as the machine has available as it starts (which leaves out what the
+kernel can take back, like the page cache), less a margin of 8 GB or a tenth of the machine, whichever is
+more, and less what other running sandboxes were given, but never under 2 GB or over 96 GB, and 4096
+processes and threads. `/tmp` and `/dev/shm` are held in that memory and count against it, so
+each can be as big as the whole limit. Running out kills the whole run, and if the machine itself
+runs short, the kernel kills sandboxes first. `/sandbox/limits.json` tells the code what it got.
+None of this is a setting. `/work` is kept
 between calls in a conversation, up to 16 MB, as an archive in the record that's only ever unpacked
 inside a sandbox, so forks go on from what was there at that point. `/tmp` starts empty each time.
 Notes and scratch can be read from `/conversation`, and so can `context.json`: the exact
