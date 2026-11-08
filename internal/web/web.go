@@ -10,6 +10,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -20,11 +21,12 @@ import (
 	"time"
 
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/docs"
 	"github.com/betawaffle/tack/internal/prompt"
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -112,11 +114,18 @@ type Options struct {
 	Hosts []string
 	// Variables are what {{name}} fills with, for a conversation with these settings.
 	Variables func(store.Settings) map[string]string
+	// Source is tack's source as this binary was built from it, at Revision, with the
+	// model's documentation under ModelDocsDir. Docs is all the documentation.
+	Source       fs.FS
+	Revision     string
+	ModelDocsDir string
+	Docs         docs.Library
 }
 
 func Handler(c *core.Core, opts Options) http.Handler {
 	hosts := opts.Hosts
-	s := &server{core: c, defaults: opts.Defaults, save: opts.Save, reload: opts.Reload, variables: opts.Variables}
+	s := &server{core: c, defaults: opts.Defaults, save: opts.Save, reload: opts.Reload, variables: opts.Variables,
+		source: opts.Source, revision: opts.Revision, modelDocsDir: opts.ModelDocsDir, docs: opts.Docs}
 	if s.variables == nil {
 		s.variables = func(store.Settings) map[string]string { return map[string]string{"date": prompt.Date(time.Now())} }
 	}
@@ -159,6 +168,18 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/conversations/{id}/tools", s.current(s.proposeTools))
 	mux.HandleFunc("POST /api/conversations/{id}/settings/now", s.changeSettingsNow)
 	mux.HandleFunc("POST /api/conversations/{id}/code-calls/{call}", s.answerCodeCall)
+	mux.HandleFunc("GET /code", s.codePage)
+	mux.HandleFunc("GET /docs", s.docsPage)
+	mux.HandleFunc("GET /api/source", s.sourceList)
+	mux.HandleFunc("GET /api/source/file", s.sourceFile)
+	mux.HandleFunc("GET /api/feedback", s.feedbackList)
+	mux.HandleFunc("POST /api/feedback", s.addFeedback)
+	mux.HandleFunc("POST /api/feedback/{id}/remove", s.removeFeedback)
+	mux.HandleFunc("POST /api/feedback/read", s.readFeedback)
+	mux.HandleFunc("GET /api/docs", s.docsList)
+	mux.HandleFunc("GET /api/docs/page", s.docPage)
+	mux.HandleFunc("POST /api/docs/save", s.saveDoc)
+	mux.HandleFunc("POST /api/docs/remove", s.removeDoc)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
@@ -258,6 +279,11 @@ type server struct {
 	reload   func() (Reload, error)
 	// variables are what {{name}} fills with.
 	variables func(store.Settings) map[string]string
+
+	source       fs.FS
+	revision     string
+	modelDocsDir string
+	docs         docs.Library
 }
 
 // readText reads the JSON body every write endpoint takes.

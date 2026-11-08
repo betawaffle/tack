@@ -136,7 +136,29 @@ const (
 	// was given back, as Response, by tack or by the user. Channel ties the two together.
 	CodeRequest  = "code_request"
 	CodeResponse = "code_response"
+	// FeedbackAdded is a comment someone wrote about tack's own code or documentation, as
+	// Feedback. FeedbackRemoved takes one back, by Feedback.ID, before it's read.
+	// FeedbackRead says the comments in FeedbackIDs have been read, by whoever By names.
+	FeedbackAdded   = "feedback_added"
+	FeedbackRemoved = "feedback_removed"
+	FeedbackRead    = "feedback_read"
 )
+
+// Feedback is a comment about tack's source, pinned to the revision it was written
+// against. With no Path it's about the whole thing. With lines, it's about those, and with
+// columns too, about the text between them: StartColumn on StartLine up to EndColumn on
+// EndLine, counted in Unicode code points from zero. Quote is that text exactly.
+type Feedback struct {
+	ID          string `json:"id"`
+	Revision    string `json:"revision,omitzero"`
+	Path        string `json:"path,omitzero"`
+	StartLine   int    `json:"start_line,omitzero"`
+	EndLine     int    `json:"end_line,omitzero"`
+	StartColumn *int   `json:"start_column,omitzero"`
+	EndColumn   *int   `json:"end_column,omitzero"`
+	Quote       string `json:"quote,omitzero"`
+	Text        string `json:"text,omitzero"`
+}
 
 // Note is an item on a conversation's page. The text is a block, like other content.
 type Note struct {
@@ -245,7 +267,7 @@ func Known(eventType string) bool {
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged,
-		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse:
+		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse, FeedbackAdded, FeedbackRemoved, FeedbackRead:
 		return true
 	}
 	return false
@@ -360,6 +382,10 @@ type Event struct {
 
 	// code_request and code_response: which request.
 	Channel string `json:"channel,omitzero"`
+
+	// feedback_*
+	Feedback    *Feedback `json:"feedback,omitzero"`
+	FeedbackIDs []string  `json:"feedback_ids,omitzero"`
 
 	// tool_*
 	Execution string     `json:"execution,omitzero"` // one run of a call. A re-run gets a new one

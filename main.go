@@ -180,7 +180,10 @@ func main() {
 	if name, err := os.Hostname(); err == nil {
 		hosts = append(hosts, name)
 	}
-	server := &http.Server{Addr: cfg.Addr, Handler: web.Handler(c, web.Options{Defaults: defaults, Save: save, Reload: reload, Hosts: hosts, Variables: variables})}
+	server := &http.Server{Addr: cfg.Addr, Handler: web.Handler(c, web.Options{
+		Defaults: defaults, Save: save, Reload: reload, Hosts: hosts, Variables: variables,
+		Source: source, Revision: version(), ModelDocsDir: modelDocsDir, Docs: library,
+	})}
 	go func() {
 		<-c.Drained()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

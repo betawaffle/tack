@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code · tack</title>
+<meta name="tack-page" content="{{page_version}}" data-required="{{page_required}}">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/browse.css">
+<script src="/static/markdown.js" defer></script>
+<script src="/static/highlight.js" defer></script>
+<script src="/static/browse.js" defer></script>
+</head>
+<body class="browse-page" data-page="code">
+<aside id="sidebar">
+  <a class="brand" href="/" aria-label="tack, back to conversations">
+    <svg class="tack" viewBox="0 0 24 24" aria-hidden="true">
+      <path class="tack-pin" d="M12 13 L12 23 L12.9 13 Z M12 13 L11.1 13 L12 23 Z"/>
+      <ellipse class="tack-head" cx="12" cy="8.5" rx="9" ry="6.5"/>
+      <ellipse class="tack-shine" cx="9" cy="6.6" rx="3.2" ry="1.5"/>
+    </svg>
+    <span>tack</span>
+  </a>
+  
+  <a class="side-link" href="#"><strong>Code</strong></a>
+  <nav id="tree" aria-label="Files"></nav>
+  <div class="sidebar-foot">
+    <a class="mini" href="/docs">Documentation</a>
+    <div id="revision" class="hint"></div>
+  </div>
+</aside>
+<main class="browse-main">
+  <header class="browse-head">
+    <h1 id="view-title"></h1>
+    <span class="spacer"></span>
+    
+    <div id="view-actions" class="row"></div>
+  </header>
+  <div class="browse-body">
+    <section id="view" class="browse-view"></section>
+    <aside class="browse-side" aria-label="Comments">
+      <div id="comment-form" class="comment-form" hidden>
+        <div class="hint">Commenting on</div>
+        <div id="comment-target" class="comment-where"></div>
+        <pre id="comment-quote" class="comment-quote" hidden></pre>
+        <textarea id="comment-text" rows="5" aria-label="Your comment" placeholder="Your comment. Ctrl+Enter saves it."></textarea>
+        <div class="row">
+          <button class="mini primary" id="comment-save" type="button">Save comment</button>
+          <button class="mini" id="comment-cancel" type="button">Cancel</button>
+        </div>
+      </div>
+      <div class="row comments-head">
+        <h2 class="side-head">Comments</h2>
+        <span id="comments-count" class="hint"></span>
+        <span class="spacer"></span>
+        <select id="comments-scope" aria-label="Which comments">
+          <option value="here">About this</option>
+          <option value="unread">Not read yet</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div id="comments"></div>
+    </aside>
+  </div>
+  <div id="pick-bar" class="float-bar" hidden><span id="pick-label"></span><button class="mini primary" id="pick-comment" type="button">Comment on these lines</button><button class="mini" id="pick-clear" type="button">Clear</button></div>
+  <div id="selection-bar" class="float-bar" hidden><span id="selection-label"></span><button class="mini primary" id="selection-comment" type="button">Comment on the selection</button></div>
+  <div id="error" class="float-error" role="alert" hidden></div>
+  <div id="flash" class="float-flash" role="status" hidden></div>
+</main>
+</body>
+</html>

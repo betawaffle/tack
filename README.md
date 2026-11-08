@@ -157,6 +157,23 @@ same `{{name}}` variables as prompts, and link to each other with `[[Page]]` or
 first. The model reads those as relative Markdown links. The `facts-docs` section says where
 the documentation is.
 
+## Browsing and commenting on tack
+
+**Code** (`/code`) shows tack's source exactly as the running binary was built from it, since
+it's embedded in the binary, and tack-deploy only builds what's committed. You can comment on
+the whole of tack, a file, some lines (click a line number, and shift-click another), or a
+stretch of text you highlight. A comment keeps the revision it was written against, the path,
+the lines and columns (counted in Unicode code points from zero), and exactly what it quotes,
+so it still makes sense after a deploy changes the code. Comments are kept in the record, and
+are read later as a batch, when you ask: whoever reads them gets them from `GET /api/feedback`
+and marks them read with `POST /api/feedback/read` and `{"ids": [...], "by": "..."}`. Until
+then you can remove one.
+
+**Documentation** (`/docs`) shows tack's pages for the model, which aren't in the code browser,
+and yours, which you can add, edit, rename and remove there. Pages are rendered by default,
+with variables filled in as they'd be now; **Raw** shows the text, where tack's pages take
+comments like the rest of the code, and **For the model** shows exactly what code reads.
+
 ## Custom tools
 
 **+ Custom tool** adds a tool tack doesn't have, for trying out what a model does with an

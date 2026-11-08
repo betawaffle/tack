@@ -42,7 +42,7 @@ pids+=($!)
 
 node check.js
 status=$?
-for check in check-tools.js check-start.js check-requests.js; do
+for check in check-tools.js check-start.js check-requests.js check-browse.js; do
 	node "$check"
 	result=$?
 	[ $status -eq 0 ] && status=$result
