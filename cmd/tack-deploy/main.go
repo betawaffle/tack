@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/betawaffle/tack/internal/config"
+	"github.com/betawaffle/tack/internal/pyenv"
 )
 
 // A restart with nothing to wait for takes a couple of seconds. This is how long to
@@ -92,6 +94,12 @@ func deploy() error {
 	}
 	if err := run("go", "build", "-o", newShow, "./cmd/tack-show"); err != nil {
 		return err
+	}
+	// The packages code can import, built from the lock this build has. They're downloaded,
+	// checked against their hashes and unpacked; nothing in them runs here.
+	lock := pyenv.Default()
+	if err := pyenv.Build(context.Background(), &http.Client{Timeout: 15 * time.Minute}, lock, filepath.Join(cfg.Data, "pyenv")); err != nil {
+		return fmt.Errorf("building the packages for code, so nothing changed: %w", err)
 	}
 	if err := run(newTack, "-check"); err != nil {
 		return fmt.Errorf("the new build can't start, so nothing changed: %w", err)

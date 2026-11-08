@@ -34,7 +34,7 @@ func PythonVersion(ctx context.Context) (string, error) {
 
 // Variables are facts about running code, for prompts and documentation, as they'd be
 // for a conversation with these settings.
-func Variables(ctx context.Context, settings store.Settings) map[string]string {
+func Variables(ctx context.Context, settings store.Settings, site string) map[string]string {
 	s := settings.WithDefaults()
 	out := map[string]string{
 		"memory_min":        fmt.Sprintf("%d GiB", codeMemoryMin>>30),
@@ -51,6 +51,11 @@ func Variables(ctx context.Context, settings store.Settings) map[string]string {
 	if version, err := PythonVersion(ctx); err == nil {
 		out["python_version"] = version
 	}
+	out["python_packages"] = "none"
+	if list := PackageList(site); list != "" {
+		out["python_packages"] = list
+	}
+	out["library_threads"] = codeThreads
 	return out
 }
 

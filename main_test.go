@@ -42,7 +42,7 @@ func TestTacksDocsUseOnlyVariablesAndPagesThatExist(t *testing.T) {
 	if err != nil || len(pages) == 0 {
 		t.Fatalf("pages = %v, %v", pages, err)
 	}
-	vars := variables(store.Settings{Model: "m", Host: "h"})
+	vars := variablesFor(store.Settings{Model: "m", Host: "h"}, "")
 	for _, p := range pages {
 		text := docs.ForModel(pages, p, vars)
 		if strings.Contains(text, "{{") || strings.Contains(text, "[[") {

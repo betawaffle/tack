@@ -645,3 +645,42 @@ func TestWhatCodeAsksForThatIsntThereGoesToAPerson(t *testing.T) {
 		}
 	}
 }
+
+// TACK_TEST_PYTHON_SITE names a built environment, from pyenv, for the packages in the lock.
+func TestCodeCanUseThePackages(t *testing.T) {
+	site := os.Getenv("TACK_TEST_PYTHON_SITE")
+	if site == "" {
+		t.Skip("TACK_TEST_PYTHON_SITE isn't set")
+	}
+	f := newFixture(t)
+	for _, tool := range All(Options{Protected: []string{f.key}, PythonSite: site, PythonFor: "3.14"}) {
+		f.tools[tool.Name] = tool
+	}
+	got, err := runCode(t, f, `
+import numpy as np, pandas as pd, threading
+a = np.random.default_rng(1).random((300, 300))
+print("inverse ok", np.allclose(a @ np.linalg.inv(a), np.eye(300)))
+df = pd.DataFrame({"x": [1, 2, 3], "when": pd.to_datetime(["2026-01-01", "2026-06-01", "2026-11-08"]).tz_localize("Europe/London")})
+print("sum", df.x.sum(), df.when.dt.month.tolist())
+print("versions", np.__version__, pd.__version__)
+print("threads", threading.active_count())
+`)
+	if err != nil || !strings.Contains(got, "inverse ok True") || !strings.Contains(got, "sum 6 [1, 6, 11]") || !strings.Contains(got, "versions 2.3.5 2.3.3") {
+		t.Errorf("packages = %q, %v", got, err)
+	}
+	if !strings.Contains(f.tools["run_code"].Definition.String(), "numpy 2.3.5") {
+		t.Error("the description doesn't list the packages")
+	}
+	// They can be asked for by version, and what isn't there goes to a person.
+	inspect := func(packages map[string]string) error {
+		data, _ := json.Marshal(packages)
+		_, err := f.tools["run_code"].Inspect(core.Call{Args: map[string]jsontext.Value{"language": jsontext.Value(`"python"`), "code": jsontext.Value(`"1"`), "packages": data}})
+		return err
+	}
+	if err := inspect(map[string]string{"numpy": ">=2.3,<3", "Pandas": "2.3.*", "python_dateutil": "*"}); err != nil {
+		t.Errorf("what's there: %v", err)
+	}
+	if err := inspect(map[string]string{"pandas": ">=3"}); !errors.As(err, new(core.Unsupported)) || !strings.Contains(err.Error(), "pandas 2.3.3") {
+		t.Errorf("pandas 3 = %v", err)
+	}
+}

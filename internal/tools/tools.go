@@ -33,17 +33,21 @@ type Options struct {
 	// Docs is the documentation code can read, under /docs, with Variables filled in.
 	Docs      docs.Library
 	Variables func(store.Settings) map[string]string
+	// PythonSite is a directory of packages code can import, built for Python PythonFor, as
+	// major.minor. They're only offered while that's the Python there is.
+	PythonSite string
+	PythonFor  string
 }
 
 // All returns every tool.
 func All(opts Options) []core.Tool {
-	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups, docs: opts.Docs, variables: opts.Variables}
+	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups, docs: opts.Docs, variables: opts.Variables, pythonSite: opts.PythonSite, pythonFor: opts.PythonFor}
 	return []core.Tool{{
 		Name:          "run_code",
-		Definition:    definition("run_code", codeDescription, codeProperties, `["language","code"]`),
+		Definition:    definition("run_code", codeDescription(PackageList(opts.PythonSite)), codeProperties, `["language","code"]`),
 		AutoSendBytes: codeAutoSendBytes,
 		AutoRun:       func(settings store.Settings) bool { return settings.AutoRunCode },
-		Inspect:       inspectCode,
+		Inspect:       r.inspectCode,
 		Run:           r.runCode,
 		Timeout: func(settings store.Settings) time.Duration {
 			return time.Duration(settings.WithDefaults().CommandTimeoutSeconds) * time.Second
@@ -62,7 +66,11 @@ type reader struct {
 	memory    budgets
 	docs      docs.Library
 	variables func(store.Settings) map[string]string
+
+	pythonSite, pythonFor string
 }
+
+func (r *reader) site() string { return r.pythonSite }
 
 // arguments reads a call's strings, refusing anything it doesn't expect.
 func arguments(call core.Call, allowed ...string) (map[string]string, error) {

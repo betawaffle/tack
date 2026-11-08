@@ -87,7 +87,7 @@ func TestTheOlderFormStillLoads(t *testing.T) {
 }
 
 func TestEveryBuiltinVariableIsOneTackFills(t *testing.T) {
-	known := []string{"date", "model", "host", "tack_revision", "python_version", "memory_min", "memory_max", "work_size", "time_limit", "channel_line_size", "channel_calls", "docs_dir", "tack_docs", "user_docs"}
+	known := []string{"date", "model", "host", "tack_revision", "python_version", "python_packages", "library_threads", "memory_min", "memory_max", "work_size", "time_limit", "channel_line_size", "channel_calls", "docs_dir", "tack_docs", "user_docs"}
 	for _, s := range builtin().Sections {
 		text := s.Text()
 		for {

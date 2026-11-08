@@ -1,6 +1,8 @@
 # The run_code sandbox
 
-`run_code` runs Python {{python_version}} with only its standard library. Each run is a
+`run_code` runs Python {{python_version}} with its standard library and these packages:
+{{python_packages}}. A call can ask for versions of Python and of packages with `version` and
+`packages`; if they aren't there, the user is asked instead. Each run is a
 new process in a new sandbox. Nothing in it can reach the network, the user's files, or
 any other program.
 
@@ -45,14 +47,15 @@ call made through the [[tool-channel]] doesn't count.
 }
 ```
 
-`processes_and_threads` counts threads as well as processes.
+`processes_and_threads` counts threads as well as processes. Libraries that start a pool of
+threads, like numpy's, get {{library_threads}} threads each.
 
 ## What isn't there
 
 - No network, of any kind.
 - No `/proc`, so nothing that reads it works, including `/dev/fd` and `/proc/self`.
 - No programs besides Python: no shell, no compilers.
-- No packages beyond the standard library.
+- No packages beyond the ones above, and no way to install any.
 - A system call filter refuses calls ordinary Python doesn't need. A refused call fails
   with a permission error rather than stopping the run.
 

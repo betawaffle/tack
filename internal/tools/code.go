@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
+	"github.com/betawaffle/tack/internal/pyenv"
 	"github.com/betawaffle/tack/internal/store"
 	"github.com/betawaffle/tack/internal/version"
 )
@@ -49,7 +51,32 @@ const (
 	codeAutoSendBytes = 8 << 10
 )
 
-var codeDescription = fmt.Sprintf("Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to %d MB. /tmp is empty each time. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. The process running your code has file descriptor 10 open, a socket to the harness; there's no /proc or /dev/fd, so use it by number, as socket.socket(fileno=10). Write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to %d KB, and a run can make up to %d calls. It has Python's standard library and no other packages. Its memory limit is set as it starts, from what the machine has free, between %d and %d GB, and files in /tmp and /dev/shm count against it. /sandbox/limits.json has this run's limits. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own.", codeWorkBytes>>20, core.ChannelLineBytes>>10, core.ChannelCalls, codeMemoryMin>>30, codeMemoryMax>>30)
+func codeDescription(packages string) string {
+	return fmt.Sprintf("Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to %d MB. /tmp is empty each time. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. The process running your code has file descriptor 10 open, a socket to the harness; there's no /proc or /dev/fd, so use it by number, as socket.socket(fileno=10). Write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to %d KB, and a run can make up to %d calls. It has Python's standard library and %s. Its memory limit is set as it starts, from what the machine has free, between %d and %d GB, and files in /tmp and /dev/shm count against it. /sandbox/limits.json has this run's limits. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own.", codeWorkBytes>>20, core.ChannelLineBytes>>10, core.ChannelCalls, packagesPhrase(packages), codeMemoryMin>>30, codeMemoryMax>>30)
+}
+
+func packagesPhrase(packages string) string {
+	if packages == "" {
+		return "no other packages"
+	}
+	return "these packages: " + packages
+}
+
+// PackageList says which packages a site has, like "numpy 2.3.5, pandas 2.3.3", in name order.
+func PackageList(site string) string {
+	if site == "" {
+		return ""
+	}
+	installed, err := pyenv.Installed(site)
+	if err != nil {
+		return ""
+	}
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(installed)) {
+		out = append(out, name+" "+installed[name])
+	}
+	return strings.Join(out, ", ")
+}
 
 // File descriptors in the sandbox. bwrap consumes the first four itself.
 const (
@@ -119,23 +146,26 @@ sys.exit(128 - code if code < 0 else code)
 var libraryDirs = []string{"/lib64", "/usr/lib64", "/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib", "/usr/lib"}
 
 // pythonParts finds the least of the machine that Python's standard library runs with: the
-// interpreter, its directories, and the libraries those load. Nothing is cached, because a
-// system update can change any of it while tack is running.
-func pythonParts(ctx context.Context) (real string, dirs []string, files map[string]string, err error) {
+// interpreter, its directories, and the libraries those load, and the libraries the packages in
+// site load, if there's a site. Nothing is cached, because a system update can change any of it
+// while tack is running. version is Python's, as major.minor.
+func pythonParts(ctx context.Context, site string) (real, version string, dirs []string, files map[string]string, err error) {
 	if real, err = filepath.EvalSymlinks(python); err != nil {
-		return "", nil, nil, err
+		return "", "", nil, nil, err
 	}
 	// -I and -S leave just the standard library's own directories. It's a fixed program,
 	// run by tack on tack's side, with nothing from a model in it.
-	cmd := exec.CommandContext(ctx, real, "-I", "-S", "-c", `import sys; print("\n".join(sys.path))`)
+	cmd := exec.CommandContext(ctx, real, "-I", "-S", "-c", `import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}"); print("\n".join(sys.path))`)
 	cmd.Dir, cmd.Env = "/", []string{}
 	out, err := cmd.Output()
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("asking python where its library is: %w", err)
+		return "", "", nil, nil, fmt.Errorf("asking python where its library is: %w", err)
 	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	version = lines[0]
 	var todo []string
 	todo = append(todo, real)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range lines[1:] {
 		if info, err := os.Stat(line); err == nil && info.IsDir() {
 			dirs = append(dirs, line)
 			found, _ := filepath.Glob(filepath.Join(line, "*.so"))
@@ -143,7 +173,18 @@ func pythonParts(ctx context.Context) (real string, dirs []string, files map[str
 		}
 	}
 	if len(dirs) == 0 {
-		return "", nil, nil, errors.New("python didn't name any library directories")
+		return "", "", nil, nil, errors.New("python didn't name any library directories")
+	}
+	if site != "" {
+		err := filepath.WalkDir(site, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && d.Type().IsRegular() && strings.Contains(d.Name(), ".so") {
+				todo = append(todo, p)
+			}
+			return err
+		})
+		if err != nil {
+			return "", "", nil, nil, err
+		}
 	}
 	files = map[string]string{}
 	// glibc loads this itself when a thread ends, so no file names it.
@@ -163,7 +204,7 @@ func pythonParts(ctx context.Context) (real string, dirs []string, files map[str
 		return fmt.Errorf("couldn't find %s", name)
 	}
 	if err := need("libgcc_s.so.1"); err != nil {
-		return "", nil, nil, err
+		return "", "", nil, nil, err
 	}
 	seen := map[string]bool{}
 	for len(todo) > 0 {
@@ -175,7 +216,10 @@ func pythonParts(ctx context.Context) (real string, dirs []string, files map[str
 		seen[path] = true
 		f, err := elf.Open(path)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("reading %s: %w", path, err)
+			if site != "" && within(path, site) {
+				continue // A package's file that happens to have .so in its name.
+			}
+			return "", "", nil, nil, fmt.Errorf("reading %s: %w", path, err)
 		}
 		libs, err := f.ImportedLibraries()
 		var interp string
@@ -185,31 +229,58 @@ func pythonParts(ctx context.Context) (real string, dirs []string, files map[str
 				interp = strings.TrimRight(string(data), "\x00")
 			}
 		}
+		// A package's libraries can name others it bundles, found relative to themselves.
+		var runpath []string
+		if site != "" && within(path, site) {
+			for _, tag := range []elf.DynTag{elf.DT_RUNPATH, elf.DT_RPATH} {
+				entries, _ := f.DynString(tag)
+				for _, entry := range entries {
+					for _, dir := range strings.Split(entry, ":") {
+						dir = strings.ReplaceAll(strings.ReplaceAll(dir, "${ORIGIN}", "$ORIGIN"), "$ORIGIN", filepath.Dir(path))
+						if within(dir, site) {
+							runpath = append(runpath, dir)
+						}
+					}
+				}
+			}
+		}
 		f.Close()
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("reading %s: %w", path, err)
+			return "", "", nil, nil, fmt.Errorf("reading %s: %w", path, err)
 		}
 		if interp != "" {
 			source, err := filepath.EvalSymlinks(interp)
 			if err != nil {
-				return "", nil, nil, err
+				return "", "", nil, nil, err
 			}
 			files[interp] = source
 		}
+	libraries:
 		for _, lib := range libs {
+			for _, dir := range runpath {
+				if bundled := filepath.Join(dir, lib); fileExists(bundled) {
+					todo = append(todo, bundled)
+					continue libraries
+				}
+			}
 			if err := need(lib); err != nil {
-				return "", nil, nil, fmt.Errorf("%s: %w", path, err)
+				return "", "", nil, nil, fmt.Errorf("%s: %w", path, err)
 			}
 		}
 	}
-	return real, dirs, files, nil
+	return real, version, dirs, files, nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // codeArgs is the sandbox for run_code: Python and what it loads, read-only, with a few small
 // places in memory to write to. The rest of the tree is read-only and empty. There's no /proc,
 // which also hides the arguments of the sandbox's own processes, and no real /dev. It shares
 // the host's kernel, which is why there's a syscall filter as well.
-func (r *reader) codeArgs(real string, dirs []string, files map[string]string, memory int64, docsDir string) []string {
+func (r *reader) codeArgs(real string, dirs []string, files map[string]string, memory int64, docsDir, site string) []string {
 	args := []string{"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
 		"--hostname", "sandbox", "--ro-bind", real, real}
 	for _, path := range slices.Sorted(mapKeys(files)) {
@@ -217,10 +288,16 @@ func (r *reader) codeArgs(real string, dirs []string, files map[string]string, m
 	}
 	for _, dir := range dirs {
 		args = append(args, "--ro-bind", dir, dir)
-		// Whatever's been installed on this machine isn't part of the standard library.
+		// Whatever's been installed on this machine isn't part of the standard library. The
+		// packages tack offers go where Python looks first.
 		packages := filepath.Join(dir, "site-packages")
 		if info, err := os.Stat(packages); err == nil && info.IsDir() {
-			args = append(args, "--size", "4096", "--tmpfs", packages, "--remount-ro", packages)
+			if site != "" {
+				args = append(args, "--ro-bind", site, packages)
+				site = ""
+			} else {
+				args = append(args, "--size", "4096", "--tmpfs", packages, "--remount-ro", packages)
+			}
 		}
 		for _, path := range r.protected {
 			if within(path, dir) {
@@ -267,7 +344,15 @@ func mapKeys(m map[string]string) func(func(string) bool) {
 // codeEnv is the whole environment for code. It's fixed, because a config's environment for
 // commands can have anything in it. Python's -I ignores its own variables, so the settings it
 // needs are flags on the command line instead.
-var codeEnv = []string{"PATH=/usr/bin", "HOME=/work", "LANG=C.UTF-8"}
+// Libraries start a thread per CPU in their pools, several pools at once, so they're capped:
+// threads count against the process limit, and 32 each buys little. Caches go in /tmp, so they
+// don't fill /work, which is kept.
+var codeEnv = []string{"PATH=/usr/bin", "HOME=/work", "LANG=C.UTF-8",
+	"OMP_NUM_THREADS=" + codeThreads, "OPENBLAS_NUM_THREADS=" + codeThreads, "MKL_NUM_THREADS=" + codeThreads,
+	"NUMEXPR_MAX_THREADS=" + codeThreads, "XDG_CACHE_HOME=/tmp/.cache"}
+
+// codeThreads is how many threads a library's pool gets.
+const codeThreads = "8"
 
 // codeProperties are run_code's parameters. Which languages it lists is up to the person
 // offering it, who can add ones tack doesn't run, or take the list away, to see what a model
@@ -316,7 +401,7 @@ func codeArguments(call core.Call) (codeRequest, error) {
 
 // inspectCode checks a call, and says when it asks for something tack doesn't have, which a
 // person then answers.
-func inspectCode(call core.Call) ([]string, error) {
+func (r *reader) inspectCode(call core.Call) ([]string, error) {
 	req, err := codeArguments(call)
 	if err != nil {
 		return nil, err
@@ -357,15 +442,31 @@ func inspectCode(call core.Call) ([]string, error) {
 		}
 	}
 	if len(names) > 0 {
-		var asked []string
-		for _, name := range names {
-			if c := req.packages[name]; c != "" && c != "*" {
-				asked = append(asked, fmt.Sprintf("%s %s", name, c))
-			} else {
-				asked = append(asked, name)
+		installed := map[string]string{}
+		if r.pythonSite != "" {
+			if have, err := PythonVersion(context.Background()); err == nil && minorOf(have) == r.pythonFor {
+				installed, _ = pyenv.Installed(r.pythonSite)
 			}
 		}
-		return nil, core.Unsupported{Answer: fmt.Sprintf("This didn't run, because these packages aren't available: %s. There's only Python's standard library.", strings.Join(asked, ", "))}
+		var missing []string
+		for _, name := range names {
+			c := req.packages[name]
+			if have, ok := installed[pyenv.Normalize(name)]; ok && packageAllows(c, have) {
+				continue
+			}
+			if c != "" && c != "*" {
+				missing = append(missing, fmt.Sprintf("%s %s", name, c))
+			} else {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			there := "There's only Python's standard library."
+			if list := listInstalled(installed); list != "" {
+				there = "There's Python's standard library and " + list + "."
+			}
+			return nil, core.Unsupported{Answer: fmt.Sprintf("This didn't run, because these packages aren't available: %s. %s", strings.Join(missing, ", "), there)}
+		}
 	}
 	for _, needed := range []string{bwrap, choom, python} {
 		if _, err := os.Stat(needed); err != nil {
@@ -376,6 +477,37 @@ func inspectCode(call core.Call) ([]string, error) {
 		return nil, err
 	}
 	return []string{FlagCode}, nil
+}
+
+// packageAllows says whether a package's version meets a constraint. A version tack can't read,
+// like 2.9.0.post0, only meets a constraint that allows any version.
+func packageAllows(constraint, have string) bool {
+	c, err := version.ParseConstraint(constraint)
+	if err != nil {
+		return false
+	}
+	if v, err := version.Parse(have); err == nil {
+		return c.Allows(v)
+	}
+	t := strings.TrimSpace(constraint)
+	return t == "" || t == "*" || t == "x" || t == "latest"
+}
+
+func listInstalled(installed map[string]string) string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(installed)) {
+		out = append(out, name+" "+installed[name])
+	}
+	return strings.Join(out, ", ")
+}
+
+// minorOf is a version's major.minor.
+func minorOf(v string) string {
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) < 2 {
+		return v
+	}
+	return parts[0] + "." + parts[1]
 }
 
 // writeDocs lays out the documentation as the model reads it, in a new directory on tack's
@@ -457,7 +589,7 @@ func checkKept(data []byte) error {
 // runCode runs code in its own sandbox. The code goes in as a file, so it can be longer than a
 // command line, and it has no input of its own.
 func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
-	if _, err := inspectCode(call); err != nil {
+	if _, err := r.inspectCode(call); err != nil {
 		return nil, err
 	}
 	req, err := codeArguments(call)
@@ -469,9 +601,14 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	real, dirs, files, err := pythonParts(ctx)
+	real, version, dirs, files, err := pythonParts(ctx, r.site())
 	if err != nil {
 		return nil, err
+	}
+	site := r.site()
+	if version != r.pythonFor {
+		// The packages are for another Python, which a system update can cause.
+		site = ""
 	}
 	total, available, err := meminfo()
 	if err != nil {
@@ -486,7 +623,7 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	if docsDir != "" {
 		defer os.RemoveAll(docsDir)
 	}
-	sandbox := r.codeArgs(real, dirs, files, memory, docsDir)
+	sandbox := r.codeArgs(real, dirs, files, memory, docsDir, site)
 	if call.Keep != nil {
 		if err := call.Keep("sandbox", []byte(strings.Join(sandbox, "\n"))); err != nil {
 			return nil, err

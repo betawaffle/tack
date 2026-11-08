@@ -88,11 +88,16 @@ func main() {
 	}
 	client := openrouter.NewClient(cfg.URL, key)
 	library := docs.Library{TackFS: modelDocs(), UserDir: filepath.Join(filepath.Dir(*configPath), "docs")}
+	site, pythonFor := pythonSite(cfg.Data)
+	if site == "" {
+		log.Print("the packages for code haven't been built, so it has only the standard library: tack-deploy builds them")
+	}
+	variables := variables(site)
 	c, err := core.New(core.Config{
 		Store:    st,
 		Client:   client,
 		Prices:   client.Endpoints,
-		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups, Docs: library, Variables: variables}), core.NoteTools()...),
+		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups, Docs: library, Variables: variables, PythonSite: site, PythonFor: pythonFor}), core.NoteTools()...),
 		Settings: cfg.Settings,
 	})
 	if err != nil {

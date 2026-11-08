@@ -188,7 +188,14 @@ tack's own tools are `run_code`, `note` and `scratch`. Older conversations may o
 and command tools tack used to have, and a call to one of those fails by itself.
 
 `run_code` runs Python, under [bubblewrap](https://github.com/containers/bubblewrap), which is
-required. A call names its `language`, and can ask for a `version` of it and for `packages`,
+required, with the packages in [`internal/pyenv/python.lock`](internal/pyenv/python.lock):
+numpy and pandas, with their dependencies, at the last versions before pandas 3, which the
+model is less likely to know. Every dependency is listed with its wheel's URL and SHA-256.
+tack-deploy downloads each wheel, checks it and unpacks it into a read-only directory named for
+the lock, under the data directory, so nothing in a package ever runs outside the sandbox and
+nothing is resolved. tack mounts it over the system Python's `site-packages`, and only while
+the system Python is the version the lock is for. Libraries' thread pools are capped at 8
+threads each. A call names its `language`, and can ask for a `version` of it and for `packages`,
 each with a version constraint in either the npm style (`^3.12`, `~3.13`, `3.14.x`,
 `>=3.10 <3.13`, `3.11 || 3.13`) or Python's (`==3.12.*`, `>=3.10,<3.13`, `~=3.12`). Its
 `language` lists only `python`, but you can add others, or take the list away, to see what a

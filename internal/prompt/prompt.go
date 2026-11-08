@@ -128,7 +128,8 @@ User messages may be queued while tools run, and then delivered together with th
 			{Text: "The harness is tack, at revision {{tack_revision}}."},
 		}},
 		{Name: "facts-sandbox", Off: true, Paragraphs: []Paragraph{
-			{Text: "run_code runs Python {{python_version}}, with only its standard library."},
+			{Text: "run_code runs Python {{python_version}}, with its standard library and these packages: {{python_packages}}."},
+			{Text: "Libraries that start a pool of threads, like numpy's, get {{library_threads}} threads each."},
 			{Text: "Each run's memory limit is set as it starts, from what the machine has free, between {{memory_min}} and {{memory_max}}. Files in /tmp and /dev/shm are held in that memory and count against it."},
 			{Text: "/sandbox/limits.json has the current run's limits."},
 			{Text: "/work is kept between runs in this conversation, up to {{work_size}}. /tmp starts empty each run."},
