@@ -95,8 +95,6 @@ type ToolCallView struct {
 	Error     string   `json:"error,omitzero"`
 	Result    string   `json:"result,omitzero"` // what the model was given
 	Decidable bool     `json:"decidable,omitzero"`
-	// Compact says it's only bookkeeping, like a note, which doesn't need a full card.
-	Compact bool `json:"compact,omitzero"`
 	// Custom says it's a call to a tool the person defined, so they write its result.
 	Custom bool `json:"custom,omitzero"`
 	// ByHand says a person writes the result, because it's to a custom tool or tack can't

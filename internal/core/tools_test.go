@@ -1420,9 +1420,6 @@ func TestNotesDontNeedApprovalAndCarryOn(t *testing.T) {
 	if conv.Items[len(conv.Items)-1].Text != "Hello there" {
 		t.Errorf("items = %+v", conv.Items)
 	}
-	if !conv.Items[len(conv.Items)-2].ToolCalls[0].Compact {
-		t.Errorf("a note should be compact: %+v", conv.Items[len(conv.Items)-2])
-	}
 
 	// Notes survive a restart, and the same key updates the item.
 	replies = 0

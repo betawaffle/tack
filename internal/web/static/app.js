@@ -729,36 +729,10 @@ function scratchPanel(scratch) {
   return node;
 }
 
-// Bookkeeping like a note gets one line where it happened, and opening it shows only what the
-// line doesn't already say.
-function compactCall(call) {
-  const node = el("details", "tool-compact");
-  node.dataset.call = call.id;
-  const args = parsedArguments(call) || {};
-  let label = call.name;
-  if (args.kind && args.key) label = `${call.name}: ${args.kind}, ${args.key}${args.status ? `, ${args.status}` : ""}`;
-  else if (args.op) label = `${call.name}: ${args.op}${args.key ? `, ${args.key}` : ""}`;
-  const summary = el("summary");
-  summary.append(exact(label, "tool-compact-label"));
-  if (call.result_edited || call.pending) node.open = true;
-  const known = ["kind", "key", "status", "op", "text"];
-  const body = el("div", "tool-compact-body");
-  if (Object.keys(args).length && Object.keys(args).every((name) => known.includes(name))) {
-    if (args.text) body.append(exact(args.text, "tool-compact-text"));
-  } else {
-    body.append(...argumentRows(call));
-  }
-  // A result that's more than an acknowledgment, like reading scratch back.
-  if (call.result && call.result !== "ok" && !call.result_edited) body.append(exact(call.result, "tool-compact-text"));
-  node.append(summary, body, resultControls(call));
-  return node;
-}
-
 // Which cards someone's opened or closed, kept across redraws.
 const cardsOpen = new Map();
 
 function renderToolCall(call, decision) {
-  if (call.compact && !call.invalid && !call.error && !call.decidable) return compactCall(call);
   const node = el("details", `tool state-${call.state}`);
   node.dataset.call = call.id;
   const needsYou = call.decidable || ["waiting", "finished", "interrupted", "running", "approved"].includes(call.state);

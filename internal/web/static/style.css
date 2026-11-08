@@ -178,7 +178,8 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100
 
 /* The ledger under each reply */
 .ledger {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 3px 14px; margin-top: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 3px 14px; margin-top: 10px; padding: 4px 11px;
+  border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--surface) 45%, transparent);
   color: var(--muted); font: 11.5px/1.5 var(--mono);
 }
 .cache { display: inline-flex; align-items: center; gap: 6px; }
@@ -333,9 +334,6 @@ textarea.bad { border-color: var(--warn); }
 }
 .note-text.whole { display: block; }
 .note-concern .note-text { color: var(--warn); }
-.tool-compact { margin: 2px 0; color: var(--muted); font-size: 12px; }
-.tool-compact summary { cursor: pointer; }
-.tool-compact-label { display: inline; margin: 0; font: 12px var(--mono); white-space: normal; overflow-wrap: anywhere; }
 .money { display: inline-flex; align-items: center; gap: 3px; }
 .money-amount {
   width: 110px; padding: 3px 7px; background: var(--surface); color: inherit;
@@ -398,9 +396,6 @@ textarea.bad { border-color: var(--warn); }
 .tool-invalid { margin-top: 6px; color: var(--warn); overflow-wrap: anywhere; }
 .tool-output { margin-top: 8px; }
 .tool-result { margin-top: 8px; }
-.tool-compact-body { padding: 3px 0 0 14px; }
-.tool-compact-text { margin: 0 0 2px; font: 12.5px/1.45 var(--ui); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
-.tool-compact .tool-result { margin: 4px 0 6px 14px; }
 .tool-output summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; color: var(--muted); }
 .tool-allow { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-weight: 600; cursor: pointer; }
 .tool-allow input { width: 16px; height: 16px; accent-color: var(--link); }

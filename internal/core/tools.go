@@ -964,11 +964,6 @@ func (c *Core) ProposeSettings(convID string, settings store.Settings) (string, 
 	return id, c.record(&store.Event{Type: store.SettingsProposed, Conversation: convID, Edit: id, Settings: &settings})
 }
 
-func (c *Core) isCompact(name string) bool {
-	tool := c.findTool(name)
-	return tool != nil && tool.NoApproval
-}
-
 func nothingWaitingDiffers(a, b store.Settings) bool {
 	a, b = a.WithDefaults(), b.WithDefaults()
 	a.BudgetUSD, a.BudgetTopUpUSD = b.BudgetUSD, b.BudgetTopUpUSD
@@ -1206,7 +1201,6 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		Invalid:      call.Invalid,
 		Flags:        call.Flags,
 		Error:        call.failure,
-		Compact:      c.isCompact(call.Name),
 		Custom:       conv.isCustom(call.Name),
 		ByHand:       conv.byHand(call),
 		Unsupported:  call.Unsupported,

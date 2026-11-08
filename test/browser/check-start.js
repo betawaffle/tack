@@ -540,14 +540,13 @@ let page;
   const caughtUp = (await bodies())[0].messages;
   ok(caughtUp.at(-1).content === "short from the stale tab" && caughtUp.at(-2).content === "from another tab", "then it goes, with both messages");
 
-  // Notes: one line where they happened, a panel that collapses, and it stays that way.
+  // Notes: a card where they happened, a panel that collapses, and it stays that way.
   await fresh();
   await reset();
   await send("tools note");
   await p.waitForSelector(".notes", { timeout: 15000 });
   await idle();
-  ok((await p.locator(".tool-compact").count()) === 2, "notes get one line where they happened");
-  ok((await p.locator(".tool-name", { hasText: "note" }).count()) === 0, "rather than a card");
+  ok((await p.locator(".tool .tool-name", { hasText: "note" }).count()) === 2, "notes get a card where they happened, like any call");
   ok(/\(2\)/.test(await p.locator(".notes summary").innerText()), "the panel says how many");
   await p.screenshot({ path: "shots/notes.png" });
   await p.locator(".notes summary").click();
