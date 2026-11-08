@@ -134,7 +134,13 @@ type BudgetView struct {
 	// added. Without prices or a way to count tokens there's no estimate. Allowance is
 	// what someone setting things going next would allow.
 	EstimateKnown bool `json:"estimate_known,omitzero"`
-	NextBytes     int  `json:"next_bytes"`
+	// Likely adds the shortest reply ever seen from the model, and Most is the most the call
+	// could cost, with the longest reply the host allows.
+	Likely      Pico `json:"likely_pico,omitzero"`
+	LikelyKnown bool `json:"likely_known,omitzero"`
+	Most        Pico `json:"most_pico,omitzero"`
+	MostKnown   bool `json:"most_known,omitzero"`
+	NextBytes   int  `json:"next_bytes"`
 	// NextTokens is the input tokens of the next call if nothing's added, for a model tack
 	// can count for. Zero means it can't.
 	NextTokens int  `json:"next_tokens,omitzero"`
@@ -285,7 +291,9 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 			out.Budget.NextBytes = len(body)
 			out.Budget.NextTokens = countRequest(effective.Model, body)
 			if endpoints, ok := c.cachedPrices(effective.Model); ok {
-				out.Budget.Estimate, out.Budget.EstimateKnown = c.minimumFor(endpoints, effective, body)
+				e := c.estimateFor(endpoints, effective, body)
+				out.Budget.Estimate, out.Budget.EstimateKnown = e.Least, e.LeastKnown
+				out.Budget.Likely, out.Budget.LikelyKnown, out.Budget.Most, out.Budget.MostKnown = e.Likely, e.LikelyKnown, e.Most, e.MostKnown
 			}
 		}
 	}

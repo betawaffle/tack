@@ -1069,6 +1069,14 @@ func TestABudgetStopsCallsTheModelStartsByItself(t *testing.T) {
 	if !conv.Budget.Stopped || conv.Budget.Spent != picoFromUSD(0.001) || !conv.CanReply || !conv.Budget.EstimateKnown || conv.Budget.Estimate <= picoFromUSD(0.0005) {
 		t.Errorf("budget = %+v", conv.Budget)
 	}
+	// The shortest reply seen was one token, and the host doesn't say how long one can be.
+	c.mu.Lock()
+	c.priceCache = map[string]modelPrices{f.model: {f.prices, time.Now()}}
+	estimate := c.estimateFor(f.prices, store.Settings{Model: f.model, Host: "morph/fp8"}, f.bodies[0])
+	c.mu.Unlock()
+	if !estimate.LikelyKnown || estimate.Likely != estimate.Least+picoFromUSD(0.00001) || estimate.MostKnown {
+		t.Errorf("estimate = %+v", estimate)
+	}
 
 	// It survives a restart, and allowing more starts from what's been spent.
 	c = f.open()
@@ -1176,32 +1184,44 @@ func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
 
 func TestTheEstimateIsTheLeastACallCouldCost(t *testing.T) {
 	endpoints := []openrouter.Endpoint{
-		{Tag: "a", Pricing: openrouter.Price{Prompt: "0.00000002", InputCacheRead: "0.000000004"},
-			Overrides: []openrouter.Price{{Prompt: "0.00000001", InputCacheRead: "0.000000006"}}},
-		{Tag: "b", Pricing: openrouter.Price{Prompt: "0.000000005"}, Discount: 0.5},
-		{Tag: "c", Pricing: openrouter.Price{Prompt: "nonsense"}},
+		{Tag: "a", Pricing: openrouter.Price{Prompt: "0.00000002", Completion: "0.0000004", InputCacheRead: "0.000000004"},
+			Overrides: []openrouter.Price{{Prompt: "0.00000001", Completion: "0.0000008", InputCacheRead: "0.000000006"}},
+			ContextLength: 1000, MaxCompletionTokens: 300},
+		{Tag: "b", Pricing: openrouter.Price{Prompt: "0.000000005", Completion: "0.0000001"}, Discount: 0.5, ContextLength: 2000},
+		{Tag: "c", Pricing: openrouter.Price{Prompt: "nonsense", Completion: "1"}},
 	}
-	// The cheapest of a host's prices, whatever the time of day.
-	if r, ok := ratesFor(endpoints, "a"); !ok || r.uncached != 10000 || r.cached != 4000 {
+	// The cheapest and dearest of a host's prices, whatever the time of day.
+	if r, ok := ratesFor(endpoints, "a"); !ok || r != (rates{uncached: 10000, cached: 4000, completion: 400000, maxPrompt: 20000, maxCompletion: 800000}) {
 		t.Errorf("a = %+v", r)
 	}
-	// A discount comes off, and with no cache price, cached input costs the same.
-	if r, ok := ratesFor(endpoints, "b"); !ok || r.uncached != 2500 || r.cached != 2500 {
+	// A discount comes off the least, and with no cache price, cached input costs the same.
+	if r, ok := ratesFor(endpoints, "b"); !ok || r.uncached != 2500 || r.cached != 2500 || r.completion != 50000 || r.maxPrompt != 5000 {
 		t.Errorf("b = %+v", r)
 	}
 	// Any host could take a call with none chosen.
-	if r, ok := ratesFor(endpoints, ""); !ok || r.uncached != 2500 || r.cached != 2500 {
+	if r, ok := ratesFor(endpoints, ""); !ok || r.uncached != 2500 || r.maxCompletion != 800000 {
 		t.Errorf("any = %+v", r)
 	}
 	if _, ok := ratesFor(endpoints, "c"); ok {
 		t.Error("prices that can't be read gave rates")
 	}
 	// Only as much as has been processed before can be cached.
-	if got := minimumCost(rates{10, 1}, 100, 30); got != 70*10+30 {
+	if got := minimumCost(rates{uncached: 10, cached: 1}, 100, 30); got != 70*10+30 {
 		t.Errorf("cost = %v", got)
 	}
-	if got := minimumCost(rates{10, 1}, 100, 500); got != 100 {
+	if got := minimumCost(rates{uncached: 10, cached: 1}, 100, 500); got != 100 {
 		t.Errorf("all cached = %v", got)
+	}
+	// The longest reply is the host's limit, or what's left of the context.
+	if got, ok := longestReply(endpoints, "a", 800); !ok || got != 200 {
+		t.Errorf("a's longest = %d, %v", got, ok)
+	}
+	if got, ok := longestReply(endpoints[:2], "", 100); !ok || got != 1900 {
+		t.Errorf("any longest = %d, %v", got, ok)
+	}
+	// If any host that could take it doesn't say, there's no most.
+	if _, ok := longestReply(endpoints, "", 100); ok {
+		t.Error("a host that says nothing gave a longest reply")
 	}
 }
 

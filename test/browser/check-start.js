@@ -102,7 +102,7 @@ let page;
   await send("short one");
   await replied();
   const firstSpend = await p.locator("#spend").innerText();
-  ok(/Next call at least \S+¢, with [\d,]+ tokens so far\. Up to \S+ before tack asks you again/.test(firstSpend), "the composer says the least the next call could cost: " + firstSpend);
+  ok(/Next call at least \S+¢, likely at least \S+¢, at most \S+¢, with [\d,]+ tokens so far\. Up to \S+ before tack asks you again/.test(firstSpend), "the composer says the least the next call could cost: " + firstSpend);
   let b = await bodies();
   ok(b[0].messages[0].content === preview, "and that's what's sent");
   ok(b[0].tools.map((t) => t.function.name).join() === "run_code,note,scratch", "with the tools");

@@ -75,6 +75,8 @@ type Core struct {
 	fetchingPrices map[string]bool
 	// processed is the most tokens one call to each model has processed.
 	processed map[string]int
+	// shortestReply is the fewest tokens any reply from each model has had.
+	shortestReply map[string]int
 	// This run, which isn't.
 	status        Status
 	restarting    bool

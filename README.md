@@ -278,7 +278,11 @@ at any time of day, with as many of them as any one earlier call to the model pr
 at its cheapest cached price, and a reply of nothing. Prices come from OpenRouter's public list of
 hosts, asked for without the key and kept for ten minutes. A call nearly always costs more than
 this, by however long its reply is, and with a model tack can't count tokens for, or no prices,
-there's no estimate and only what's been spent stops a call. A cancelled call doesn't report a
+there's no estimate and only what's been spent stops a call. The line also says what the call
+is likely to cost at least, which adds the shortest reply ever seen from the model at the
+cheapest output price, and the most it could cost: every input token uncached at the host's
+dearest price, and the longest reply the host allows, at its dearest output price. tack doesn't
+send `max_tokens`, so that's the host's limit, or what's left of its context. A cancelled call doesn't report a
 cost, so it counts as the most expensive recent one.
 
 After calls that ran without you, the conversation shows what they cost in all. To help you

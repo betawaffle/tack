@@ -1592,7 +1592,10 @@ function refreshSpend() {
   let text = "";
   if (spendInfo.budget) {
     const estimate = estimateNext(spendInfo.budget);
-    text = estimate === null ? "No estimate for the next call. " : `Next call at least ${tackMoney.rough(estimate)}${spendInfo.budget.next_tokens ? `, with ${count(spendInfo.budget.next_tokens)} tokens so far` : ""}. `;
+    const b = spendInfo.budget;
+    const likely = b.likely_known ? `, likely at least ${tackMoney.rough(b.likely_pico)}` : "";
+    const most = b.most_known ? `, at most ${tackMoney.rough(b.most_pico)}` : "";
+    text = estimate === null ? "No estimate for the next call. " : `Next call at least ${tackMoney.rough(estimate)}${likely}${most}${b.next_tokens ? `, with ${count(b.next_tokens)} tokens so far` : ""}. `;
   }
   if (spendEditing) {
     line.querySelector(".spend-estimate").textContent = text;

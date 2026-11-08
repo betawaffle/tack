@@ -68,7 +68,7 @@ http
       if (req.method === "GET" && /^\/v1\/models\/.+\/endpoints$/.test(req.url)) {
         const price = { prompt: "0.000001", completion: "0.000001", input_cache_read: "0.0000001" };
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ data: { endpoints: [{ tag: "morph/fp8", pricing: price }, { tag: "relace/fp4", pricing: price }] } }));
+        res.end(JSON.stringify({ data: { endpoints: [{ tag: "morph/fp8", pricing: price, context_length: 100000, max_completion_tokens: 1000 }, { tag: "relace/fp4", pricing: price, context_length: 100000, max_completion_tokens: 1000 }] } }));
         return;
       }
       if (req.url === "/reset") {

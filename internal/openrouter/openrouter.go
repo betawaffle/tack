@@ -420,11 +420,16 @@ type Endpoint struct {
 	Pricing   Price   `json:"pricing"`
 	Overrides []Price `json:"-"`
 	Discount  float64 `json:"-"`
+	// The most tokens a call's context and reply can have, if the host says.
+	ContextLength       int `json:"-"`
+	MaxCompletionTokens int `json:"-"`
 }
 
 type endpointWire struct {
-	Tag     string `json:"tag"`
-	Pricing struct {
+	Tag                 string `json:"tag"`
+	ContextLength       *int   `json:"context_length"`
+	MaxCompletionTokens *int   `json:"max_completion_tokens"`
+	Pricing             struct {
 		Price
 		Discount  float64 `json:"discount"`
 		Overrides []Price `json:"overrides"`
@@ -463,7 +468,14 @@ func (c *Client) Endpoints(ctx context.Context, model string) ([]Endpoint, error
 	}
 	var out []Endpoint
 	for _, e := range body.Data.Endpoints {
-		out = append(out, Endpoint{Tag: e.Tag, Pricing: e.Pricing.Price, Overrides: e.Pricing.Overrides, Discount: e.Pricing.Discount})
+		ep := Endpoint{Tag: e.Tag, Pricing: e.Pricing.Price, Overrides: e.Pricing.Overrides, Discount: e.Pricing.Discount}
+		if e.ContextLength != nil {
+			ep.ContextLength = *e.ContextLength
+		}
+		if e.MaxCompletionTokens != nil {
+			ep.MaxCompletionTokens = *e.MaxCompletionTokens
+		}
+		out = append(out, ep)
 	}
 	return out, nil
 }
