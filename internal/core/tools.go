@@ -254,7 +254,6 @@ func (conv *conversation) applyTool(ev *store.Event) {
 		conv.allowanceSet, conv.allowanceBase, conv.allowance = true, picoFromUSD(ev.SpentUSD), picoFromUSD(ev.AmountUSD)
 		conv.freshAllowance = true
 		conv.budgetStopped = false
-		conv.chainStarts = append(conv.chainStarts, len(conv.items))
 	case store.BudgetStopped:
 		conv.budgetStopped = true
 		conv.stoppedEstimate = picoFromUSD(ev.EstimateUSD)

@@ -1130,45 +1130,6 @@ func TestAnExpensiveCallYouAskForStillGoes(t *testing.T) {
 	}
 }
 
-func TestChainsAddUpWhatRanWithoutYou(t *testing.T) {
-	f := newToolFake(t)
-	f.noteTools()
-	f.settings = store.Settings{BudgetUSD: 1}
-	replies := 0
-	n := 0
-	f.handler = func(w http.ResponseWriter) {
-		replies++
-		if replies%2 == 1 {
-			io.WriteString(w, chainStream(&n, "0.25"))
-			return
-		}
-		io.WriteString(w, costStream("0.125"))
-	}
-	c := f.open()
-	id, _ := c.NewConversation("")
-	for _, text := range []string{"one", "two"} {
-		updates, err := c.Send(id, text)
-		mustFinish(t, updates, err)
-	}
-	check := func(c *Core) {
-		t.Helper()
-		conv, _ := c.Conversation(id)
-		var totals []Pico
-		var calls []int
-		for _, item := range conv.Items {
-			if item.ChainPico != 0 {
-				totals = append(totals, item.ChainPico)
-				calls = append(calls, item.ChainCalls)
-			}
-		}
-		if !slices.Equal(totals, []Pico{picoFromUSD(0.375), picoFromUSD(0.375)}) || !slices.Equal(calls, []int{2, 2}) {
-			t.Errorf("totals = %v, calls = %v, in %+v", totals, calls, conv.Items)
-		}
-	}
-	check(c)
-	check(f.open())
-}
-
 func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
 	f := newFake(t)
 	f.settings = store.Settings{BudgetUSD: 0.0000001}

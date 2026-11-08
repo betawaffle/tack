@@ -296,14 +296,6 @@ const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
 const count = (n) => n.toLocaleString("en-US");
 const money = tackMoney.format;
 
-// What a run of calls cost, for after the last of them.
-function chainNode(item) {
-  const calls = item.chain_calls > 1 ? ` across ${item.chain_calls} calls` : "";
-  const node = el("div", "chain-total", `+ ${money(item.chain_pico)}${calls} since you stepped in`);
-  node.title = "What the model spent from your last action until it stopped";
-  return node;
-}
-
 function ledger(s, controls) {
   const row = el("div", "ledger");
   // Only the cost and time show until the reply is pointed at; the rest is for a closer look.
@@ -365,8 +357,8 @@ function renderReply(item, key, decision) {
   const { main, side } = r;
   for (const call of item.tool_calls || []) main.append(renderToolCall(call, decision));
   // What's about the reply rather than in it goes beside it, where there's room.
-  if (item.stats) side.append(ledger(item.stats, controls));
-  if (item.chain_pico) side.append(chainNode(item));
+  const footer = item.stats ? ledger(item.stats, controls) : null;
+  if (footer) side.append(footer);
   if (item.name) main.append(el("div", "message-name", `name: ${item.name}`));
   if (item.removed) main.append(el("div", "hint", "This reply is no longer sent."));
   const fork = el("div", "fork-row");
@@ -394,7 +386,8 @@ function renderReply(item, key, decision) {
     });
     fork.append(" ", button("Edit", draftFork ? "mini" : "mini net", () => main.openEditor().querySelector("textarea").focus()));
   }
-  side.append(fork);
+  // In the footer's box when there is one, so showing it on hover doesn't move anything.
+  (footer || side).append(fork);
   if (item.pending) main.append(pendingBlock(item.pending, "Stop sending this reply.", CHANGE_HINT));
   return r.node;
 }
@@ -1281,7 +1274,6 @@ function renderItem(item, index, decision) {
     actions.append(button("Edit", "mini net", () => beginFork(item.index, item.text)));
     node.append(actions);
   }
-  if (item.chain_pico) node.append(chainNode(item));
   return node;
 }
 

@@ -352,7 +352,6 @@ let page;
   ok((await p.inputValue("#budget-amount")) === "0.5", "switching to dollars keeps the value");
   await p.locator(".budget-card .money button", { hasText: "¢" }).click();
   ok((await p.inputValue("#budget-amount")) === "50", "and so does switching back");
-  ok(/\+ \S+¢ since you stepped in/.test(await p.locator(".chain-total").last().innerText()), "it shows what the run cost");
   ok(/this month: \S+¢ here/.test(await p.locator("#meta").textContent()), "and what's been spent this month");
   await p.screenshot({ path: "shots/budget.png" });
   await reset();

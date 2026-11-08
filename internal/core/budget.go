@@ -121,39 +121,6 @@ func (c *Core) AllowBudget(convID string, amount Pico) error {
 	return c.record(&store.Event{Type: store.AllowanceStarted, Conversation: convID, AmountUSD: amount.USD(), SpentUSD: spent.USD(), By: "user"})
 }
 
-// chainTotal is what the calls since someone last set things going cost.
-type chainTotal struct {
-	cost  Pico
-	calls int
-}
-
-// chainTotals finds each finished chain's total, by the index of its last call. The
-// caller holds mu.
-func (conv *conversation) chainTotals() map[int]chainTotal {
-	out := map[int]chainTotal{}
-	for i, start := range conv.chainStarts {
-		end := len(conv.items)
-		if i+1 < len(conv.chainStarts) {
-			end = conv.chainStarts[i+1]
-		} else if conv.busy {
-			continue
-		}
-		var total chainTotal
-		last := -1
-		for j := start; j < end; j++ {
-			if it := conv.items[j]; it.role == "" {
-				total.cost += it.cost
-				total.calls++
-				last = j
-			}
-		}
-		if last >= 0 && total.cost > 0 {
-			out[last] = total
-		}
-	}
-	return out
-}
-
 // correctCost replaces what a call was counted as with what it turned out to cost.
 func (conv *conversation) correctCost(it *item, cost Pico) {
 	diff := cost - it.cost

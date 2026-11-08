@@ -117,8 +117,6 @@ type conversation struct {
 	// freshAllowance says no call has used it yet. That call goes whatever it's expected
 	// to cost, because someone just asked for it.
 	freshAllowance bool
-	// chainStarts is how many items there were when each allowance started.
-	chainStarts []int
 
 	paused bool // don't call the model until a message or Continue
 	notes  []*noteItem
@@ -565,11 +563,6 @@ func (conv *conversation) fork(ev *store.Event) *conversation {
 		out.items = append(out.items, &kept)
 	}
 	out.spent, out.spentByPeriod = 0, nil
-	for _, start := range conv.chainStarts {
-		if start < ev.ForkItems {
-			out.chainStarts = append(out.chainStarts, start)
-		}
-	}
 	for _, entry := range conv.scratchHistory {
 		if entry.items <= ev.ForkItems {
 			out.scratchHistory = append(out.scratchHistory, entry)

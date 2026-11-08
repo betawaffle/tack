@@ -74,10 +74,6 @@ type Item struct {
 
 	// Replies that made tool calls.
 	ToolCalls []ToolCallView `json:"tool_calls,omitzero"`
-
-	// The last call since someone set things going: what those calls cost in all.
-	ChainPico  Pico `json:"chain_pico,omitzero"`
-	ChainCalls int  `json:"chain_calls,omitzero"`
 }
 
 // ToolCallView is a tool call as the UI shows it. Arguments are the exact text
@@ -334,7 +330,6 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 			lastCall = i
 		}
 	}
-	chains := conv.chainTotals()
 	for i, it := range conv.items {
 		shown := len(out.Items)
 		switch {
@@ -371,7 +366,6 @@ func (c *Core) Conversation(id string) (Conversation, error) {
 		}
 		if len(out.Items) > shown {
 			out.Items[shown].Index = i
-			out.Items[shown].ChainPico, out.Items[shown].ChainCalls = chains[i].cost, chains[i].calls
 		}
 	}
 	return out, nil
