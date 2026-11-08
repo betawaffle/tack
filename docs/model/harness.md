@@ -13,7 +13,6 @@ describes what it does that affects you. See [[sandbox]] for `run_code`, and
   can't change another call in the same reply.
 - A long result may wait for the user to look at it before it's sent, and the user may
   shorten it.
-- Some tools are the user's own: the user writes the result of each call by hand.
 
 ## Your turn
 

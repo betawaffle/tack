@@ -484,7 +484,7 @@ async function reloadPages() {
 
 function drawDocsTree(current) {
   const parts = [];
-  for (const [tree, title] of [["harness", "The harness's"], ["user", "Yours"]]) {
+  for (const [tree, title] of [["harness", "Harness"], ["user", "User"]]) {
     parts.push(el("h2", "side-head", title));
     const paths = docsState.pages.filter((p) => p.tree === tree).map((p) => p.path);
     if (!paths.length) parts.push(el("p", "hint tree-empty", tree === "user" ? "None yet." : "None."));
@@ -523,7 +523,7 @@ async function showDoc() {
   const page = await getJSON(`/api/docs/page?tree=${encodeURIComponent(tree)}&path=${encodeURIComponent(path)}`);
   docsState.page = page;
   if (page.revision !== state.revision) showError("tack has been deployed since this page loaded. Reload it to see what's running now.");
-  $("view-title").textContent = `${tree === "harness" ? "The harness's" : "Yours"}: ${path}`;
+  $("view-title").textContent = `${tree === "harness" ? "Harness" : "User"}: ${path}`;
   for (const b of document.querySelectorAll("[data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === docsState.mode));
   const actions = [];
   const source = sourcePath(page);
@@ -560,7 +560,7 @@ function editPage(page) {
   closeForm();
   state.file = null;
   $("modes").hidden = true;
-  $("view-title").textContent = page.path ? `Editing yours: ${page.path}` : "A new page of yours";
+  $("view-title").textContent = page.path ? `Editing user: ${page.path}` : "A new user page";
   const name = el("input", "page-path");
   name.type = "text";
   name.value = page.path || "new-page.md";
