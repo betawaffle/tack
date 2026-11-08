@@ -60,6 +60,12 @@ let page;
   ok((await section("base").locator(".paragraph-text").count()) === 4, "split into paragraphs");
   ok((await toolNames()).join() === "run_code,note,scratch", "and so are the tools");
   ok((await p.locator(".tool-editor[data-tool=run_code] .tool-param-head").first().innerText()).includes('one of "python", required'), "a tool shows what it takes, not just its descriptions");
+  await p.fill("input[data-enum-values='run_code.language']", "python, rust");
+  ok((await p.locator(".tool-editor[data-tool=run_code] .tool-param-head").first().innerText()).includes('one of "python", "rust"'), "the values a string can take can be changed");
+  await p.locator("input[data-enum-on='run_code.language']").uncheck();
+  ok(!(await p.locator(".tool-editor[data-tool=run_code] .tool-param-head").first().innerText()).includes("one of"), "or left open");
+  await p.locator("input[data-enum-on='run_code.language']").check();
+  await p.fill("input[data-enum-values='run_code.language']", "python");
 
   // Moving, removing, editing and adding.
   await section("tools").locator("button[title='Move up']").click();
@@ -95,6 +101,8 @@ let page;
   await reset();
   await send("short one");
   await replied();
+  const firstSpend = await p.locator("#spend").innerText();
+  ok(/Next call at least \S+¢, with [\d,]+ tokens so far\. Up to \S+ before tack asks you again/.test(firstSpend), "the composer says the least the next call could cost: " + firstSpend);
   let b = await bodies();
   ok(b[0].messages[0].content === preview, "and that's what's sent");
   ok(b[0].tools.map((t) => t.function.name).join() === "run_code,note,scratch", "with the tools");
@@ -305,6 +313,8 @@ let page;
   const doneBefore = await p.locator(".prose", { hasText: "Done with tools." }).count();
   await p.click("#decide");
   await p.waitForSelector("#controls button:has-text('Stop the tool')", { timeout: 5000 });
+  // Long enough for it to have printed something to keep.
+  await p.waitForTimeout(1500);
   const stoppedAt = Date.now();
   await p.click("#controls button:has-text('Stop the tool')");
   await p.waitForFunction((n) => [...document.querySelectorAll(".prose")].filter((x) => x.innerText.includes("Done with tools.")).length > n, doneBefore, { timeout: 15000 });
@@ -442,7 +452,7 @@ let page;
 
   // Spending, against what tack really reports.
   const spend = await p.locator("#spend").innerText();
-  ok(/Next call at least \S+¢, with [\d,]+ tokens so far\. Up to \S+ before tack asks you again/.test(spend), "the composer says the least the next call could cost: " + spend);
+  ok((await p.locator("#spend").innerText()).startsWith("No estimate for the next call."), "with a model tack can't count tokens for, there's no estimate");
 
   // Changing the budget from there. A settings box can't drift from it.
   await p.click("#spend-change");
@@ -662,6 +672,20 @@ let page;
   await p.waitForSelector(".prose:has-text('Done with tools.')", { timeout: 15000 });
   await idle();
   ok((await p.locator(".tool .tag", { hasText: "Ran without asking" }).count()) === 1, "code ran without asking, and says so");
+
+  // A language tack doesn't run comes to you, even so, with an answer ready.
+  await reset();
+  await send("tools rustcode");
+  await card();
+  ok(await p.locator(".tool .tag", { hasText: "tack can't run this" }).isVisible(), "a language tack doesn't run comes to you");
+  const ready = await p.inputValue("textarea[data-result]");
+  ok(ready.includes("doesn't run rust yet"), "with tack's answer ready: " + ready);
+  ok((await p.locator("#decide").innerText()) === "Answer", "and answering it runs nothing");
+  await p.click("#decide");
+  await p.waitForFunction(() => [...document.querySelectorAll(".prose")].filter((x) => x.innerText.includes("Done with tools.")).length >= 2, null, { timeout: 15000 });
+  await idle();
+  b = await bodies();
+  ok(b.at(-1).messages.at(-1).role === "tool" && b.at(-1).messages.at(-1).content === ready, "and the model gets exactly that");
 
   // Code can read the request that led to its call.
   await reset();

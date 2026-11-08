@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/betawaffle/tack/internal/cgroup"
 	"github.com/betawaffle/tack/internal/core"
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/version"
 )
 
 // python is the interpreter for run_code. It's an absolute path, so it can't depend on
@@ -267,19 +269,103 @@ func mapKeys(m map[string]string) func(func(string) bool) {
 // needs are flags on the command line instead.
 var codeEnv = []string{"PATH=/usr/bin", "HOME=/work", "LANG=C.UTF-8"}
 
+// codeProperties are run_code's parameters. Which languages it lists is up to the person
+// offering it, who can add ones tack doesn't run, or take the list away, to see what a model
+// asks for. Whatever it asks for that tack doesn't have goes to them to answer.
+const codeProperties = `{` +
+	`"language":{"type":"string","enum":["python"],"description":"The language it's written in."},` +
+	`"code":{"type":"string","description":"The code to run."},` +
+	`"version":{"type":"string","description":"Which versions of the language will do, as a constraint like \"3.14\", \">=3.12,<3.15\" or \"^3.12\". Any will do without it."},` +
+	`"packages":{"type":"object","additionalProperties":{"type":"string"},"description":"Packages the code needs beyond the language's standard library, each name with a version constraint, or \"*\" for any version."}` +
+	`}`
+
+// codeRequest is what a call to run_code asks for.
+type codeRequest struct {
+	language, code, version string
+	packages                map[string]string
+}
+
+func codeArguments(call core.Call) (codeRequest, error) {
+	var req codeRequest
+	for name, value := range call.Args {
+		var err error
+		switch name {
+		case "language":
+			err = json.Unmarshal(value, &req.language)
+		case "code":
+			err = json.Unmarshal(value, &req.code)
+		case "version":
+			err = json.Unmarshal(value, &req.version)
+		case "packages":
+			err = json.Unmarshal(value, &req.packages)
+		default:
+			return req, fmt.Errorf("unexpected argument %q", name)
+		}
+		if err != nil {
+			return req, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	if _, ok := call.Args["language"]; !ok {
+		return req, errors.New("there's no language")
+	}
+	if _, ok := call.Args["code"]; !ok {
+		return req, errors.New("there's no code")
+	}
+	return req, nil
+}
+
+// inspectCode checks a call, and says when it asks for something tack doesn't have, which a
+// person then answers.
 func inspectCode(call core.Call) ([]string, error) {
-	args, err := arguments(call, "language", "code")
+	req, err := codeArguments(call)
 	if err != nil {
 		return nil, err
 	}
-	if args["language"] != "python" {
-		return nil, errors.New("the only language is python")
-	}
-	if strings.TrimSpace(args["code"]) == "" {
+	if strings.TrimSpace(req.code) == "" {
 		return nil, errors.New("the code is empty")
 	}
-	if strings.ContainsRune(args["code"], 0) {
+	if strings.ContainsRune(req.code, 0) {
 		return nil, errors.New("the code has a NUL in it")
+	}
+	constraint, err := version.ParseConstraint(req.version)
+	if err != nil {
+		return nil, fmt.Errorf("version: %w", err)
+	}
+	names := slices.Sorted(maps.Keys(req.packages))
+	for _, name := range names {
+		if name == "" {
+			return nil, errors.New("a package has no name")
+		}
+		if _, err := version.ParseConstraint(req.packages[name]); err != nil {
+			return nil, fmt.Errorf("packages: %s: %w", name, err)
+		}
+	}
+	if req.language != "python" {
+		return nil, core.Unsupported{Answer: fmt.Sprintf("This didn't run, because run_code doesn't run %s yet. It runs python.", req.language)}
+	}
+	if req.version != "" {
+		have, err := PythonVersion(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		v, err := version.Parse(have)
+		if err != nil {
+			return nil, err
+		}
+		if !constraint.Allows(v) {
+			return nil, core.Unsupported{Answer: fmt.Sprintf("This didn't run, because there's no Python matching %q. There's only Python %s.", req.version, have)}
+		}
+	}
+	if len(names) > 0 {
+		var asked []string
+		for _, name := range names {
+			if c := req.packages[name]; c != "" && c != "*" {
+				asked = append(asked, fmt.Sprintf("%s %s", name, c))
+			} else {
+				asked = append(asked, name)
+			}
+		}
+		return nil, core.Unsupported{Answer: fmt.Sprintf("This didn't run, because these packages aren't available: %s. There's only Python's standard library.", strings.Join(asked, ", "))}
 	}
 	for _, needed := range []string{bwrap, choom, python} {
 		if _, err := os.Stat(needed); err != nil {
@@ -374,7 +460,7 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	if _, err := inspectCode(call); err != nil {
 		return nil, err
 	}
-	args, err := arguments(call, "language", "code")
+	req, err := codeArguments(call)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +505,7 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 			f.Close()
 		}
 	}()
-	for _, data := range [][]byte{filter, notes, scratch, []byte(args["code"]), call.Workspace} {
+	for _, data := range [][]byte{filter, notes, scratch, []byte(req.code), call.Workspace} {
 		in, err := feed(data)
 		if err != nil {
 			return nil, err

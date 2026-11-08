@@ -129,8 +129,10 @@ lines yours up with tack's by name, and shows each one as the same, different (p
 paragraph), or missing from yours, with a button to add it.
 
 Below the sections are the tools, in the order they're offered, each with a box to turn it off.
-A built-in tool shows what each parameter takes, and only its descriptions can be edited: the
-rest is what its code relies on. **Whole definition** shows it exactly.
+A built-in tool shows what each parameter takes, and only its descriptions, and which values
+its text parameters list, can be edited: the rest is what its code relies on. **Only these**
+lists the values a parameter can take, or, unticked, leaves it open, and tack checks whatever
+comes anyway. **Whole definition** shows it exactly.
 
 **Save as default** writes the sections and tools, including what's turned off, to the `prompt`
 file, and **Back to the default** loads it again. Without the file, new conversations start
@@ -169,7 +171,13 @@ tack's own tools are `run_code`, `note` and `scratch`. Older conversations may o
 and command tools tack used to have, and a call to one of those fails by itself.
 
 `run_code` runs Python, under [bubblewrap](https://github.com/containers/bubblewrap), which is
-required. Its sandbox
+required. A call names its `language`, and can ask for a `version` of it and for `packages`,
+each with a version constraint in either the npm style (`^3.12`, `~3.13`, `3.14.x`,
+`>=3.10 <3.13`, `3.11 || 3.13`) or Python's (`==3.12.*`, `>=3.10,<3.13`, `~=3.12`). Its
+`language` lists only `python`, but you can add others, or take the list away, to see what a
+model reaches for. Anything tack can't run, like another language, a version that isn't there,
+or any package, comes to you whatever the settings, as a call you answer like a custom tool's,
+with an answer saying why already written. Its sandbox
 has only the interpreter, the standard library and the libraries they load, plus time zones, all
 read-only. It has no `/proc`, no network, no other programs and nothing installed on the machine. A
 syscall filter allows only what ordinary Python needs (x86-64 only). When tack has a delegated cgroup,

@@ -40,7 +40,7 @@ func All(opts Options) []core.Tool {
 	r := &reader{protected: opts.Protected, cgroups: opts.Cgroups, docs: opts.Docs, variables: opts.Variables}
 	return []core.Tool{{
 		Name:          "run_code",
-		Definition:    definition("run_code", codeDescription, `{"language":{"type":"string","enum":["python"],"description":"The language it's written in."},"code":{"type":"string","description":"The code to run."}}`, `["language","code"]`),
+		Definition:    definition("run_code", codeDescription, codeProperties, `["language","code"]`),
 		AutoSendBytes: codeAutoSendBytes,
 		AutoRun:       func(settings store.Settings) bool { return settings.AutoRunCode },
 		Inspect:       inspectCode,

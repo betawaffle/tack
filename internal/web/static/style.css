@@ -542,3 +542,7 @@ a.mini { display: inline-block; text-decoration: none; }
 .diff-line.is-added .diff-text { background: color-mix(in srgb, var(--good) 14%, transparent); }
 .diff-line.is-removed .diff-text { background: color-mix(in srgb, var(--warn) 14%, transparent); text-decoration: line-through; text-decoration-color: var(--muted); }
 .diff-line.is-same .diff-text { color: var(--muted); }
+.allowed-values { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.allowed-values label { display: flex; align-items: center; gap: 4px; margin: 0; white-space: nowrap; }
+.allowed-values-list { flex: 1; min-width: 0; padding: 1px 6px; background: var(--bg); color: inherit; border: 1px solid var(--line); border-radius: 5px; font: 12px var(--mono); }
+.allowed-values-list:disabled { opacity: .5; }

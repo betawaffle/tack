@@ -776,6 +776,7 @@ function renderToolCall(call, decision) {
   head.append(el("span", "tag tool-state", STATE_LABELS[call.state] || call.state));
   for (const flag of call.flags || []) head.append(el("span", "tag unused tool-flag", flag));
   if (call.custom) head.append(el("span", "tag", "custom"));
+  if (call.unsupported) head.append(el("span", "tag unused", "tack can't run this"));
   if (call.ran_automatically) head.append(el("span", "tag", "Ran without asking"));
   head.append(el("span", "tool-preview", callPreview(call)), el("span", "spacer"), copyButton("Copy raw", () => call.arguments));
   node.append(head);
@@ -814,16 +815,21 @@ function renderToolCall(call, decision) {
     // With one call, the buttons say it all. With several, they start out allowed.
     box.checked = true;
     label.hidden = decision.calls.length === 1;
-    label.append(box, el("span", "", call.custom ? "Answer this call" : DECISION_TEXT[decision.kind].allow));
+    label.append(box, el("span", "", call.by_hand ? "Answer this call" : DECISION_TEXT[decision.kind].allow));
     node.append(label);
-    if (call.custom) {
-      // Nothing runs for a custom tool. What's written here is exactly what the model gets.
+    if (call.by_hand) {
+      // Nothing runs for a custom tool, or one tack can't run. What's written here is exactly
+      // what the model gets, and for one tack can't run, it starts as tack's explanation.
       const result = el("textarea", "custom-result");
       result.rows = 3;
       result.spellcheck = false;
       result.dataset.result = call.id;
       result.placeholder = "The result the model gets";
       result.setAttribute("aria-label", `Result of ${call.name}`);
+      if (call.unsupported) {
+        result.value = call.unsupported;
+        node.append(el("div", "hint", "tack can't run this, so it's yours to answer. The result starts as tack's explanation."));
+      }
       node.append(el("div", "hint", "Result"), result);
     }
   }
@@ -914,7 +920,7 @@ function decisionCard(conv) {
   const card = el("div", "decision-card");
   const single = decision.calls.length === 1;
   const row = el("div", "row decision-row");
-  const answersOnly = decision.kind === "tool_calls" && conv.items.flatMap((item) => item.tool_calls || []).filter((c) => decision.calls.includes(c.id)).every((c) => c.custom);
+  const answersOnly = decision.kind === "tool_calls" && conv.items.flatMap((item) => item.tool_calls || []).filter((c) => decision.calls.includes(c.id)).every((c) => c.by_hand);
   row.append(el("strong", "", answersOnly ? (single ? "Answer this call?" : "Answer these calls?") : single ? text.single : text.title));
   const label = el("details", "denial");
   label.append(el("summary", "", "What the model's told about anything denied"));
@@ -934,7 +940,7 @@ function decisionCard(conv) {
   const go = button("", "mini spends", () => answer(ticked()));
   go.id = "decide";
   // Answering a custom tool's call runs nothing, so the button says so when that's all it does.
-  const custom = new Set(conv.items.flatMap((item) => item.tool_calls || []).filter((c) => c.custom).map((c) => c.id));
+  const custom = new Set(conv.items.flatMap((item) => item.tool_calls || []).filter((c) => c.by_hand).map((c) => c.id));
   const relabel = () => {
     const allowed = ticked().length;
     const denied = decision.calls.length - allowed;

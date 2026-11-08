@@ -18,12 +18,16 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-// withoutDescriptions is what of a built-in tool's definition can't be changed.
+// withoutDescriptions is what of a built-in tool's definition can't be changed: everything
+// but its descriptions and which values its string parameters list.
 function withoutDescriptions(definition) {
   const copy = structuredClone(definition);
   delete copy.function?.description;
   for (const property of Object.values(copy.function?.parameters?.properties ?? {})) {
-    if (property && typeof property === "object") delete property.description;
+    if (property && typeof property === "object") {
+      delete property.description;
+      if (property.type === "string") delete property.enum;
+    }
   }
   return canonical(copy);
 }
@@ -59,7 +63,7 @@ function toolList(saved, notes) {
     if (tool.definition && withoutDescriptions(tool.definition) === withoutDescriptions(b.definition)) {
       entry.definition = structuredClone(tool.definition);
     } else if (tool.definition) {
-      notes.push(`tack's definition of ${tool.name} changed since it was saved, so its descriptions are tack's again.`);
+      notes.push(`tack's definition of ${tool.name} changed since it was saved, so its descriptions and values are tack's again.`);
     }
     out.push(entry);
   }
@@ -128,6 +132,40 @@ function propertySummary(name, property, required) {
   bits.push(required ? "required" : "optional");
   if (Object.keys(rest).length) bits.push(JSON.stringify(rest));
   return bits.join(", ");
+}
+
+// allowedValues edits which values a string parameter lists, or takes the list away. tack
+// checks what it gets whatever the list says, so this is only what the model's told.
+function allowedValues(tool, name, property, onChange) {
+  const row = el("div", "allowed-values");
+  const limit = el("input");
+  limit.type = "checkbox";
+  limit.checked = Array.isArray(property.enum);
+  limit.dataset.enumOn = `${tool.name}.${name}`;
+  limit.setAttribute("aria-label", `List the values ${name} can take`);
+  const values = el("input", "allowed-values-list");
+  values.type = "text";
+  values.spellcheck = false;
+  values.value = (property.enum ?? []).join(", ");
+  values.placeholder = "values, separated by commas";
+  values.dataset.enumValues = `${tool.name}.${name}`;
+  values.setAttribute("aria-label", `Values ${name} can take`);
+  values.disabled = !limit.checked;
+  const apply = () => {
+    if (limit.checked) {
+      property.enum = values.value.split(",").map((v) => v.trim()).filter(Boolean);
+    } else {
+      delete property.enum;
+    }
+    values.disabled = !limit.checked;
+    onChange();
+  };
+  limit.addEventListener("change", apply);
+  values.addEventListener("input", apply);
+  const text = el("label", "hint");
+  text.append(limit, " Only these:");
+  row.append(text, values);
+  return row;
 }
 
 // toolsEditor edits a list of tools in place. onChange runs after every change.
@@ -230,6 +268,12 @@ function toolEditor(tools, i, redraw, onChange) {
       area.dataset.parameter = `${tool.name}.${name}`;
       area.placeholder = "No description";
       row.append(label, area);
+      if (property.type === "string") {
+        row.append(allowedValues(tool, name, property, () => {
+          label.querySelector(".hint").textContent = propertySummary(name, property, required.includes(name));
+          onChange();
+        }));
+      }
       node.append(row);
     }
     const rest = { ...parameters };

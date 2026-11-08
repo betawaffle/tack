@@ -68,6 +68,9 @@ type ToolCall struct {
 	Invalid   string `json:"invalid,omitzero"`
 	// Flags are what the approval card pointed out, as judged when the call arrived.
 	Flags []string `json:"flags,omitzero"`
+	// Unsupported says tack can't run this call, for this reason, so a person answers it
+	// instead, starting from this as the result.
+	Unsupported string `json:"unsupported,omitzero"`
 }
 
 // Choice is what was decided about one tool call. Parts are the result the model

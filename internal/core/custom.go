@@ -56,7 +56,7 @@ func (c *Core) offered(settings store.Settings, offers []Offer) (store.Ref, []st
 		case offer.Definition == nil:
 			definitions = append(definitions, tool.define(settings))
 		case !sameExceptDescriptions(tool.define(settings), offer.Definition):
-			return "", nil, fmt.Errorf("%w: only the descriptions of %s can change", ErrBadTools, offer.Name)
+			return "", nil, fmt.Errorf("%w: only the descriptions and allowed values of %s can change", ErrBadTools, offer.Name)
 		default:
 			definitions = append(definitions, offer.Definition)
 		}
@@ -126,6 +126,20 @@ func (c *Core) ChangeSettingsNow(convID string, change func(*store.Settings)) er
 
 // isCustom says a conversation offers a tool that a person answers. The caller holds mu.
 func (conv *conversation) isCustom(name string) bool { return slices.Contains(conv.custom, name) }
+
+// byHand says a person writes the call's result: it's to a custom tool, or tack can't run it.
+func (conv *conversation) byHand(call *toolCall) bool {
+	return conv.isCustom(call.Name) || call.Unsupported != ""
+}
+
+// Unsupported is what a tool's Inspect returns for a call it understands but can't run, like
+// one asking for a language tack doesn't have yet. Rather than failing, the call goes to a
+// person, whatever the settings, with Answer ready to send as the result.
+type Unsupported struct {
+	Answer string
+}
+
+func (u Unsupported) Error() string { return u.Answer }
 
 func hasKey(m map[string]string, key string) bool {
 	_, ok := m[key]

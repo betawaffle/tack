@@ -356,7 +356,7 @@ func (c *Core) storeDefinitions(settings store.Settings, opts Options) (store.Re
 		definition := tool.define(settings)
 		if edited, ok := opts.Definitions[tool.Name]; ok {
 			if !sameExceptDescriptions(definition, edited) {
-				return "", fmt.Errorf("%w: only the descriptions of %s can change", ErrBadTools, tool.Name)
+				return "", fmt.Errorf("%w: only the descriptions and allowed values of %s can change", ErrBadTools, tool.Name)
 			}
 			definition = edited
 		}
@@ -376,8 +376,9 @@ func (c *Core) putDefinitions(definitions []jsontext.Value) (store.Ref, error) {
 	return c.cfg.Store.Put(data)
 }
 
-// sameExceptDescriptions says two definitions differ at most in the tool's description
-// and its parameters' descriptions. The rest is what the tool's code relies on.
+// sameExceptDescriptions says two definitions differ at most in the tool's description,
+// its parameters' descriptions, and which values its string parameters list as allowed.
+// The rest is what the tool's code relies on.
 func sameExceptDescriptions(a, b jsontext.Value) bool {
 	strip := func(data jsontext.Value) (map[string]any, bool) {
 		var tool map[string]any
@@ -391,6 +392,11 @@ func sameExceptDescriptions(a, b jsontext.Value) bool {
 		for _, property := range properties {
 			if p, ok := property.(map[string]any); ok {
 				delete(p, "description")
+				// Which values a string can take is the person's to change: tack checks
+				// what it gets, whatever the definition said.
+				if p["type"] == "string" {
+					delete(p, "enum")
+				}
 			}
 		}
 		return tool, true
@@ -533,7 +539,11 @@ func (c *Core) storeCalls(definitions []byte, custom []string, settings store.Se
 			// failRemovedTools answers it.
 		} else if args, err := parseArguments([]byte(call.Arguments)); err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
-		} else if flags, err := inspect(tool, Call{Args: args, Settings: settings}); err != nil {
+		} else if flags, err := inspect(tool, Call{Args: args, Settings: settings}); errors.As(err, new(Unsupported)) {
+			var unsupported Unsupported
+			errors.As(err, &unsupported)
+			stored.Unsupported = unsupported.Answer
+		} else if err != nil {
 			stored.Invalid = "the arguments can't be used: " + err.Error()
 		} else {
 			stored.Flags = flags
@@ -719,7 +729,7 @@ func (c *Core) approveAutomatic(conv *conversation) error {
 		settings := conv.effectiveSettings(c.settings)
 		for _, call := range conv.openCalls() {
 			tool := c.findTool(call.Name)
-			if tool == nil || call.Invalid != "" || call.allowed {
+			if tool == nil || call.Invalid != "" || call.Unsupported != "" || call.allowed {
 				continue
 			}
 			if tool.NoApproval || (tool.AutoRun != nil && tool.AutoRun(settings)) {
@@ -1030,7 +1040,7 @@ func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update,
 			}
 		}
 		for _, id := range allow {
-			if call := conv.tool(id); conv.isCustom(call.Name) {
+			if call := conv.tool(id); conv.byHand(call) {
 				if _, ok := d.Results[id]; !ok {
 					return ErrBadChoice
 				}
@@ -1038,7 +1048,7 @@ func (c *Core) DecideWith(convID, decisionID string, d Decision) (<-chan Update,
 		}
 		for id := range d.Results {
 			call := conv.tool(id)
-			if !slices.Contains(allow, id) || call == nil || !conv.isCustom(call.Name) || open.kind != store.DecideCalls {
+			if !slices.Contains(allow, id) || call == nil || !conv.byHand(call) || open.kind != store.DecideCalls {
 				return ErrBadChoice
 			}
 		}
@@ -1178,6 +1188,8 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 		Error:        call.failure,
 		Compact:      c.isCompact(call.Name),
 		Custom:       conv.isCustom(call.Name),
+		ByHand:       conv.byHand(call),
+		Unsupported:  call.Unsupported,
 		Channel:      c.channelViews(call),
 		ResultEdited: call.edited,
 		// Only the newest call with an ID can be the one a decision means.
@@ -1194,7 +1206,7 @@ func (c *Core) toolCallView(conv *conversation, call *toolCall) ToolCallView {
 	if call.resolved() {
 		view.Result = c.text(call.result)
 	}
-	if tool := c.findTool(call.Name); tool != nil && tool.AutoRun != nil {
+	if tool := c.findTool(call.Name); tool != nil && tool.AutoRun != nil && call.Unsupported == "" {
 		view.RanAutomatically = call.automatic
 		view.CanAutoRun = view.Decidable && conv.decision.kind == store.DecideCalls && conv.pendingSettings == nil
 	}

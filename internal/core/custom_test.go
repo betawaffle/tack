@@ -106,6 +106,11 @@ func TestOffersAreChecked(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// Which values a string can take is the person's to say.
+	listed := strings.Replace(definition, `{"type":"string"}`, `{"type":"string","enum":["a","b"]}`, 1)
+	if _, err := c.NewConversationWith(Options{Offer: []Offer{{Name: "echo", Definition: jsontext.Value(listed)}}}); err != nil {
+		t.Errorf("listed values: %v", err)
+	}
 	// An empty list means no tools at all.
 	id, err := c.NewConversationWith(Options{Tools: true, Offer: []Offer{}})
 	if err != nil {
@@ -240,5 +245,40 @@ func TestToolsGetTheRequestAndReplyThatMadeTheCall(t *testing.T) {
 	}
 	if got.Reply.Role != "assistant" || got.Reply.Reasoning != "Thinking." || len(got.Reply.ToolCalls) != 1 || got.Reply.ToolCalls[0].Function.Arguments != callA.args {
 		t.Errorf("reply = %+v", got.Reply)
+	}
+}
+
+func TestACallTackCantRunGoesToAPersonEvenWhenItWouldRunByItself(t *testing.T) {
+	f := newToolFake(t)
+	f.tools[0].AutoRun = func(store.Settings) bool { return true }
+	f.tools[0].Inspect = func(call Call) ([]string, error) {
+		if string(call.Args["text"]) == `"b"` {
+			return nil, Unsupported{Answer: "echo can't say b yet."}
+		}
+		return nil, nil
+	}
+	c := f.open()
+	id, _ := c.NewConversation("x")
+	f.replyWith(toolStream(callA, callB))
+	updates, err := c.Send(id, "go")
+	mustFinish(t, updates, err)
+	f.replyWith(replyStream)
+	// a ran by itself, and b waits for a person, who starts from tack's answer.
+	got := f.calls(c, id)
+	if len(f.runs) != 1 || f.runs[0] != "a" || got[1].Unsupported != "echo can't say b yet." || !got[1].ByHand || got[1].Custom || got[1].Invalid != "" || !got[1].Decidable {
+		t.Fatalf("runs = %v, calls = %+v", f.runs, got)
+	}
+	d := f.decision(c, id, store.DecideCalls)
+	if _, err := c.DecideWith(id, d.ID, Decision{Allow: []string{"call-b"}}); !errors.Is(err, ErrBadChoice) {
+		t.Errorf("no result: %v", err)
+	}
+	updates, err = c.DecideWith(id, d.ID, Decision{Allow: []string{"call-b"}, Results: map[string]string{"call-b": "Not yet."}})
+	mustFinish(t, updates, err)
+	if len(f.runs) != 1 {
+		t.Errorf("runs = %v", f.runs)
+	}
+	c = f.open()
+	if got := f.calls(c, id); got[1].Result != "Not yet." || got[1].Unsupported == "" {
+		t.Errorf("after a restart: %+v", got[1])
 	}
 }

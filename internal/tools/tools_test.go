@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -594,5 +595,53 @@ for tool in ["scratch", "other"]:
 	call.Args["code"] = []byte(`"import os\ntry:\n    os.write(10, b'x\\n')\n    print(os.read(10, 10))\nexcept OSError as e:\n    print('closed', e.errno)"`)
 	if out, err := f.tools["run_code"].Run(context.Background(), call); err != nil || !strings.Contains(string(out), "closed") && string(out) != "b''\n" {
 		t.Errorf("unserved = %q, %v", out, err)
+	}
+}
+
+func TestWhatCodeAsksForThatIsntThereGoesToAPerson(t *testing.T) {
+	f := newFixture(t)
+	have, err := PythonVersion(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspect := func(args map[string]any) error {
+		t.Helper()
+		raw := map[string]jsontext.Value{}
+		for k, v := range args {
+			data, _ := json.Marshal(v)
+			raw[k] = data
+		}
+		_, err := f.tools["run_code"].Inspect(core.Call{Args: raw})
+		return err
+	}
+	unsupported := func(err error) string {
+		var u core.Unsupported
+		if !errors.As(err, &u) {
+			return ""
+		}
+		return u.Answer
+	}
+	if err := inspect(map[string]any{"language": "python", "code": "1", "version": have, "packages": map[string]string{}}); err != nil {
+		t.Errorf("what's there: %v", err)
+	}
+	if got := unsupported(inspect(map[string]any{"language": "rust", "code": "fn main() {}"})); got != "This didn't run, because run_code doesn't run rust yet. It runs python." {
+		t.Errorf("rust = %q", got)
+	}
+	if got := unsupported(inspect(map[string]any{"language": "python", "code": "1", "version": "<3"})); !strings.Contains(got, `no Python matching "<3". There's only Python `+have) {
+		t.Errorf("old python = %q", got)
+	}
+	if got := unsupported(inspect(map[string]any{"language": "python", "code": "1", "packages": map[string]string{"numpy": ">=2", "attrs": "*"}})); got != "This didn't run, because these packages aren't available: attrs, numpy >=2. There's only Python's standard library." {
+		t.Errorf("packages = %q", got)
+	}
+	// A constraint that can't be read is a mistake, not something missing.
+	for _, args := range []map[string]any{
+		{"language": "python", "code": "1", "version": "newest"},
+		{"language": "python", "code": "1", "packages": map[string]string{"numpy": "lots"}},
+		{"language": "python", "code": "1", "packages": []string{"numpy"}},
+		{"language": "python"},
+	} {
+		if err := inspect(args); err == nil || unsupported(err) != "" {
+			t.Errorf("%v = %v", args, err)
+		}
 	}
 }
