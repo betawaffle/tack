@@ -1,8 +1,10 @@
 package core
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
+	"log"
 	"slices"
 	"time"
 
@@ -150,4 +152,68 @@ func (conv *conversation) chainTotals() map[int]chainTotal {
 		}
 	}
 	return out
+}
+
+// correctCost replaces what a call was counted as with what it turned out to cost.
+func (conv *conversation) correctCost(it *item, cost Pico) {
+	diff := cost - it.cost
+	conv.spent += diff
+	if conv.spentByPeriod == nil {
+		conv.spentByPeriod = map[string]Pico{}
+	}
+	conv.spentByPeriod[billingPeriod(it.finished.Time)] += diff
+	it.cost, it.costFound = cost, true
+}
+
+// costLookupDelays are how long after a call tack asks what it cost, if it didn't say. Each
+// is from the call's end, and it stops at the first answer.
+var costLookupDelays = []time.Duration{3 * time.Second, 15 * time.Second, time.Minute, 5 * time.Minute, 30 * time.Minute}
+
+// findCostLater asks what a call cost, in the background, if it didn't say but might have
+// been charged: one that was cut off or cancelled, with a generation ID to ask about.
+func (c *Core) findCostLater(convID string, finished *store.Event) {
+	if c.cfg.Generation == nil || finished.GenerationID == "" {
+		return
+	}
+	if _, ok := usageCost(finished); ok || !(finished.Status == 200 || finished.Cancelled) {
+		return
+	}
+	go func() {
+		start := finished.Time
+		for _, delay := range costLookupDelays {
+			time.Sleep(time.Until(start.Add(delay)))
+			cost, ok, raw, err := c.cfg.Generation(context.Background(), finished.GenerationID)
+			if err != nil {
+				log.Printf("asking what call %s cost: %v", finished.Call, err)
+				continue
+			}
+			if !ok {
+				continue
+			}
+			ref, err := c.cfg.Store.Put(raw)
+			if err == nil {
+				err = c.record(&store.Event{Type: store.CallCostFound, Conversation: convID, Call: finished.Call, CostUSD: cost, Response: ref})
+			}
+			if err != nil {
+				log.Printf("recording what call %s cost: %v", finished.Call, err)
+			}
+			return
+		}
+		log.Printf("OpenRouter never said what call %s cost, so it stays counted as a guess", finished.Call)
+	}()
+}
+
+// findMissingCosts asks again about calls that ended without a cost in the last day, since a
+// restart stops anything that was still asking. The caller holds mu.
+func (c *Core) findMissingCosts() []func() {
+	var later []func()
+	for _, conv := range c.convs {
+		for _, it := range conv.items {
+			if it.finished != nil && !it.costReported && !it.costFound && time.Since(it.finished.Time) < 24*time.Hour {
+				id, ev := conv.id, it.finished
+				later = append(later, func() { c.findCostLater(id, ev) })
+			}
+		}
+	}
+	return later
 }

@@ -44,6 +44,8 @@ type fake struct {
 	settings store.Settings
 	model    string
 	prices   []openrouter.Endpoint
+	// generation answers what a call cost, if it's set.
+	generation func(id string) (float64, bool)
 }
 
 func newFake(t *testing.T) *fake {
@@ -83,6 +85,13 @@ func (f *fake) open() *Core {
 		Store:  st,
 		Client: openrouter.NewClient(f.server.URL, secret.NewKey(testKey)),
 		Model:  cmp.Or(f.model, "test/model"),
+		Generation: func(_ context.Context, id string) (float64, bool, []byte, error) {
+			if f.generation == nil {
+				return 0, false, nil, errors.New("no generations")
+			}
+			cost, ok := f.generation(id)
+			return cost, ok, []byte(`{"data":{}}`), nil
+		},
 		Prices: func(context.Context, string) ([]openrouter.Endpoint, error) {
 			if f.prices == nil {
 				return nil, errors.New("no prices")

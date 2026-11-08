@@ -12,6 +12,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -478,4 +479,49 @@ func (c *Client) Endpoints(ctx context.Context, model string) ([]Endpoint, error
 		out = append(out, ep)
 	}
 	return out, nil
+}
+
+// Generation asks OpenRouter what a call cost, by its generation ID. It's for calls whose
+// stream ended before the usage came, like a cancelled one. ok is false while OpenRouter
+// doesn't know yet, which can take a little while after a call. raw is its whole answer.
+func (c *Client) Generation(ctx context.Context, id string) (cost float64, ok bool, raw []byte, err error) {
+	base, found := strings.CutSuffix(c.URL, "/chat/completions")
+	if !found {
+		return 0, false, nil, fmt.Errorf("can't find the generation API next to %s", c.URL)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/generation?id="+url.QueryEscape(id), nil)
+	if err != nil {
+		return 0, false, nil, err
+	}
+	req.Header.Set("User-Agent", "tack")
+	c.Key.Authorize(req)
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, false, nil, err
+	}
+	defer res.Body.Close()
+	raw, err = io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return 0, false, nil, err
+	}
+	if res.StatusCode == http.StatusNotFound {
+		return 0, false, raw, nil
+	}
+	if res.StatusCode != http.StatusOK {
+		return 0, false, raw, fmt.Errorf("asking what %s cost: %s", id, res.Status)
+	}
+	var body struct {
+		Data struct {
+			TotalCost *float64 `json:"total_cost"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return 0, false, raw, err
+	}
+	if body.Data.TotalCost == nil {
+		return 0, false, raw, nil
+	}
+	return *body.Data.TotalCost, true, raw, nil
 }

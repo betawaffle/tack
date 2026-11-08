@@ -42,6 +42,9 @@ type Config struct {
 	Model   string
 	Routing openrouter.Routing
 	Tools   []Tool // offered to new conversations
+	// Generation asks what a call cost by its generation ID, for one that didn't say. Without
+	// it, such a call keeps the guess it was counted at.
+	Generation func(ctx context.Context, id string) (cost float64, ok bool, raw []byte, err error)
 	// Prices lists what each host charges for a model. Without it, there's no estimate.
 	Prices func(ctx context.Context, model string) ([]openrouter.Endpoint, error)
 	// Settings are what new conversations start with. Model and Routing fill in for
@@ -165,6 +168,8 @@ type item struct {
 	requestBytes int
 	request      store.Ref // the exact body sent
 	cost         Pico      // what it counted as
+	costReported bool      // the host said what it cost, so there's nothing to find out
+	costFound    bool      // or it was asked afterwards
 	finished     *store.Event
 	calls        []*toolCall // what a usable reply asked for
 }
@@ -217,6 +222,12 @@ func New(cfg Config) (*Core, error) {
 // so that reading the record writes nothing, and a build that can't read it leaves
 // no trace.
 func (c *Core) Recover() error {
+	c.mu.Lock()
+	missing := c.findMissingCosts()
+	c.mu.Unlock()
+	for _, find := range missing {
+		find()
+	}
 	for _, id := range c.order {
 		if _, err := c.ensureDecision(c.convs[id]); err != nil {
 			return err
@@ -296,11 +307,18 @@ func (c *Core) apply(ev *store.Event) {
 			host = routing.Order[0]
 		}
 		conv.items = append(conv.items, &item{callID: ev.Call, requestBytes: ev.RequestBytes, request: ev.Request, time: ev.Time, model: ev.Model, host: host, features: ev.Features})
+	case store.CallCostFound:
+		for _, it := range conv.items {
+			if it.callID == ev.Call && it.finished != nil {
+				conv.correctCost(it, picoFromUSD(ev.CostUSD))
+			}
+		}
 	case store.CallFinished:
 		for _, it := range conv.items {
 			if it.callID == ev.Call {
 				it.finished = ev
 				it.cost = conv.addCost(ev)
+				_, it.costReported = usageCost(ev)
 				c.noteProcessed(it.model, ev)
 				c.learn(it, ev)
 				if usable(ev) {
@@ -902,6 +920,7 @@ func (c *Core) call(conv *conversation, send func(Update)) error {
 	if err := c.record(finished); err != nil {
 		return err
 	}
+	c.findCostLater(conv.id, finished)
 	if finished.Error != "" {
 		return errors.New(finished.Error)
 	}

@@ -282,8 +282,11 @@ there's no estimate and only what's been spent stops a call. The line also says 
 is likely to cost at least, which adds the shortest reply ever seen from the model at the
 cheapest output price, and the most it could cost: every input token uncached at the host's
 dearest price, and the longest reply the host allows, at its dearest output price. tack doesn't
-send `max_tokens`, so that's the host's limit, or what's left of its context. A cancelled call doesn't report a
-cost, so it counts as the most expensive recent one.
+send `max_tokens`, so that's the host's limit, or what's left of its context. A cancelled or cut-off call doesn't report a
+cost, so it counts as the most expensive recent one until tack finds out: it asks OpenRouter what
+the call cost, by its generation ID, a few times over the next half hour (and again after a
+restart, for a day), and the answer replaces the guess. A call cancelled before anything came
+back has no generation ID to ask about.
 
 After calls that ran without you, the conversation shows what they cost in all. To help you
 decide how much to allow, the page shows what's been spent this calendar month, in this

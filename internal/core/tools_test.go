@@ -1185,7 +1185,7 @@ func TestAFirstCallIsNeverEstimatedOverBudget(t *testing.T) {
 func TestTheEstimateIsTheLeastACallCouldCost(t *testing.T) {
 	endpoints := []openrouter.Endpoint{
 		{Tag: "a", Pricing: openrouter.Price{Prompt: "0.00000002", Completion: "0.0000004", InputCacheRead: "0.000000004"},
-			Overrides: []openrouter.Price{{Prompt: "0.00000001", Completion: "0.0000008", InputCacheRead: "0.000000006"}},
+			Overrides:     []openrouter.Price{{Prompt: "0.00000001", Completion: "0.0000008", InputCacheRead: "0.000000006"}},
 			ContextLength: 1000, MaxCompletionTokens: 300},
 		{Tag: "b", Pricing: openrouter.Price{Prompt: "0.000000005", Completion: "0.0000001"}, Discount: 0.5, ContextLength: 2000},
 		{Tag: "c", Pricing: openrouter.Price{Prompt: "nonsense", Completion: "1"}},
@@ -2247,4 +2247,50 @@ func readKept(data []byte) string {
 	}
 	text, _ := io.ReadAll(r)
 	return string(text)
+}
+
+func TestACallThatDidntSayWhatItCostIsAskedAboutAfterwards(t *testing.T) {
+	defer func(d []time.Duration) { costLookupDelays = d }(costLookupDelays)
+	costLookupDelays = []time.Duration{0, 10 * time.Millisecond, 20 * time.Millisecond}
+	f := newFake(t)
+	asked := make(chan string, 10)
+	f.generation = func(id string) (float64, bool) {
+		asked <- id
+		// Not known the first time.
+		return 0.002, len(asked) > 1
+	}
+	f.handler = func(w http.ResponseWriter) { io.WriteString(w, costStream("0.005")) }
+	c := f.open()
+	id, _ := c.NewConversation("")
+	updates, err := c.Send(id, "one")
+	mustFinish(t, updates, err)
+	// This one is cut off, so it says nothing, and counts as the dearest recent call.
+	f.handler = func(w http.ResponseWriter) {
+		io.WriteString(w, `data: {"id":"gen-cut","provider":"Morph","choices":[{"delta":{"content":"Hi"}}]}`+"\n\n")
+	}
+	updates, err = c.Send(id, "two")
+	finish(t, updates)
+	conv, _ := c.Conversation(id)
+	if conv.Budget.Spent != picoFromUSD(0.01) {
+		t.Errorf("guessed = %v", conv.Budget.Spent)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if conv, _ = c.Conversation(id); conv.Budget.Spent == picoFromUSD(0.007) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if conv.Budget.Spent != picoFromUSD(0.007) || <-asked != "gen-cut" {
+		t.Errorf("found = %v", conv.Budget.Spent)
+	}
+	// It's in the record, and a restart doesn't ask again.
+	c = f.open()
+	if conv, _ := c.Conversation(id); conv.Budget.Spent != picoFromUSD(0.007) {
+		t.Errorf("after a restart = %v", conv.Budget.Spent)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(asked) != 1 {
+		t.Errorf("asked %d more times", len(asked))
+	}
 }

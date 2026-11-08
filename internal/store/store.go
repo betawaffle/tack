@@ -142,6 +142,10 @@ const (
 	FeedbackAdded   = "feedback_added"
 	FeedbackRemoved = "feedback_removed"
 	FeedbackRead    = "feedback_read"
+	// CallCostFound is what a call that didn't report its cost, like a cancelled one, turned
+	// out to cost, as CostUSD, asked of OpenRouter afterwards by its generation ID. Response is
+	// OpenRouter's whole answer. It replaces the guess that was counted.
+	CallCostFound = "call_cost_found"
 )
 
 // Feedback is a comment about tack's source, pinned to the revision it was written
@@ -267,7 +271,7 @@ func Known(eventType string) bool {
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged,
-		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse, FeedbackAdded, FeedbackRemoved, FeedbackRead:
+		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse, FeedbackAdded, FeedbackRemoved, FeedbackRead, CallCostFound:
 		return true
 	}
 	return false
@@ -382,6 +386,9 @@ type Event struct {
 
 	// code_request and code_response: which request.
 	Channel string `json:"channel,omitzero"`
+
+	// call_cost_found
+	CostUSD float64 `json:"cost_usd,omitzero"`
 
 	// feedback_*
 	Feedback    *Feedback `json:"feedback,omitzero"`

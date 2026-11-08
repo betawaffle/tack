@@ -94,11 +94,12 @@ func main() {
 	}
 	variables := variables(site)
 	c, err := core.New(core.Config{
-		Store:    st,
-		Client:   client,
-		Prices:   client.Endpoints,
-		Tools:    append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups, Docs: library, Variables: variables, PythonSite: site, PythonFor: pythonFor}), core.NoteTools()...),
-		Settings: cfg.Settings,
+		Store:      st,
+		Client:     client,
+		Prices:     client.Endpoints,
+		Generation: client.Generation,
+		Tools:      append(tools.All(tools.Options{Protected: []string{cfg.Key}, Cgroups: groups, Docs: library, Variables: variables, PythonSite: site, PythonFor: pythonFor}), core.NoteTools()...),
+		Settings:   cfg.Settings,
 	})
 	if err != nil {
 		// Restarting can't help, so this exit code tells systemd not to try.
