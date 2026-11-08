@@ -6,8 +6,6 @@ describes what it does that affects you. See [[sandbox]] for `run_code`, and
 
 ## Tool calls
 
-- A tool call usually waits for the user to approve it. The user can let `run_code` run
-  without asking, and can turn that on and off at any point in the conversation.
 - The result of a denied call says it was denied, and may say why.
 - All the calls in one reply run before any results come back, so one call's result
   can't change another call in the same reply.
