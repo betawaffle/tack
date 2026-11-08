@@ -224,7 +224,7 @@ Notes and scratch can be read from `/conversation`, and so can `context.json`: t
 request that led to the call, under `request`, and the reply that made it, under `reply`, shaped
 like a message in that request.
 
-File descriptor 10 is a socket to tack, so code can call tools: it writes
+Code can `import harness` and call `harness.call(name, **arguments)`, from [`internal/tools/harness.py`](internal/tools/harness.py), which tack puts where Python looks for packages first. Underneath, file descriptor 10 is a socket to tack, so code can call tools: it writes
 `{"tool": name, "arguments": object}` on one line and reads back `{"result": text}` or
 `{"error": text}`. It can call any tool the conversation offers that runs without asking, like
 `note` and `scratch`, and any custom tool, but nothing that would need approval, `run_code`

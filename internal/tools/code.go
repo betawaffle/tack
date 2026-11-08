@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"debug/elf"
+	_ "embed"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -52,7 +53,7 @@ const (
 )
 
 func codeDescription(packages string) string {
-	return fmt.Sprintf("Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to %d MB. /tmp is empty each time. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. The process running your code has file descriptor 10 open, a socket to the harness; there's no /proc or /dev/fd, so use it by number, as socket.socket(fileno=10). Write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to %d KB, and a run can make up to %d calls. It has Python's standard library and %s. Its memory limit is set as it starts, from what the machine has free, between %d and %d GB, and files in /tmp and /dev/shm count against it. /sandbox/limits.json has this run's limits. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own.", codeWorkBytes>>20, core.ChannelLineBytes>>10, core.ChannelCalls, packagesPhrase(packages), codeMemoryMin>>30, codeMemoryMax>>30)
+	return fmt.Sprintf("Run code in a sandbox with no network, no input, no other programs and no access to the user's files. It starts in /work, whose files are kept for the next call in this conversation, up to %d MB. /tmp is empty each time. /conversation/notes.json and /conversation/scratch.json hold your notes and scratch as of the start of the call, and /conversation/context.json holds the request that led to this call, exactly as it was sent, under \"request\", and the reply with this call in it under \"reply\", all for reading. The process running your code has file descriptor 10 open, a socket to the harness; there's no /proc or /dev/fd, so use it by number, as socket.socket(fileno=10). Write {\"tool\": name, \"arguments\": object} on one line to call any tool you've been offered except run_code, and read one line back, {\"result\": text} or {\"error\": text}. The harness module does this for you: harness.call(name, **arguments) returns the result, or raises harness.ToolError. Some tools wait for the user to answer, and that time doesn't count against the time limit. Lines can be up to %d KB, and a run can make up to %d calls. It has Python's standard library and %s. Its memory limit is set as it starts, from what the machine has free, between %d and %d GB, and files in /tmp and /dev/shm count against it. /sandbox/limits.json has this run's limits. The result is its output, and says if the exit code wasn't zero, the output was cut off, or the code was stopped. The user may send long output shortened.\n\nIt is completely safe to experiment with this on your own.", codeWorkBytes>>20, core.ChannelLineBytes>>10, core.ChannelCalls, packagesPhrase(packages), codeMemoryMin>>30, codeMemoryMax>>30)
 }
 
 func packagesPhrase(packages string) string {
@@ -89,7 +90,13 @@ const (
 	fdContext
 	fdChannel // what the model's code talks to tack through
 	fdLimits
+	fdHarness
 )
+
+// harnessModule is the harness module code can import, to call tools over fdChannel.
+//
+//go:embed harness.py
+var harnessModule []byte
 
 // codeStart runs in the sandbox around the model's code, which gets its own process and can't
 // reach these descriptors. -u keeps stdout and stderr in order. The code can still kill this
@@ -149,23 +156,26 @@ var libraryDirs = []string{"/lib64", "/usr/lib64", "/lib/x86_64-linux-gnu", "/us
 // interpreter, its directories, and the libraries those load, and the libraries the packages in
 // site load, if there's a site. Nothing is cached, because a system update can change any of it
 // while tack is running. version is Python's, as major.minor.
-func pythonParts(ctx context.Context, site string) (real, version string, dirs []string, files map[string]string, err error) {
+func pythonParts(ctx context.Context, site string) (real, version string, dirs, sites []string, files map[string]string, err error) {
 	if real, err = filepath.EvalSymlinks(python); err != nil {
-		return "", "", nil, nil, err
+		return "", "", nil, nil, nil, err
 	}
 	// -I and -S leave just the standard library's own directories. It's a fixed program,
 	// run by tack on tack's side, with nothing from a model in it.
-	cmd := exec.CommandContext(ctx, real, "-I", "-S", "-c", `import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}"); print("\n".join(sys.path))`)
+	cmd := exec.CommandContext(ctx, real, "-I", "-S", "-c", `import site, sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}"); print("\t".join(site.getsitepackages())); print("\n".join(sys.path))`)
 	cmd.Dir, cmd.Env = "/", []string{}
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", nil, nil, fmt.Errorf("asking python where its library is: %w", err)
+		return "", "", nil, nil, nil, fmt.Errorf("asking python where its library is: %w", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	version = lines[0]
+	if len(lines) < 2 {
+		return "", "", nil, nil, nil, errors.New("python didn't say where its library is")
+	}
+	version, sites = lines[0], strings.Split(lines[1], "\t")
 	var todo []string
 	todo = append(todo, real)
-	for _, line := range lines[1:] {
+	for _, line := range lines[2:] {
 		if info, err := os.Stat(line); err == nil && info.IsDir() {
 			dirs = append(dirs, line)
 			found, _ := filepath.Glob(filepath.Join(line, "*.so"))
@@ -173,7 +183,7 @@ func pythonParts(ctx context.Context, site string) (real, version string, dirs [
 		}
 	}
 	if len(dirs) == 0 {
-		return "", "", nil, nil, errors.New("python didn't name any library directories")
+		return "", "", nil, nil, nil, errors.New("python didn't name any library directories")
 	}
 	if site != "" {
 		err := filepath.WalkDir(site, func(p string, d fs.DirEntry, err error) error {
@@ -183,7 +193,7 @@ func pythonParts(ctx context.Context, site string) (real, version string, dirs [
 			return err
 		})
 		if err != nil {
-			return "", "", nil, nil, err
+			return "", "", nil, nil, nil, err
 		}
 	}
 	files = map[string]string{}
@@ -204,7 +214,7 @@ func pythonParts(ctx context.Context, site string) (real, version string, dirs [
 		return fmt.Errorf("couldn't find %s", name)
 	}
 	if err := need("libgcc_s.so.1"); err != nil {
-		return "", "", nil, nil, err
+		return "", "", nil, nil, nil, err
 	}
 	seen := map[string]bool{}
 	for len(todo) > 0 {
@@ -219,7 +229,7 @@ func pythonParts(ctx context.Context, site string) (real, version string, dirs [
 			if site != "" && within(path, site) {
 				continue // A package's file that happens to have .so in its name.
 			}
-			return "", "", nil, nil, fmt.Errorf("reading %s: %w", path, err)
+			return "", "", nil, nil, nil, fmt.Errorf("reading %s: %w", path, err)
 		}
 		libs, err := f.ImportedLibraries()
 		var interp string
@@ -246,12 +256,12 @@ func pythonParts(ctx context.Context, site string) (real, version string, dirs [
 		}
 		f.Close()
 		if err != nil {
-			return "", "", nil, nil, fmt.Errorf("reading %s: %w", path, err)
+			return "", "", nil, nil, nil, fmt.Errorf("reading %s: %w", path, err)
 		}
 		if interp != "" {
 			source, err := filepath.EvalSymlinks(interp)
 			if err != nil {
-				return "", "", nil, nil, err
+				return "", "", nil, nil, nil, err
 			}
 			files[interp] = source
 		}
@@ -264,11 +274,11 @@ func pythonParts(ctx context.Context, site string) (real, version string, dirs [
 				}
 			}
 			if err := need(lib); err != nil {
-				return "", "", nil, nil, fmt.Errorf("%s: %w", path, err)
+				return "", "", nil, nil, nil, fmt.Errorf("%s: %w", path, err)
 			}
 		}
 	}
-	return real, version, dirs, files, nil
+	return real, version, dirs, sites, files, nil
 }
 
 func fileExists(path string) bool {
@@ -280,7 +290,7 @@ func fileExists(path string) bool {
 // places in memory to write to. The rest of the tree is read-only and empty. There's no /proc,
 // which also hides the arguments of the sandbox's own processes, and no real /dev. It shares
 // the host's kernel, which is why there's a syscall filter as well.
-func (r *reader) codeArgs(real string, dirs []string, files map[string]string, memory int64, docsDir, site string) []string {
+func (r *reader) codeArgs(real string, dirs, sites []string, files map[string]string, memory int64, docsDir, site string) []string {
 	args := []string{"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
 		"--hostname", "sandbox", "--ro-bind", real, real}
 	for _, path := range slices.Sorted(mapKeys(files)) {
@@ -288,16 +298,10 @@ func (r *reader) codeArgs(real string, dirs []string, files map[string]string, m
 	}
 	for _, dir := range dirs {
 		args = append(args, "--ro-bind", dir, dir)
-		// Whatever's been installed on this machine isn't part of the standard library. The
-		// packages tack offers go where Python looks first.
+		// Whatever's been installed on this machine isn't part of the standard library.
 		packages := filepath.Join(dir, "site-packages")
-		if info, err := os.Stat(packages); err == nil && info.IsDir() {
-			if site != "" {
-				args = append(args, "--ro-bind", site, packages)
-				site = ""
-			} else {
-				args = append(args, "--size", "4096", "--tmpfs", packages, "--remount-ro", packages)
-			}
+		if info, err := os.Stat(packages); err == nil && info.IsDir() && !slices.Contains(sites, packages) {
+			args = append(args, "--size", "4096", "--tmpfs", packages, "--remount-ro", packages)
 		}
 		for _, path := range r.protected {
 			if within(path, dir) {
@@ -307,6 +311,19 @@ func (r *reader) codeArgs(real string, dirs []string, files map[string]string, m
 	}
 	if docsDir != "" {
 		args = append(args, "--ro-bind", docsDir, DocsDir)
+	}
+	// Where Python looks for packages: tack's harness module in the first place, with nothing
+	// that's installed on this machine, and the packages tack offers in the next.
+	for i, packages := range sites {
+		switch {
+		case i == 0:
+			args = append(args, "--size", "65536", "--tmpfs", packages,
+				"--ro-bind-data", strconv.Itoa(fdHarness), filepath.Join(packages, "harness.py"), "--remount-ro", packages)
+		case i == 1 && site != "":
+			args = append(args, "--ro-bind", site, packages)
+		default:
+			args = append(args, "--size", "4096", "--tmpfs", packages, "--remount-ro", packages)
+		}
 	}
 	// Date math needs time zones, and they're nothing private.
 	args = append(args, "--ro-bind-try", "/usr/share/zoneinfo", "/usr/share/zoneinfo")
@@ -601,7 +618,7 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	real, version, dirs, files, err := pythonParts(ctx, r.site())
+	real, version, dirs, sites, files, err := pythonParts(ctx, r.site())
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +640,10 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	if docsDir != "" {
 		defer os.RemoveAll(docsDir)
 	}
-	sandbox := r.codeArgs(real, dirs, files, memory, docsDir, site)
+	if len(sites) < 2 {
+		site = "" // There's nowhere to put the packages.
+	}
+	sandbox := r.codeArgs(real, dirs, sites, files, memory, docsDir, site)
 	if call.Keep != nil {
 		if err := call.Keep("sandbox", []byte(strings.Join(sandbox, "\n"))); err != nil {
 			return nil, err
@@ -686,6 +706,10 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 		return nil, err
 	}
 	if in, err = feed(limits); err != nil {
+		return nil, err
+	}
+	extra = append(extra, in)
+	if in, err = feed(harnessModule); err != nil {
 		return nil, err
 	}
 	extra = append(extra, in)

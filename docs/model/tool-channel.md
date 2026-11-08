@@ -1,5 +1,16 @@
 # Calling tools from code
 
+The `harness` module does it for you:
+
+```python
+import harness
+
+print(harness.call("scratch", op="list"))
+```
+
+`harness.call(name, **arguments)` returns the tool's result, as text, or raises
+`harness.ToolError` with the harness's message. The rest of this page is how it works.
+
 The process running your code has file descriptor 10 open. It's a socket to the
 harness. It isn't anywhere in the filesystem (there's no `/proc` or `/dev/fd`), so use
 it by its number:

@@ -136,6 +136,7 @@ User messages may be queued while tools run, and then delivered together with th
 			{Text: "A run is stopped after {{time_limit}}. Time spent waiting for the user to answer a tool call made from the code doesn't count."},
 			{Text: "The sandbox has no network, no /proc, no /dev/fd, and no programs besides Python."},
 			{Text: `The process running the code has file descriptor 10 open, a socket to the harness. Writing {"tool": name, "arguments": object} on one line calls a tool, and one line comes back, {"result": text} or {"error": text}. Lines can be up to {{channel_line_size}}, and a run can make up to {{channel_calls}} calls. Every tool you're offered can be called this way, except run_code.`},
+			{Text: "The harness module, which code can import, does this: harness.call(name, **arguments) returns the result, or raises harness.ToolError."},
 		}},
 		{Name: "facts-docs", Off: true, Paragraphs: []Paragraph{
 			{Text: "Documentation you can read with run_code is in {{docs_dir}}. {{harness_docs}} describes the harness and changes along with it, and {{user_docs}} is the user's own. {{docs_dir}}/index.md lists every page."},

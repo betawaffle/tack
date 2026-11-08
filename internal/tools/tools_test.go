@@ -664,8 +664,10 @@ df = pd.DataFrame({"x": [1, 2, 3], "when": pd.to_datetime(["2026-01-01", "2026-0
 print("sum", df.x.sum(), df.when.dt.month.tolist())
 print("versions", np.__version__, pd.__version__)
 print("threads", threading.active_count())
+import harness
+print("harness", harness.__file__)
 `)
-	if err != nil || !strings.Contains(got, "inverse ok True") || !strings.Contains(got, "sum 6 [1, 6, 11]") || !strings.Contains(got, "versions 2.3.5 2.3.3") {
+	if err != nil || !strings.Contains(got, "inverse ok True") || !strings.Contains(got, "sum 6 [1, 6, 11]") || !strings.Contains(got, "versions 2.3.5 2.3.3") || !strings.Contains(got, "harness /usr/lib64/python3.14/site-packages/harness.py") {
 		t.Errorf("packages = %q, %v", got, err)
 	}
 	if !strings.Contains(f.tools["run_code"].Definition.String(), "numpy 2.3.5") {
@@ -682,5 +684,41 @@ print("threads", threading.active_count())
 	}
 	if err := inspect(map[string]string{"pandas": ">=3"}); !errors.As(err, new(core.Unsupported)) || !strings.Contains(err.Error(), "pandas 2.3.3") {
 		t.Errorf("pandas 3 = %v", err)
+	}
+}
+
+func TestCodeCanImportTheHarnessModule(t *testing.T) {
+	f := newFixture(t)
+	call := f.call(map[string]string{"language": "python", "code": `
+import harness
+print(harness.call("scratch", op="list"))
+try:
+    harness.call("nope")
+except harness.ToolError as e:
+    print("error:", e)
+`})
+	call.Execution = store.NewID()
+	var seen []string
+	call.Serve = func(_ context.Context, conn io.ReadWriter) error {
+		r := bufio.NewReader(conn)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return nil
+			}
+			seen = append(seen, strings.TrimSpace(line))
+			if len(seen) == 1 {
+				fmt.Fprintln(conn, `{"result":"[]"}`)
+			} else {
+				fmt.Fprintln(conn, `{"error":"no such tool"}`)
+			}
+		}
+	}
+	out, err := f.tools["run_code"].Run(context.Background(), call)
+	if err != nil || string(out) != "[]\nerror: no such tool\n" {
+		t.Errorf("out = %q, %v", out, err)
+	}
+	if len(seen) != 2 || seen[0] != `{"tool": "scratch", "arguments": {"op": "list"}}` {
+		t.Errorf("seen = %q", seen)
 	}
 }
