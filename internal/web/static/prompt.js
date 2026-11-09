@@ -13,6 +13,11 @@ const LABELS = {
   parameter: "Parameter", value: "Value", next: "",
 };
 const DEPTHS = 5;
+// Whose each kind of part is, for the legend.
+const AUTHOR = {
+  system: "k-system", user: "k-user", tools: "k-tools", tool_result: "k-tools", assistant: "k-model", reasoning: "k-model",
+  content: "k-model", calls: "k-model", tool_call: "k-model", parameter: "k-model", value: "k-model",
+};
 
 function loadSwitches() {
   try {
@@ -52,7 +57,10 @@ for (const button of document.querySelectorAll("[data-switch]")) {
     saveSwitches(switches);
     applySwitches();
     // Pretty-printing changes the rows, so it draws again.
-    if (name === "pretty" && current) render(current.data);
+    if (["pretty", "wrap", "wide"].includes(name) && current) {
+      ownRows = new Set();
+      render(current.data);
+    }
   });
 }
 
@@ -101,6 +109,10 @@ function stepJSON(state, text) {
   }
 }
 
+// Values that get rows of their own even though they're one line, because their parameter's
+// row wrapped with them in it.
+let ownRows = new Set();
+
 function render(data) {
   const p = data.prompt;
   const parts = p.parts;
@@ -134,7 +146,7 @@ function render(data) {
     let k = i;
     while (parts[k].kind === "next" && k + 1 < parts.length) k++;
     if (parts[k].kind === "start" && k + 1 < parts.length && parts[k + 1].kind === "effort") k++;
-    if (parts[k].kind === "value" && !partText[k].includes("\n")) k = parts[k].parent;
+    if (parts[k].kind === "value" && !partText[k].includes("\n") && !ownRows.has(k)) k = parts[k].parent;
     return k;
   };
 
@@ -254,6 +266,7 @@ function render(data) {
           box.dataset.t = ti;
           row.content.append(box);
         }
+        if (parts[s.part].kind === "value" && r !== s.part) row.dataset.inlineValue = s.part;
         const span = el("span", `${s.field ? "f" : "t"}${a >= generated ? " g" : ""}`);
         appendVisible(span, line);
         if (!last) span.append(el("span", "ws nl", "↵"));
@@ -278,7 +291,37 @@ function render(data) {
   });
   applySwitches();
   showCounts(data, bytes.length);
+  splitWrappedValues(data);
 }
+
+// A value is kept in its parameter's row only if that row fits on one line. Rows that wrapped
+// are drawn again with their values on rows of their own.
+function splitWrappedValues(data) {
+  if (!switches.wrap) return;
+  const rows = [...$("prompt").querySelectorAll(".pl[data-inline-value]")];
+  if (!rows.length) return;
+  const line = parseFloat(getComputedStyle(rows[0].content || rows[0].querySelector(".pl-text")).lineHeight) || 21;
+  let more = false;
+  for (const row of rows) {
+    const text = row.querySelector(".pl-text");
+    const k = Number(row.dataset.inlineValue);
+    if (text.getBoundingClientRect().height > line * 1.5 && !ownRows.has(k)) {
+      ownRows.add(k);
+      more = true;
+    }
+  }
+  if (more) render(data);
+}
+
+let resizing = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resizing);
+  resizing = setTimeout(() => {
+    if (!current) return;
+    ownRows = new Set();
+    render(current.data);
+  }, 150);
+});
 
 // Whether tack's count of the prompt and the reply is the host's.
 function showCounts(data, length) {
@@ -293,7 +336,7 @@ function showCounts(data, length) {
   box.replaceChildren();
   const line = (label, counted, reported) => {
     const item = el("div", "count");
-    item.append(el("span", "", `${label} ${counted.toLocaleString("en-US")}`));
+    item.append(el("span", "count-label", label), el("span", "count-n", counted.toLocaleString("en-US")));
     if (!reported) item.append(el("span", "count-note", "host didn't say"));
     else if (reported === counted) item.append(el("span", "count-ok", "matches host"));
     else {
@@ -321,7 +364,7 @@ $("prompt").addEventListener("mouseover", (event) => {
     const row = box.closest(".pl");
     for (const bar of row.querySelectorAll(".pl-bars i[class]")) {
       const kind = [...bar.classList].find((c) => c.startsWith("k-"));
-      if (kind) keys.add(kind);
+      if (kind) keys.add(AUTHOR[kind.slice(2)] || kind);
     }
     for (const key of ["del", "ins"]) if (box.classList.contains(key)) keys.add(key);
     for (const key of ["t", "f", "g"]) if (box.querySelector("." + key)) keys.add(key);
@@ -358,6 +401,7 @@ async function load() {
   }
   const data = await res.json();
   current = { conv, data };
+  ownRows = new Set();
   const n = data.calls.indexOf(data.call);
   $("which").textContent = `Call ${n + 1} of ${data.calls.length}`;
   $("prev").disabled = n <= 0;

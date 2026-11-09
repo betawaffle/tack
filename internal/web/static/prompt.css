@@ -2,22 +2,17 @@
    block to swap. Each kind of part has a color (--k) for its bar and a faint tint of it behind
    its text. These are provisional, until a palette is chosen. */
 :root {
-  --k-system: light-dark(#3f6fb0, #79a7e6);
-  --k-tools: light-dark(#8a96a8, #66717f);
-  --k-user: light-dark(#3f6fb0, #79a7e6);
-  --k-tool_result: light-dark(#a87a22, #d8a64e);
-  --k-assistant: light-dark(#c0563e, #ec8a72);
-  --k-reasoning: light-dark(#c98472, #d99a8a);
-  --k-content: light-dark(#c0563e, #ec8a72);
-  --k-calls: light-dark(#c0563e, #ec8a72);
-  --k-tool_call: light-dark(#a8472f, #f0a08a);
-  --k-parameter: light-dark(#cf8a77, #c47e6c);
-  --k-value: light-dark(#e0b0a2, #9a5e50);
-  --k-effort: light-dark(#a6acb5, #5f666f);
+  /* By author: the system prompt, the user, the tools, and the model. Everything inside the
+     model's message is the model's color. */
+  --k-system: light-dark(#2f6fbd, #6ea6ec);
+  --k-user: light-dark(#3d8a3a, #74c06a);
+  --k-tools: light-dark(#8a909a, #7c838d);
+  --k-model: light-dark(#d06a12, #f29a4a);
+  --k-effort: light-dark(#b4b9c0, #555b63);
   --region-strength: 6%;
   --hot: light-dark(rgb(0 0 0 / .13), rgb(255 255 255 / .16));
   --format-text: light-dark(#b3b6bd, #5c6068);
-  --generated-mark: var(--k-assistant);
+  --generated-mark: var(--k-model);
   --ins-bg: light-dark(#cdeccf, #1f4a2a);
   --del-bg: light-dark(#f6d2d2, #4d2224);
   --del-text: light-dark(#a1262b, #f19a9c);
@@ -51,10 +46,14 @@
 .legend-item i { flex: none; width: 10px; height: 10px; border-radius: 2px; background: var(--k); }
 .legend-item.on { color: var(--text); background: var(--hover); box-shadow: inset 2px 0 0 var(--text); }
 .legend .sample { font: 11.5px/1.4 var(--mono); padding: 0 3px; border-radius: 3px; background: var(--hover); }
-.counts .count { display: flex; gap: 8px; justify-content: space-between; padding: 1px 6px; font: 11.5px/1.5 var(--mono); }
+.counts { display: grid; grid-template-columns: auto auto 1fr; column-gap: 8px; }
+.counts .count { display: contents; font: 11.5px/1.5 var(--mono); }
+.counts .count > * { padding: 1px 0; font: 11.5px/1.5 var(--mono); }
+.count-label, .count-n { text-align: right; }
+.count-label { padding-left: 6px !important; }
 .count-ok { color: var(--good); }
 .count-off { color: var(--warn); font-weight: 600; }
-.count.off { background: var(--warn-soft); border-radius: 4px; }
+.count.off > * { background: var(--warn-soft); }
 .count-note { color: var(--muted); }
 body.wide .legend, .narrow-screen .legend {
   position: static; order: 1; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 16px;
@@ -72,20 +71,16 @@ body.wide .prompt-inner { max-width: none; }
 body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 - 90px)); }
 
 .k-system { --k: var(--k-system); }
-.k-tools { --k: var(--k-tools); }
 .k-user { --k: var(--k-user); }
-.k-tool_result { --k: var(--k-tool_result); }
-.k-assistant { --k: var(--k-assistant); }
-.k-reasoning { --k: var(--k-reasoning); }
-.k-content { --k: var(--k-content); }
-.k-calls { --k: var(--k-calls); }
-.k-tool_call { --k: var(--k-tool_call); }
-.k-parameter { --k: var(--k-parameter); }
-.k-value { --k: var(--k-value); }
+.k-tools, .k-tool_result { --k: var(--k-tools); }
+.k-assistant, .k-reasoning, .k-content, .k-calls, .k-tool_call, .k-parameter, .k-value { --k: var(--k-model); }
 .k-effort, .k-start, .k-next { --k: var(--k-effort); }
 
 .pl { display: flex; }
-.pl.starts { margin-top: 3px; }
+/* A part that starts gets a little room above it. Bars of parts that carry on through it
+   fill that room, so a part's bar is unbroken from its first row to its last. */
+.pl.starts > .pl-part, .pl.starts > .pl-num, .pl.starts > .pl-text { margin-top: 3px; }
+.pl.starts .pl-bars i.top { margin-top: 3px; }
 .pl-part {
   flex: none; width: 76px; padding-right: 6px; text-align: right; color: var(--muted);
   font: 11.5px/1.6 var(--ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none;
