@@ -114,6 +114,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .prompt-body:not(.wrap) .prompt-rows { width: max-content; min-width: max(100%, calc(var(--longest, 0ch) + 160px)); }
 /* A block of rows is only laid out when it's near the screen. */
 .pblock { content-visibility: auto; }
+.pblock.laid { content-visibility: visible; }
 .indent { white-space: pre; }
 
 /* Each token is a box, so lines only ever break between tokens. One that's wider than the

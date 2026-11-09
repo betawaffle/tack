@@ -284,15 +284,14 @@ function keepPlace(k, draw) {
   const scrolled = scroller().scrollTop;
   draw();
   const after = $("prompt").querySelector(`.pl [data-f="${k}"], .pl .pl-bars [data-p="${k}"]`)?.closest(".pl");
-  scroller().scrollTop = scrolled;
-  if (!before || !after) return;
-  // Blocks off screen are only an estimate of their height until they're laid out, and moving
-  // lays some out, so it takes a few goes to settle.
-  for (let i = 0; i < 5; i++) {
-    const off = after.getBoundingClientRect().top - top;
-    if (Math.abs(off) < 1) break;
-    scroller().scrollTop += off;
+  if (!before || !after) {
+    scroller().scrollTop = scrolled;
+    return;
   }
+  // Blocks off screen have only an estimated height, so the ones down to the part are laid
+  // out for real; otherwise the page can be too short to scroll to where it was.
+  for (let block = after.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
+  scroller().scrollTop = scrolled + after.getBoundingClientRect().top - top;
 }
 
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
