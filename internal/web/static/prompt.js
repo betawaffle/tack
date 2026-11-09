@@ -223,10 +223,12 @@ function render(data, done, eager) {
   // lines aren't wrapped. Blocks that haven't been laid out don't count towards that, so the
   // longest line sets it.
   const box = el("div", "prompt-rows");
+  // Room past the last row (see .prompt-end).
+  const end = el("div", "prompt-end");
   let longest = 0;
   for (const r of rows) longest = Math.max(longest, r.indent + tackPromptLayout.rowText(r).length);
   box.style.setProperty("--longest", `${longest}ch`);
-  inner.append(box);
+  inner.append(box, end);
   body.replaceChildren(inner);
   applySwitches();
   showCounts(data);
