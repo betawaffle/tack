@@ -151,7 +151,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(await p.locator(".ws").first().isVisible(), "whitespace shows, in token boxes");
   const lines = await p.locator(".pl-num:not(:empty)").count();
   ok(lines < (await p.locator(".pl").count()), "parts that start partway along a line get their own row, without a line number");
-  await p.locator(".tok:has(.f)").first().hover();
+  await p.locator(".tok.f, .tok:has(.f)").first().hover();
   ok((await p.locator(".legend-item.on").count()) >= 2, "pointing at a token lights up the legend");
   // The fake host's counts are made up, so they're shown as not matching.
   ok((await p.locator(".count.off").count()) >= 1 && (await p.locator(".count-off").first().innerText()).startsWith("host said"), "a count the host disagrees with is shown");

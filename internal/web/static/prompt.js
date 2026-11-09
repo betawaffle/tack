@@ -58,10 +58,7 @@ for (const button of document.querySelectorAll("[data-switch]")) {
     saveSwitches(switches);
     applySwitches();
     // Pretty-printing changes the rows, so it draws again.
-    if (["pretty", "wrap", "wide"].includes(name) && current) {
-      ownRows = new Set();
-      render(current.data);
-    }
+    if (name === "pretty" && current) render(current.data);
   });
 }
 
@@ -72,115 +69,113 @@ function el(tag, cls, text) {
   return node;
 }
 
-// Text with its spaces and tabs drawn, so a token that's only whitespace can be seen.
-function appendVisible(parent, text) {
-  let plain = "";
-  const flush = () => {
-    if (plain) parent.append(plain);
-    plain = "";
-  };
+const escapeHTML = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+// Text with its spaces and tabs drawn, so a token that's only whitespace can be seen, as HTML,
+// and a class for the element it goes in. A single leading space, which most tokens that have
+// a space have, is drawn by CSS (.sp) rather than by an element of its own.
+function visible(text) {
+  if (text.startsWith(" ") && !text.includes(" ", 1) && !text.includes("\t")) return { cls: " sp", html: escapeHTML(text.slice(1)) };
+  let html = "";
   for (const ch of text) {
-    if (ch === " ") {
-      flush();
-      parent.append(el("span", "ws", "·"));
-    } else if (ch === "\t") {
-      flush();
-      parent.append(el("span", "ws", "→   "));
-    } else {
-      plain += ch;
-    }
+    if (ch === " ") html += '<span class="ws">·</span>';
+    else if (ch === "\t") html += '<span class="ws">→   </span>';
+    else html += escapeHTML(ch);
   }
-  flush();
+  return { cls: "", html };
 }
 
-// Values that get rows of their own even though they're one line, because their parameter's
-// row wrapped with them in it.
-let ownRows = new Set();
+// A row's HTML.
+function rowHTML(r, parts) {
+  const part = parts[r.part];
+  const named = r.fresh.filter((k) => LABELS[parts[k].kind]).at(-1);
+  const label = named === undefined ? "" : LABELS[parts[named].kind];
+  const title = r.chain.filter((k) => LABELS[parts[k].kind]).map((k) => LABELS[parts[k].kind]).join(" › ");
+  let bars = "";
+  for (let d = DEPTHS - 1; d >= 0; d--) {
+    const k = r.chain[d];
+    bars += k === undefined ? "<i></i>" : `<i class="k-${parts[k].kind}${r.fresh.includes(k) ? " top" : ""}"></i>`;
+  }
+  let style = "";
+  if (r.indent || r.hang) style += `padding-left:calc(8px + ${r.indent + r.hang}ch);`;
+  if (r.hang) style += `text-indent:-${r.hang}ch;`;
+  let items = "";
+  for (const item of r.items) {
+    if (item.deleted !== undefined) {
+      const v = visible(item.deleted.replaceAll("\n", "↵"));
+      items += `<span class="tok del${v.cls}">${v.html}</span>`;
+      continue;
+    }
+    const ins = item.inserted ? " ins" : "";
+    const piece = (sp) => {
+      const v = visible(sp.text);
+      return { cls: `${sp.field ? "f" : "t"}${sp.generated ? " g" : ""}${v.cls}`, html: v.html + (sp.newline ? '<span class="ws nl">↵</span>' : "") };
+    };
+    // A token in one piece is one element; one in several has an element for each.
+    if (item.spans.length === 1) {
+      const v = piece(item.spans[0]);
+      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}">${v.html}</span>`;
+    } else {
+      items += `<span class="tok${ins}" data-t="${item.token}">`;
+      for (const sp of item.spans) {
+        const v = piece(sp);
+        items += `<span class="${v.cls}">${v.html}</span>`;
+      }
+      items += "</span>";
+    }
+  }
+  // The name, bars and number stay put when the text scrolls sideways.
+  return `<div class="pl k-${part.kind}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
+    `<div class="pl-gutter"><div class="pl-part" title="${escapeHTML(title)}">${escapeHTML(label)}</div>` +
+    `<div class="pl-bars">${bars}</div><div class="pl-num">${r.number === null ? "" : r.number}</div></div>` +
+    `<div class="pl-text"${style ? ` style="${style}"` : ""}>${items}</div></div>`;
+}
 
-// render draws the rows tackPromptLayout works out.
-function render(data) {
-  const { rows, parts } = tackPromptLayout.layout(data, { pretty: switches.pretty, ownRows });
+// Rows are drawn in blocks. The browser skips laying out a block that's off screen
+// (content-visibility in the CSS), and blocks after the first are drawn when it's idle, so the
+// start of a big prompt shows straight away.
+const BLOCK_ROWS = 200;
+let drawing = 0;
+
+function render(data, done) {
+  const { rows, parts } = tackPromptLayout.layout(data, { pretty: switches.pretty });
   const body = $("prompt");
   const inner = el("div", "prompt-inner");
   // Rows go in a box as wide as the widest, so every row's background reaches the end when
-  // lines aren't wrapped.
+  // lines aren't wrapped. Blocks that haven't been laid out don't count towards that, so the
+  // longest line sets it.
   const box = el("div", "prompt-rows");
+  let longest = 0;
+  for (const r of rows) longest = Math.max(longest, r.indent + tackPromptLayout.rowText(r).length);
+  box.style.setProperty("--longest", `${longest}ch`);
   inner.append(box);
-  for (const r of rows) {
-    const part = parts[r.part];
-    const row = el("div", `pl k-${part.kind}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}`);
-    // The name of the innermost part that starts here; the whole chain is in the tooltip.
-    const label = el("div", "pl-part");
-    const named = r.fresh.filter((k) => LABELS[parts[k].kind]).at(-1);
-    if (named !== undefined) label.textContent = LABELS[parts[named].kind];
-    label.title = r.chain.filter((k) => LABELS[parts[k].kind]).map((k) => LABELS[parts[k].kind]).join(" › ");
-    const bars = el("div", "pl-bars");
-    for (let d = DEPTHS - 1; d >= 0; d--) {
-      const k = r.chain[d];
-      bars.append(el("i", k === undefined ? "" : `k-${parts[k].kind}${r.fresh.includes(k) ? " top" : ""}`));
-    }
-    const num = el("div", "pl-num", r.number === null ? "" : String(r.number));
-    const content = el("div", "pl-text");
-    if (r.indent || r.hang) content.style.paddingLeft = `calc(8px + ${r.indent + r.hang}ch)`;
-    if (r.hang) content.style.textIndent = `-${r.hang}ch`;
-    if (r.inlineValue !== undefined) row.dataset.inlineValue = r.inlineValue;
-    for (const item of r.items) {
-      if (item.deleted !== undefined) {
-        const del = el("span", "tok del");
-        appendVisible(del, item.deleted.replaceAll("\n", "↵"));
-        content.append(del);
-        continue;
-      }
-      const tok = el("span", `tok${item.inserted ? " ins" : ""}`);
-      tok.dataset.t = item.token;
-      for (const s of item.spans) {
-        const span = el("span", `${s.field ? "f" : "t"}${s.generated ? " g" : ""}`);
-        appendVisible(span, s.text);
-        if (s.newline) span.append(el("span", "ws nl", "↵"));
-        tok.append(span);
-      }
-      content.append(tok);
-    }
-    // The name, bars and number stay put when the text scrolls sideways.
-    const gutter = el("div", "pl-gutter");
-    gutter.append(label, bars, num);
-    row.append(gutter, content);
-    box.append(row);
-  }
   body.replaceChildren(inner);
   applySwitches();
   showCounts(data);
-  splitWrappedValues(data);
-}
 
-// A value is kept in its parameter's row only if that row fits on one line. Rows that wrapped
-// are drawn again with their values on rows of their own.
-function splitWrappedValues(data) {
-  if (!switches.wrap) return;
-  const rows = [...$("prompt").querySelectorAll(".pl[data-inline-value]")];
-  if (!rows.length) return;
-  const line = parseFloat(getComputedStyle(rows[0].content || rows[0].querySelector(".pl-text")).lineHeight) || 21;
-  let more = false;
-  for (const row of rows) {
-    const text = row.querySelector(".pl-text");
-    const k = Number(row.dataset.inlineValue);
-    if (text.getBoundingClientRect().height > line * 1.5 && !ownRows.has(k)) {
-      ownRows.add(k);
-      more = true;
-    }
-  }
-  if (more) render(data);
+  const generation = ++drawing;
+  let at = 0;
+  const block = () => {
+    const end = Math.min(rows.length, at + BLOCK_ROWS);
+    let html = "";
+    for (let i = at; i < end; i++) html += rowHTML(rows[i], parts);
+    const div = el("div", "pblock");
+    div.style.setProperty("contain-intrinsic-size", `auto ${(end - at) * 21}px`);
+    div.innerHTML = html;
+    box.append(div);
+    at = end;
+  };
+  block();
+  const more = () => {
+    if (generation !== drawing) return;
+    const until = performance.now() + 12;
+    while (at < rows.length && performance.now() < until) block();
+    if (at < rows.length) setTimeout(more, 0);
+    else if (done) done();
+  };
+  if (at < rows.length) setTimeout(more, 0);
+  else if (done) done();
 }
-
-let resizing = 0;
-window.addEventListener("resize", () => {
-  clearTimeout(resizing);
-  resizing = setTimeout(() => {
-    if (!current) return;
-    ownRows = new Set();
-    render(current.data);
-  }, 150);
-});
 
 // Whether tack's count of the prompt and the reply is the host's.
 function showCounts(data) {
@@ -216,7 +211,13 @@ $("prompt").addEventListener("mouseover", (event) => {
   const t = box?.dataset.t;
   if (hot.length && hot[0] === box) return;
   for (const node of hot) node.classList.remove("hot");
-  hot = t === undefined ? (box ? [box] : []) : [...$("prompt").querySelectorAll(`.tok[data-t="${t}"]`)];
+  // A token split across rows is in rows next to each other, so only those are looked at.
+  hot = [];
+  if (box && t !== undefined) {
+    let row = box.closest(".pl");
+    for (let n = 0; n < 4 && row.previousElementSibling; n++) row = row.previousElementSibling;
+    for (let n = 0; n < 9 && row; n++, row = row.nextElementSibling) hot.push(...row.querySelectorAll(`.tok[data-t="${t}"]`));
+  } else if (box) hot = [box];
   for (const node of hot) node.classList.add("hot");
   const keys = new Set();
   if (box) {
@@ -226,7 +227,7 @@ $("prompt").addEventListener("mouseover", (event) => {
       if (kind) keys.add(AUTHOR[kind.slice(2)] || kind);
     }
     for (const key of ["del", "ins"]) if (box.classList.contains(key)) keys.add(key);
-    for (const key of ["t", "f", "g"]) if (box.querySelector("." + key)) keys.add(key);
+    for (const key of ["t", "f", "g"]) if (box.classList.contains(key) || box.querySelector("." + key)) keys.add(key);
   }
   for (const item of document.querySelectorAll("[data-legend]")) item.classList.toggle("on", keys.has(item.dataset.legend));
 });
@@ -273,21 +274,23 @@ async function loadSynthetic(size) {
   const data = await res.json();
   times.push(["Fetched", performance.now() - t]);
   current = { conv: "synthetic", data };
-  ownRows = new Set();
   $("which").textContent = `Synthetic, about ${n.toLocaleString("en-US")} tokens`;
   $("prev").disabled = $("next").disabled = true;
   t = performance.now();
-  render(data);
-  times.push(["Drawn", performance.now() - t]);
-  // Laid out by the browser, which happens when it's next asked where something is.
-  t = performance.now();
+  const show = () => {
+    for (const [label, ms] of times) {
+      const item = el("div", "count");
+      item.append(el("span", "count-label", label), el("span", "count-n", `${Math.round(ms).toLocaleString("en-US")} ms`), el("span"));
+      $("counts").append(item);
+    }
+  };
+  render(data, () => {
+    times.push(["All drawn", performance.now() - t]);
+    show();
+  });
+  // The first screen, once the browser has laid it out.
   $("prompt").scrollHeight;
-  times.push(["Laid out", performance.now() - t]);
-  for (const [label, ms] of times) {
-    const item = el("div", "count");
-    item.append(el("span", "count-label", label), el("span", "count-n", `${Math.round(ms).toLocaleString("en-US")} ms`), el("span"));
-    $("counts").append(item);
-  }
+  times.push(["First screen", performance.now() - t]);
 }
 
 async function load() {
@@ -320,7 +323,6 @@ async function load() {
   }
   const data = await res.json();
   current = { conv, data };
-  ownRows = new Set();
   const n = data.calls.indexOf(data.call);
   $("which").textContent = `Call ${n + 1} of ${data.calls.length}`;
   $("prev").disabled = n <= 0;

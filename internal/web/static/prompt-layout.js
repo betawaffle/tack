@@ -6,7 +6,8 @@
 // - Every part of the request starts a row of its own. A row that starts partway along a line
 //   of the text has no line number.
 // - What the format puts before the model's turn goes with what follows it.
-// - A one-line value stays in its parameter's row, unless it's been given rows of its own.
+// - A value stays in its parameter's row if it's one line of at most inlineMax characters
+//   (60 unless the options say otherwise); otherwise it gets rows of its own.
 // - A newline of an outer part's ends the row it's on rather than opening one of its own.
 // - Pretty-printed JSON breaks rows where canonical pretty-printing would, even inside a
 //   token, and indents by padding: the text's own spaces after a break still show.
@@ -93,13 +94,12 @@ const tackPromptLayout = (() => {
   //   part: the part it's for; chain: that part and the ones around it, outermost first;
   //   fresh: those in chain that start here; number: its line number, or null;
   //   indent and hang: pretty-printing's indent and string hang, in characters;
-  //   inlineValue: a one-line value it holds, if any;
   //   items: what's in it, in order. An item is {deleted: text} or a token: {token, inserted,
   //   spans: [{text, field, generated, newline}]}.
   function layout(data, options = {}) {
     const p = data.prompt;
     const parts = p.parts;
-    const ownRows = options.ownRows || new Set();
+    const inlineMax = options.inlineMax ?? 60;
     const text = p.segments.map((s) => s.text).join("");
     const bytes = encoder.encode(text);
     const decode = (a, b) => new TextDecoder().decode(bytes.subarray(a, b));
@@ -122,7 +122,7 @@ const tackPromptLayout = (() => {
     const rowPart = (i) => {
       let k = i;
       while (parts[k].kind === "next" && k + 1 < parts.length) k++;
-      if (parts[k].kind === "value" && !partText[k].includes("\n") && !ownRows.has(k)) k = parts[k].parent;
+      if (parts[k].kind === "value" && !partText[k].includes("\n") && [...partText[k]].length <= inlineMax) k = parts[k].parent;
       return k;
     };
     const { inserted, deletedBefore } = changesOf(data);
@@ -199,7 +199,6 @@ const tackPromptLayout = (() => {
             item = { token: ti, inserted: inserted.has(ti), spans: [] };
             row.items.push(item);
           }
-          if (parts[s.part].kind === "value" && r !== s.part) row.inlineValue = s.part;
           item.spans.push({ text: line, field: s.field, generated: a >= generated, newline: !last });
           if (!last) {
             lineDone = true;

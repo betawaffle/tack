@@ -101,7 +101,9 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
    with its own scroll bar at the bottom of the window. */
 .prompt-body:not(.wrap) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
 .prompt-body:not(.wrap) .prompt-inner { flex: 1; min-height: 0; width: 100%; overflow: auto; padding-bottom: 40px; }
-.prompt-body:not(.wrap) .prompt-rows { width: max-content; min-width: 100%; }
+.prompt-body:not(.wrap) .prompt-rows { width: max-content; min-width: max(100%, calc(var(--longest, 0ch) + 160px)); }
+/* A block of rows is only laid out when it's near the screen. */
+.pblock { content-visibility: auto; }
 .indent { white-space: pre; }
 
 /* Each token is a box, so lines only ever break between tokens. One that's wider than the
@@ -109,6 +111,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .tok { display: inline-block; text-indent: 0; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; border-radius: 3px; }
 .tok.hot { background: var(--hot); }
 .ws { color: var(--format-text); }
+.sp::before { content: "·"; color: var(--format-text); }
 
 /* The format's own text, which no field of the request holds. */
 .t { color: var(--format-text); }

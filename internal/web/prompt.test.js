@@ -63,12 +63,12 @@ test("<｜User｜> and <｜System｜> end their rows", () => {
   }
 });
 
-test("a one-line value stays in its parameter's row, unless it's given its own", () => {
+test("a short one-line value stays in its parameter's row; a longer one gets its own", () => {
   const l = layout(data, {});
-  const inline = l.rows.find((r) => r.inlineValue !== undefined && rowText(r).includes(">list<"));
+  const inline = l.rows.find((r) => rowText(r).includes(">list<"));
   assert.ok(inline, "op=list is inline");
   assert.equal(kindOf(l, inline), "parameter");
-  const split = layout(data, { ownRows: new Set([inline.inlineValue]) });
+  const split = layout(data, { inlineMax: 3 });
   const own = split.rows.find((r) => rowText(r) === "list");
   assert.ok(own && kindOf(split, own) === "value");
   // A value over several lines always gets its own rows.
