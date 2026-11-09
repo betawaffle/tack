@@ -64,7 +64,7 @@ body.wide .legend-group + .legend-group { padding: 0 0 0 12px; border-top: 0; bo
 body.wide .prompt-head { order: 0; }
 body.wide .prompt-body { order: 2; }
 
-.prompt-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 0 40px; font: 13px/1.6 var(--mono); }
+.prompt-body { display: block; flex: 1; min-height: 0; height: auto; overflow: auto; padding: 10px 0 40px; font: 13px/1.6 var(--mono); }
 .prompt-inner { max-width: 116ch; margin: 0 auto; padding-right: 16px; }
 body.wide .prompt-inner { max-width: none; }
 /* Narrow, the legend sits to the right of the text; this keeps the text clear of it. */

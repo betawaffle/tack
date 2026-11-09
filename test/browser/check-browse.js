@@ -232,6 +232,8 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok((await p.locator(".pl.is-collapsed.k-static").count()) === 2, "the tools' fixed text starts collapsed, as Static");
   await p.click("#collapse-all");
   const open = await p.locator(".pl:not(.is-collapsed)").count();
+  const widths = await p.evaluate(() => [document.querySelector(".prompt-inner").getBoundingClientRect().width, document.getElementById("prompt").getBoundingClientRect().width]);
+  ok(widths[0] > Math.min(800, widths[1] * 0.6), `with everything collapsed, the column keeps its width (${Math.round(widths[0])}px)`);
   await p.click("#expand-all");
   ok(open <= 2 && (await p.locator(".pl.is-collapsed").count()) === 0, `Collapse All folds the top parts (${open} left open), and Expand All opens everything`);
   await p.click("[data-switch=pretty]");
