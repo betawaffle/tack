@@ -103,7 +103,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 
 /* Each token is a box, so lines only ever break between tokens. One that's wider than the
    line on its own is the exception. */
-.tok { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; border-radius: 3px; }
+.tok { display: inline-block; text-indent: 0; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; border-radius: 3px; }
 .tok.hot { background: var(--hot); }
 .ws { color: var(--format-text); }
 
