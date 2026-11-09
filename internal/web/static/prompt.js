@@ -232,7 +232,9 @@ function render(data) {
       if (a < generated && b > generated) b = generated;
       b = charStart(b);
       const piece = decode(a, b);
-      const r = rowPart(s.part);
+      let r = rowPart(s.part);
+      // A newline of an outer part's ends the row it's on rather than opening one of its own.
+      if (row && r !== region && !s.field && /^\s+$/.test(piece) && chain(region).includes(r)) r = region;
       inTools = switches.pretty && s.field && parts[s.part].kind === "tools";
       // Pretty-printed, a closing bracket starts a row of its own, at its depth.
       if (inTools && !json.inString && /^\s*[}\]]/.test(piece) && row && row.content.childElementCount) {
