@@ -105,9 +105,10 @@ function rowHTML(r, parts) {
     const k = r.chain[d];
     bars += k === undefined ? "<i></i>" : `<i class="k-${parts[k].kind}${r.fresh.includes(k) ? " top" : ""}" data-p="${k}"></i>`;
   }
+  // The page's security policy doesn't allow style attributes, so the indent goes in data
+  // attributes, which the drawing turns into styles.
   let style = "";
-  if (r.indent || r.hang) style += `padding-left:calc(8px + ${r.indent + r.hang}ch);`;
-  if (r.hang) style += `text-indent:-${r.hang}ch;`;
+  if (r.indent || r.hang) style = ` data-pad="${r.indent + r.hang}" data-hang="${r.hang}"`;
   let items = "";
   if (r.collapsed !== undefined) {
     const lines = `${r.lines.toLocaleString("en-US")} ${r.lines === 1 ? "line" : "lines"}`;
@@ -143,7 +144,7 @@ function rowHTML(r, parts) {
   return `<div class="pl k-${part.kind}${r.collapsed !== undefined ? " is-collapsed" : ""}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
     `<div class="pl-gutter"><div class="pl-part" title="${escapeHTML(title)}"${named === undefined ? "" : ` data-p="${named}"`}>${escapeHTML(label)}</div>` +
     `<div class="pl-bars">${bars}</div><div class="pl-num">${number}</div></div>` +
-    `<div class="pl-text"${style ? ` style="${style}"` : ""}>${items}</div></div>`;
+    `<div class="pl-text"${style}>${items}</div></div>`;
 }
 
 // Rows are drawn in blocks. The browser skips laying out a block that's off screen
@@ -180,6 +181,10 @@ function render(data, done, eager) {
     const div = el("div", "pblock");
     div.style.setProperty("contain-intrinsic-size", `auto ${(end - at) * 21}px`);
     div.innerHTML = html;
+    for (const text of div.querySelectorAll("[data-pad]")) {
+      text.style.paddingLeft = `calc(8px + ${text.dataset.pad}ch)`;
+      if (text.dataset.hang !== "0") text.style.textIndent = `-${text.dataset.hang}ch`;
+    }
     box.append(div);
     at = end;
   };

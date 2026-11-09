@@ -175,6 +175,15 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok((await p.getAttribute("[data-switch=wide]", "aria-pressed")) === "true", "the switches are buttons that stay pressed");
   await p.screenshot({ path: "shots/prompt.png" });
 
+  // A made-up prompt, which has tools, for pretty JSON as it's drawn.
+  await p.goto(B + "/prompt#synthetic/3000");
+  await p.waitForSelector(".pl.k-tool");
+  if ((await p.getAttribute("[data-switch=pretty]", "aria-pressed")) !== "true") await p.click("[data-switch=pretty]");
+  await p.waitForFunction(() => [...document.querySelectorAll(".pl.k-tool .pl-text")].some((t) => parseFloat(getComputedStyle(t).paddingLeft) > 20));
+  const indents = await p.evaluate(() => new Set([...document.querySelectorAll(".pl.k-tool .pl-text")].map((t) => getComputedStyle(t).paddingLeft)).size);
+  ok(indents > 2, `pretty JSON is drawn indented (${indents} different indents)`);
+  await p.click("[data-switch=pretty]");
+
   // On a phone.
   await p.setViewportSize({ width: 390, height: 800 });
   await p.goto(B + "/code#main.go");
