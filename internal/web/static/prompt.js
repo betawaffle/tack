@@ -1,14 +1,15 @@
-// A call's prompt as the model read it: the format's own text set apart from the request's
-// fields, the parts of the request down the side, and, when asked for, token boundaries and
-// what changed since the call before. The address is /prompt#conversation/call.
+// A call's prompt as the model read it: every token in its own box, the format's own text set
+// apart from the request's fields, each part of the request starting on its own row with its
+// name beside it, and, when asked for, what changed since the call before. The address is
+// /prompt#conversation/call.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const SWITCHES_KEY = "tack.prompt.switches";
-const DEFAULTS = { changes: true, tokens: false, wrap: true, numbers: true };
+const DEFAULTS = { changes: true, wrap: true, numbers: true, wide: false };
 const LABELS = {
-  start: "", effort: "effort", system: "system", tools: "tools", user: "user", tool_result: "result",
-  reasoning: "reasoning", content: "reply", tool_call: "call", next: "",
+  start: "Start", effort: "Effort", system: "System", tools: "Tools", user: "User", tool_result: "Result",
+  reasoning: "Reasoning", content: "Reply", tool_call: "Call", next: "",
 };
 
 function loadSwitches() {
@@ -32,15 +33,19 @@ let switches = loadSwitches();
 function applySwitches() {
   const body = $("prompt");
   body.classList.toggle("show-changes", switches.changes);
-  body.classList.toggle("show-tokens", switches.tokens);
   body.classList.toggle("wrap", switches.wrap);
-  for (const num of body.querySelectorAll(".pl-num")) num.hidden = !switches.numbers;
-  for (const box of document.querySelectorAll("[data-switch]")) box.checked = switches[box.dataset.switch];
+  body.classList.toggle("numbers", switches.numbers);
+  body.classList.toggle("wide", switches.wide);
+  for (const button of document.querySelectorAll("[data-switch]")) {
+    button.setAttribute("aria-pressed", String(Boolean(switches[button.dataset.switch])));
+  }
+  $("legend-changes").hidden = !switches.changes;
 }
 
-for (const box of document.querySelectorAll("[data-switch]")) {
-  box.addEventListener("change", () => {
-    switches = { ...switches, [box.dataset.switch]: box.checked };
+for (const button of document.querySelectorAll("[data-switch]")) {
+  button.addEventListener("click", () => {
+    const name = button.dataset.switch;
+    switches = { ...switches, [name]: !switches[name] };
     saveSwitches(switches);
     applySwitches();
   });
@@ -53,7 +58,7 @@ function el(tag, cls, text) {
   return node;
 }
 
-// Text with its whitespace marked, for when token boundaries are shown.
+// Text with its spaces and tabs drawn, so a token that's only whitespace can be seen.
 function appendVisible(parent, text) {
   let plain = "";
   const flush = () => {
@@ -63,10 +68,10 @@ function appendVisible(parent, text) {
   for (const ch of text) {
     if (ch === " ") {
       flush();
-      parent.append(el("span", "wsp", " "), el("span", "ws", "·"));
+      parent.append(el("span", "ws", "·"));
     } else if (ch === "\t") {
       flush();
-      parent.append(el("span", "wsp", "\t"), el("span", "ws", "→   "));
+      parent.append(el("span", "ws", "→   "));
     } else {
       plain += ch;
     }
@@ -74,14 +79,23 @@ function appendVisible(parent, text) {
   flush();
 }
 
+// The part a row belongs to. What the format puts before the model's turn goes with what
+// follows it, so it doesn't get a row of its own.
+function regionOf(parts, index) {
+  let i = index;
+  while (parts[i].kind === "next" && i + 1 < parts.length) i++;
+  if (parts[i].kind === "start" && i + 1 < parts.length && parts[i + 1].kind === "effort") i++;
+  return i;
+}
+
 function render(data) {
   const p = data.prompt;
   const text = p.segments.map((s) => s.text).join("");
   const body = $("prompt");
-  body.replaceChildren();
+  const inner = el("div", "prompt-inner");
+  body.replaceChildren(inner);
 
-  // Where each token starts, and which segment and part each byte is in. Offsets are in
-  // bytes, so the text is worked on as bytes and decoded a piece at a time.
+  // Offsets are in bytes, so the text is worked on as bytes and decoded a piece at a time.
   const bytes = new TextEncoder().encode(text);
   const decode = (a, b) => new TextDecoder().decode(bytes.subarray(a, b));
   const segAt = [];
@@ -98,10 +112,10 @@ function render(data) {
   const deletedBefore = new Map();
   if (data.changes) {
     const prevBytes = new TextEncoder().encode(data.previous_text);
-    const prevStarts = [];
+    const prevAt = [];
     let q = 0;
     for (const n of data.previous_tokens) {
-      prevStarts.push([q, q + n]);
+      prevAt.push([q, q + n]);
       q += n;
     }
     let i = 0, j = 0;
@@ -110,9 +124,9 @@ function render(data) {
         i += e.n;
         j += e.n;
       } else if (e.op === "deleted") {
-        const [a] = prevStarts[i];
-        const [, b] = prevStarts[i + e.n - 1];
-        deletedBefore.set(j, new TextDecoder().decode(prevBytes.subarray(a, b)));
+        const pieces = [];
+        for (let k = i; k < i + e.n; k++) pieces.push(new TextDecoder().decode(prevBytes.subarray(...prevAt[k])));
+        deletedBefore.set(j, pieces);
         i += e.n;
       } else {
         for (let k = j; k < j + e.n; k++) inserted.add(k);
@@ -121,76 +135,82 @@ function render(data) {
     }
   }
 
-  let line = null;
+  // Rows: a numbered row for each line of the text, and an unnumbered one wherever a new part
+  // starts partway along a line, so every part starts at the left with its name beside it.
+  let row = null;
+  let region = -1;
   let number = 0;
-  const labelled = new Set();
-  const newLine = (partIndex) => {
-    number++;
-    line = el("div", "pl");
-    const side = el("div", `pl-part k-${p.parts[partIndex].kind}`);
-    const num = el("div", "pl-num", String(number));
+  let lineDone = true;
+  const newRow = (regionIndex) => {
+    const part = p.parts[regionIndex];
+    const starts = regionIndex !== region;
+    row = el("div", `pl k-${part.kind}${part.generated ? " gen" : ""}${starts ? " starts" : ""}`);
+    const side = el("div", "pl-part");
+    if (starts && LABELS[part.kind]) {
+      side.textContent = LABELS[part.kind];
+      side.title = `${part.kind}${part.message >= 0 ? `, message ${part.message}` : ""}${part.generated ? ", written by the model in this call" : ""}`;
+    }
+    const num = el("div", "pl-num", lineDone ? String(++number) : "");
     const content = el("div", "pl-text");
-    line.append(side, num, content);
-    line.content = content;
-    line.side = side;
-    body.append(line);
+    row.append(side, num, content);
+    row.content = content;
+    inner.append(row);
+    region = regionIndex;
+    lineDone = false;
   };
-  // A part is named on the line it starts on, even partway along it.
-  const name = (partIndex) => {
-    const part = p.parts[partIndex];
-    if (labelled.has(partIndex) || !LABELS[part.kind]) return;
-    labelled.add(partIndex);
-    const label = LABELS[part.kind] + (part.generated ? " ✦" : "");
-    const what = `${part.kind}${part.message >= 0 ? `, message ${part.message}` : ""}${part.generated ? ", written by the model in this call" : ""}`;
-    line.side.textContent = line.side.textContent ? `${line.side.textContent} · ${label}` : label;
-    line.side.title = line.side.title ? `${line.side.title}\n${what}` : what;
+
+  const charStart = (x) => {
+    while (x < bytes.length && (bytes[x] & 0xc0) === 0x80) x++;
+    return x;
   };
 
   let seg = 0;
   let start = 0;
   p.tokens.forEach((len, ti) => {
     const end = start + len;
+    const shade = ti % 2 ? "odd" : "even";
     if (deletedBefore.has(ti)) {
-      if (!line) newLine(segAt[seg].seg.part);
-      line.content.append(el("span", "del", deletedBefore.get(ti).replaceAll("\n", "↵")));
+      if (!row) newRow(regionOf(p.parts, segAt[seg].seg.part));
+      for (const piece of deletedBefore.get(ti)) {
+        const box = el("span", "tok del");
+        appendVisible(box, piece.replaceAll("\n", "↵"));
+        row.content.append(box);
+      }
     }
-    // A token can end partway through a character. The character goes with the token it
-    // starts in, so no piece is cut in the middle of one.
-    const charStart = (x) => {
-      while (x < bytes.length && (bytes[x] & 0xc0) === 0x80) x++;
-      return x;
-    };
+    // A token can end partway through a character; the character goes with the token it
+    // starts in.
     let a = charStart(start);
     const tokenEnd = charStart(end);
+    let box = null;
     while (a < tokenEnd) {
       while (segAt[seg].end <= a) seg++;
       const s = segAt[seg].seg;
-      let b = charStart(Math.min(tokenEnd, segAt[seg].end));
+      let b = Math.min(tokenEnd, segAt[seg].end);
       if (a < generated && b > generated) b = generated;
-      const piece = decode(a, b);
-      // One span per line of the piece.
-      const lines = piece.split("\n");
-      lines.forEach((part, k) => {
+      b = charStart(b);
+      const lines = decode(a, b).split("\n");
+      const r = regionOf(p.parts, s.part);
+      lines.forEach((piece, k) => {
         const last = k === lines.length - 1;
-        if (!part && last) return;
-        if (!line) newLine(s.part);
-        name(s.part);
-        if (part) {
-          const span = el("span");
-          const cls = [];
-          if (!s.field) cls.push("t");
-          if (a >= generated) cls.push("g");
-          if (ti % 2) cls.push("odd");
-          if (inserted.has(ti)) cls.push("ins");
-          span.className = cls.join(" ");
-          span.dataset.p = s.part;
-          appendVisible(span, part);
-          line.content.append(span);
+        if (!piece && last) return;
+        if (!row || r !== region) {
+          newRow(r);
+          box = null;
         }
+        if (!box) {
+          box = el("span", `tok ${shade}${inserted.has(ti) ? " ins" : ""}`);
+          box.dataset.t = ti;
+          row.content.append(box);
+        }
+        const span = el("span", `${s.field ? "f" : "t"}${a >= generated ? " g" : ""}`);
+        appendVisible(span, piece);
+        if (!last) span.append(el("span", "ws nl", "↵"));
+        box.append(span);
         if (!last) {
-          const mark = el("span", "ws" + (inserted.has(ti) ? " ins" : ""), "↵");
-          line.content.append(mark);
-          line = null;
+          // The newline ends the line, and the token carries on in the next row.
+          lineDone = true;
+          row = null;
+          box = null;
         }
       });
       a = b;
@@ -200,33 +220,24 @@ function render(data) {
   applySwitches();
 }
 
-// Pointing at any text lights up the whole part it's in.
+// Pointing at a token outlines it, and lights up what the legend says about it.
 let hot = [];
 $("prompt").addEventListener("mouseover", (event) => {
-  const span = event.target.closest("[data-p]");
-  const part = span ? span.dataset.p : null;
-  if (hot.length && hot[0].dataset.p === part) return;
+  const box = event.target.closest(".tok");
+  const t = box?.dataset.t;
+  if (hot.length && hot[0].dataset.t === t) return;
   for (const node of hot) node.classList.remove("hot");
-  hot = part === null ? [] : [...$("prompt").querySelectorAll(`[data-p="${part}"]`)];
+  hot = t === undefined ? (box ? [box] : []) : [...$("prompt").querySelectorAll(`.tok[data-t="${t}"]`)];
   for (const node of hot) node.classList.add("hot");
-});
-
-function showFacts(data) {
-  const p = data.prompt;
-  const facts = $("facts");
-  facts.replaceChildren();
-  const parts = [data.model.replace(/^.*\//, "")];
-  if (data.host) parts.push(data.host);
-  parts.push(`${p.tokens.length.toLocaleString("en-US")} tokens`);
-  facts.append(parts.join("  "));
-  if (p.thinking) {
-    const effort = el("span", p.effort_known ? "" : "unknown", `  effort ${p.effort}${p.effort_known ? "" : "?"}`);
-    if (!p.effort_known) effort.title = "The request asked for an effort this model doesn't list, so this is the default, which the host may not have used.";
-    facts.append(effort);
-  } else {
-    facts.append("  no reasoning");
+  const keys = new Set();
+  if (box) {
+    const row = box.closest(".pl");
+    keys.add([...row.classList].find((c) => c.startsWith("k-")));
+    for (const key of ["del", "ins"]) if (box.classList.contains(key)) keys.add(key);
+    for (const key of ["t", "f", "g"]) if (box.querySelector("." + key)) keys.add(key);
   }
-}
+  for (const item of document.querySelectorAll("[data-legend]")) item.classList.toggle("on", keys.has(item.dataset.legend));
+});
 
 let current = null;
 
@@ -260,11 +271,10 @@ async function load() {
   const data = await res.json();
   current = { conv, data };
   const n = data.calls.indexOf(data.call);
-  $("which").textContent = `call ${n + 1} of ${data.calls.length}`;
+  $("which").textContent = `Call ${n + 1} of ${data.calls.length}`;
   $("prev").disabled = n <= 0;
   $("next").disabled = n >= data.calls.length - 1;
-  document.title = `Prompt, call ${n + 1} · tack`;
-  showFacts(data);
+  document.title = `Prompt, Call ${n + 1} · tack`;
   render(data);
 }
 
@@ -278,4 +288,5 @@ function go(step) {
 $("prev").addEventListener("click", () => go(-1));
 $("next").addEventListener("click", () => go(1));
 window.addEventListener("hashchange", load);
+applySwitches();
 load();

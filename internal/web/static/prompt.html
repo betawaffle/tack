@@ -19,20 +19,36 @@
     </svg>
   </a>
   <a id="back" class="mini" href="/">Conversation</a>
-  <div class="row" role="group" aria-label="Which call">
+  <div class="head-group" role="group" aria-label="Which call">
     <button id="prev" class="mini" type="button" aria-label="The call before">←</button>
     <span id="which" class="prompt-which"></span>
     <button id="next" class="mini" type="button" aria-label="The call after">→</button>
   </div>
-  <span id="facts" class="prompt-facts"></span>
   <span class="spacer"></span>
-  <div class="row switches" role="group" aria-label="What to show">
-    <label><input type="checkbox" data-switch="changes"> Changes</label>
-    <label><input type="checkbox" data-switch="tokens"> Tokens</label>
-    <label><input type="checkbox" data-switch="wrap"> Wrap</label>
-    <label><input type="checkbox" data-switch="numbers"> Line numbers</label>
+  <div class="head-group" role="group" aria-label="What to show">
+    <button class="mini toggle" type="button" data-switch="changes">Changes</button>
+    <button class="mini toggle" type="button" data-switch="wrap">Wrap</button>
+    <button class="mini toggle" type="button" data-switch="numbers">Line Numbers</button>
+    <button class="mini toggle" type="button" data-switch="wide">Wide</button>
   </div>
 </header>
+<div class="legend" aria-label="Legend">
+  <span class="legend-item k-system" data-legend="k-system"><i></i>System</span>
+  <span class="legend-item k-tools" data-legend="k-tools"><i></i>Tools</span>
+  <span class="legend-item k-user" data-legend="k-user"><i></i>User</span>
+  <span class="legend-item k-tool_result" data-legend="k-tool_result"><i></i>Result</span>
+  <span class="legend-item k-reasoning" data-legend="k-reasoning"><i></i>Reasoning</span>
+  <span class="legend-item k-content" data-legend="k-content"><i></i>Reply</span>
+  <span class="legend-item k-tool_call" data-legend="k-tool_call"><i></i>Call</span>
+  <span class="legend-sep"></span>
+  <span class="legend-item" data-legend="t"><span class="sample t">&lt;｜User｜&gt;</span>Format</span>
+  <span class="legend-item" data-legend="f"><span class="sample f">text</span>Request</span>
+  <span class="legend-item" data-legend="g"><span class="sample g">text</span>Model Wrote</span>
+  <span id="legend-changes" class="legend-changes">
+    <span class="legend-item" data-legend="ins"><span class="sample tok ins">text</span>Inserted</span>
+    <span class="legend-item" data-legend="del"><span class="sample tok del">text</span>Deleted</span>
+  </span>
+</div>
 <div id="error" class="prompt-error" hidden></div>
 <main id="prompt" class="prompt-body" aria-label="The prompt"></main>
 </body>

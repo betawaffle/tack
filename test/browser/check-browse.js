@@ -148,9 +148,13 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForSelector(".pl");
   ok((await p.locator(".pl-text .t").count()) > 0 && (await p.locator(".pl-text .g").count()) > 0, "the format's own text and the model's reply are both marked");
   ok((await p.locator(".pl-part", { hasText: "user" }).count()) > 0, "the parts are named");
-  await p.check("[data-switch=tokens]");
-  ok(await p.locator(".ws").first().isVisible(), "whitespace shows with the token boundaries");
-  await p.uncheck("[data-switch=tokens]");
+  ok(await p.locator(".ws").first().isVisible(), "whitespace shows, in token boxes");
+  const lines = await p.locator(".pl-num:not(:empty)").count();
+  ok(lines < (await p.locator(".pl").count()), "parts that start partway along a line get their own row, without a line number");
+  await p.locator(".tok:has(.f)").first().hover();
+  ok((await p.locator(".legend-item.on").count()) >= 2, "pointing at a token lights up the legend");
+  await p.click("[data-switch=wide]");
+  ok((await p.getAttribute("[data-switch=wide]", "aria-pressed")) === "true", "the switches are buttons that stay pressed");
   await p.screenshot({ path: "shots/prompt.png" });
 
   // On a phone.
