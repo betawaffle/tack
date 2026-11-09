@@ -132,6 +132,27 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForSelector("#error:not([hidden])");
   ok(!fs.existsSync(path.join(DOCS, "../escape.md")), "a page can't be saved outside the directory");
 
+  // A call's prompt, as the model read it.
+  const convs = await (await fetch(B + "/api/conversations")).json();
+  let promptAt = null;
+  for (const c of convs.conversations || convs) {
+    const conv = await (await fetch(B + "/api/conversations/" + c.id)).json();
+    const call = conv.items.find((i) => i.call && i.text);
+    if (conv.model.startsWith("deepseek/") && call) {
+      promptAt = `${c.id}/${call.call}`;
+      break;
+    }
+  }
+  ok(promptAt, "there's a call to look at");
+  await p.goto(B + "/prompt#" + promptAt);
+  await p.waitForSelector(".pl");
+  ok((await p.locator(".pl-text .t").count()) > 0 && (await p.locator(".pl-text .g").count()) > 0, "the format's own text and the model's reply are both marked");
+  ok((await p.locator(".pl-part", { hasText: "user" }).count()) > 0, "the parts are named");
+  await p.check("[data-switch=tokens]");
+  ok(await p.locator(".ws").first().isVisible(), "whitespace shows with the token boundaries");
+  await p.uncheck("[data-switch=tokens]");
+  await p.screenshot({ path: "shots/prompt.png" });
+
   // On a phone.
   await p.setViewportSize({ width: 390, height: 800 });
   await p.goto(B + "/code#main.go");
