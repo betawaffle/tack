@@ -186,6 +186,12 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting"));
   ok((await p.innerText("#which")) === "Draft of the next call", "a draft starts from the call");
+  // It ends with an empty user message, opened from its <｜User｜> row.
+  await p.locator(".pl.k-user_turn").last().click();
+  await p.waitForSelector(".edit-box");
+  ok((await p.inputValue(".edit-box")) === "", "a draft ends with an empty message to write");
+  await p.keyboard.press("Escape");
+  await p.waitForFunction(() => !document.querySelector(".edit-box"));
   const userText = p.locator(".pl.k-user .tok.f, .pl.k-user .tok:has(.f)").first();
   await userText.click();
   await p.waitForSelector(".edit-box");

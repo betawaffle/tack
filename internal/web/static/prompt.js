@@ -356,7 +356,9 @@ async function startDraft() {
     reply.tool_calls = out.calls.map((c, i) => ({ id: `draft-${i}`, type: "function", function: { name: c.name, arguments: c.arguments } }));
   }
   request.messages.push(reply);
+  // The next call answers the tool calls, or else carries a new user message.
   for (const call of reply.tool_calls || []) request.messages.push({ role: "tool", tool_call_id: call.id, content: "" });
+  if (!reply.tool_calls) request.messages.push({ role: "user", content: "" });
   draft = { conv, call: data.call, from, before, request };
   showSendBar();
   await previewDraft();
@@ -447,9 +449,15 @@ function openEditor(k) {
   const field = fieldOf(parts, k);
   if (!field) return;
   const rows = [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`[data-f="${k}"], .pl-bars [data-p="${k}"]`));
-  if (!rows.length) return;
+  // An empty field has no rows of its own; its box goes after the rows of the part it's in.
+  let after = null;
+  if (!rows.length) {
+    const around = [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`.pl-bars [data-p="${parts[k].parent}"]`));
+    after = around.at(-1);
+    if (!after) return;
+  }
   const editing = el("div", "pl editing");
-  editing.append(rows[0].querySelector(".pl-gutter").cloneNode(true));
+  editing.append((rows[0] || after).querySelector(".pl-gutter").cloneNode(true));
   const text = el("div", "pl-text");
   const area = el("textarea", "edit-box");
   const was = field.get();
@@ -458,7 +466,8 @@ function openEditor(k) {
   area.spellcheck = false;
   text.append(area);
   editing.append(text);
-  rows[0].before(editing);
+  if (after) after.after(editing);
+  else rows[0].before(editing);
   for (const row of rows) row.hidden = true;
   area.focus();
   const grow = () => {
@@ -502,6 +511,11 @@ $("prompt").addEventListener("click", (event) => {
   for (const bar of row.querySelectorAll(".pl-bars [data-p]")) {
     const k = Number(bar.dataset.p);
     if (fieldOf(parts, k)) return openEditor(k);
+  }
+  // A row with nothing to edit, like <｜User｜>, opens a part inside it that's still empty.
+  for (const bar of row.querySelectorAll(".pl-bars [data-p]")) {
+    const k = parts.findIndex((p, i) => p.parent === Number(bar.dataset.p) && fieldOf(parts, i) && !fieldOf(parts, i).get());
+    if (k >= 0) return openEditor(k);
   }
 });
 
