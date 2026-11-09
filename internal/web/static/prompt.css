@@ -12,7 +12,9 @@
   --hot: light-dark(rgb(0 0 0 / .13), rgb(255 255 255 / .16));
   --format-text: light-dark(#b3b6bd, #5c6068);
   --generated-mark: var(--k-model);
-  --ins-bg: light-dark(#cdeccf, #1f4a2a);
+  --ins-bg: light-dark(#cdeccf, #1b3d24);
+  /* Format text on an inserted token: still dimmer than the request's, but readable on green. */
+  --format-on-ins: light-dark(#7d8a80, #8fa596);
   --del-bg: light-dark(#f6d2d2, #4d2224);
   --del-text: light-dark(#a1262b, #f19a9c);
   --cache-mark: light-dark(#55575f, #b8bac0);
@@ -133,6 +135,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 
 /* Changes since the call before. */
 .show-changes .tok.ins { background-color: var(--ins-bg); }
+.show-changes .tok.ins.t, .show-changes .tok.ins .t, .show-changes .tok.ins .ws, .show-changes .tok.ins.sp::before { color: var(--format-on-ins); }
 .tok.del { display: none; }
 .show-changes .tok.del { display: inline-block; background: var(--del-bg); color: var(--del-text); text-decoration: line-through; }
 .legend .tok.ins { background: var(--ins-bg); }
