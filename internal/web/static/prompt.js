@@ -200,7 +200,7 @@ function render(data) {
   }
 
   const breaks = switches.pretty
-    ? prettyBreaks(bytes, segAt.filter((x) => x.seg.field && parts[x.seg.part].kind === "tools").map((x) => [x.start, x.end]))
+    ? prettyBreaks(bytes, segAt.filter((x) => x.seg.field && parts[x.seg.part].kind === "tool").map((x) => [x.start, x.end]))
     : new Map();
 
   let row = null;
