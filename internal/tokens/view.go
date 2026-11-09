@@ -23,6 +23,10 @@ const (
 	PartContent    = "content"     // an assistant's reply
 	PartToolCall   = "tool_call"   // one of an assistant's tool calls
 	PartNext       = "next"        // what the format puts before the model's turn
+	PartAssistant  = "assistant"   // an assistant's whole message, around its reasoning, reply and calls
+	PartCalls      = "calls"       // the block an assistant's tool calls are in
+	PartParameter  = "parameter"   // one argument of a tool call
+	PartValue      = "value"       // an argument's value
 )
 
 // Part is a piece of the request.
@@ -34,6 +38,8 @@ type Part struct {
 	Call int `json:"call,omitzero"`
 	// Generated is set on the parts the model wrote in this call.
 	Generated bool `json:"generated,omitzero"`
+	// Parent is the part this one is inside, or -1.
+	Parent int `json:"parent"`
 }
 
 // Segment is a run of text from one place: the format's (Field false) or a request field's.
@@ -45,18 +51,35 @@ type Segment struct {
 
 type dsWriter struct {
 	parts    []Part
+	open     []int // the parts being written, outermost first
 	segments []Segment
 	text     strings.Builder
 }
 
-func (w *dsWriter) part(p Part) { w.parts = append(w.parts, p) }
+// part starts a part at the top level, ending any that are open.
+func (w *dsWriter) part(p Part) {
+	w.open = w.open[:0]
+	w.enter(p)
+}
+
+// enter starts a part inside the one being written, until leave.
+func (w *dsWriter) enter(p Part) {
+	p.Parent = -1
+	if n := len(w.open); n > 0 {
+		p.Parent = w.open[n-1]
+	}
+	w.parts = append(w.parts, p)
+	w.open = append(w.open, len(w.parts)-1)
+}
+
+func (w *dsWriter) leave() { w.open = w.open[:len(w.open)-1] }
 
 func (w *dsWriter) add(text string, field bool) {
 	if text == "" {
 		return
 	}
 	w.text.WriteString(text)
-	part := len(w.parts) - 1
+	part := w.open[len(w.open)-1]
 	if n := len(w.segments); n > 0 && w.segments[n-1].Field == field && w.segments[n-1].Part == part {
 		w.segments[n-1].Text += text
 		return

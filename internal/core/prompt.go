@@ -22,6 +22,10 @@ type CallPrompt struct {
 	Changes        []tokens.Edit `json:"changes,omitzero"`
 	// Calls lists every call in the conversation, in order, to move between them.
 	Calls []string `json:"calls"`
+	// What the host said the prompt and the reply came to, in tokens, to check the counting
+	// against. Zero when it didn't say.
+	ReportedPrompt int `json:"reported_prompt,omitzero"`
+	ReportedOutput int `json:"reported_output,omitzero"`
 }
 
 // a call's request and what it wrote, read under mu.
@@ -29,10 +33,14 @@ type callSource struct {
 	id, model, host string
 	request         store.Ref
 	out             *tokens.Output
+	stats           *Stats
 }
 
 func (c *Core) callSource(it *item) callSource {
 	src := callSource{id: it.callID, model: it.model, host: it.host, request: it.request}
+	if it.finished != nil && len(it.finished.Usage) > 0 {
+		src.stats = statsFrom(it.finished)
+	}
 	// What the model wrote, before anyone changed it.
 	if ev := it.finished; ev != nil && ev.Error == "" && usable(ev) {
 		out := &tokens.Output{}
@@ -81,6 +89,9 @@ func (c *Core) Prompt(convID, callID string) (CallPrompt, error) {
 		return CallPrompt{}, ErrNotFound
 	}
 	out := CallPrompt{Call: this.id, Model: this.model, Host: this.host, Calls: calls}
+	if this.stats != nil {
+		out.ReportedPrompt, out.ReportedOutput = this.stats.PromptTokens, this.stats.CompletionTokens
+	}
 	body, err := c.cfg.Store.Get(this.request)
 	if err != nil {
 		return out, err

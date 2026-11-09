@@ -373,7 +373,7 @@ func dsLastUser(messages []dsMessage) int {
 	return -1
 }
 
-func dsArguments(w *dsWriter, arguments string) {
+func dsArguments(w *dsWriter, arguments string, message, call int) {
 	value := jsontext.Value(arguments)
 	// Double-encoded arguments are tolerated, like the original does.
 	if value.IsValid() && value.Kind() == '"' {
@@ -383,7 +383,7 @@ func dsArguments(w *dsWriter, arguments string) {
 		}
 	}
 	if !value.IsValid() || value.Kind() != '{' {
-		dsParameterTag(w, "arguments", true, arguments)
+		dsParameterTag(w, "arguments", true, arguments, message, call)
 		return
 	}
 	dec := jsontext.NewDecoder(bytes.NewReader(value))
@@ -404,29 +404,33 @@ func dsArguments(w *dsWriter, arguments string) {
 		if raw.Kind() == '"' {
 			var text string
 			json.Unmarshal(raw, &text)
-			dsParameterTag(w, key, true, text)
+			dsParameterTag(w, key, true, text, message, call)
 		} else {
 			text, err := pyJSON(raw)
 			if err != nil {
 				text = string(raw)
 			}
-			dsParameterTag(w, key, false, text)
+			dsParameterTag(w, key, false, text, message, call)
 		}
 	}
 }
 
 // dsParameterTag writes one argument. Its name and value are what the model wrote, and the
 // rest is the format's.
-func dsParameterTag(w *dsWriter, key string, isString bool, value string) {
+func dsParameterTag(w *dsWriter, key string, isString bool, value string, message, call int) {
 	kind := "false"
 	if isString {
 		kind = "true"
 	}
+	w.enter(Part{Kind: PartParameter, Message: message, Call: call})
 	w.template("<" + dsDSML + dsParameter + ` name="`)
 	w.field(key)
 	w.template(`" string="` + kind + `">`)
+	w.enter(Part{Kind: PartValue, Message: message, Call: call})
 	w.field(value)
+	w.leave()
 	w.template("</" + dsDSML + dsParameter + ">")
+	w.leave()
 }
 
 // dsPrompt renders the whole prompt. Effort is only shown when thinking.
@@ -496,27 +500,33 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 				}
 			}
 		case "assistant":
+			w.part(Part{Kind: PartAssistant, Message: m.src})
 			if thinking && (!drop || i > last) {
-				w.part(Part{Kind: PartReasoning, Message: m.src})
+				w.enter(Part{Kind: PartReasoning, Message: m.src})
 				w.field(m.reasoning)
 				w.template(dsThinkEnd)
+				w.leave()
 			}
-			w.part(Part{Kind: PartContent, Message: m.src})
+			w.enter(Part{Kind: PartContent, Message: m.src})
 			w.field(m.content)
+			w.leave()
 			if len(m.calls) > 0 {
+				w.enter(Part{Kind: PartCalls, Message: m.src})
 				w.template("\n\n<" + dsDSML + dsCalls + ">\n")
 				for j, call := range m.calls {
-					w.part(Part{Kind: PartToolCall, Message: m.src, Call: j})
 					if j > 0 {
 						w.template("\n")
 					}
+					w.enter(Part{Kind: PartToolCall, Message: m.src, Call: j})
 					w.template("<" + dsDSML + dsInvoke + ` name="`)
 					w.field(call.name)
 					w.template(`">` + "\n")
-					dsArguments(w, call.arguments)
+					dsArguments(w, call.arguments, m.src, j)
 					w.template("\n</" + dsDSML + dsInvoke + ">")
+					w.leave()
 				}
 				w.template("\n</" + dsDSML + dsCalls + ">")
+				w.leave()
 			}
 			w.template(dsEOS)
 		}

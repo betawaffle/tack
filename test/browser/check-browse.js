@@ -153,6 +153,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(lines < (await p.locator(".pl").count()), "parts that start partway along a line get their own row, without a line number");
   await p.locator(".tok:has(.f)").first().hover();
   ok((await p.locator(".legend-item.on").count()) >= 2, "pointing at a token lights up the legend");
+  // The fake host's counts are made up, so they're shown as not matching.
+  ok((await p.locator(".count.off").count()) >= 1 && (await p.locator(".count-off").first().innerText()).startsWith("host said"), "a count the host disagrees with is shown");
+  const before = await p.locator(".pl").count();
+  const tools = await p.locator(".pl.k-tools").count();
+  await p.click("[data-switch=pretty]");
+  const after = await p.locator(".pl").count();
+  ok(tools === 0 || (after > before && (await p.locator(".pl-num:not(:empty)").count()) === lines), `pretty JSON takes more rows, but no more lines (${tools} tool rows, ${before} then ${after})`);
+  await p.click("[data-switch=pretty]");
   await p.click("[data-switch=wide]");
   ok((await p.getAttribute("[data-switch=wide]", "aria-pressed")) === "true", "the switches are buttons that stay pressed");
   await p.screenshot({ path: "shots/prompt.png" });

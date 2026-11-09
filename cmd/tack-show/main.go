@@ -359,7 +359,8 @@ func compareTokens(w io.Writer, st *store.Store) error {
 				return nil
 			}
 			var usage struct {
-				PromptTokens int `json:"prompt_tokens"`
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
 			}
 			if err := json.Unmarshal(ev.Usage, &usage); err != nil || usage.PromptTokens == 0 {
 				return nil
@@ -381,7 +382,22 @@ func compareTokens(w io.Writer, st *store.Store) error {
 			if counted == usage.PromptTokens {
 				exact++
 			}
-			fmt.Fprintf(w, "%s %s %s counted %d, reported %d, off by %d\n", where, ev.Call, call.model, counted, usage.PromptTokens, counted-usage.PromptTokens)
+			fmt.Fprintf(w, "%s %s %s counted %d, reported %d, off by %d", where, ev.Call, call.model, counted, usage.PromptTokens, counted-usage.PromptTokens)
+			// What the model wrote, rendered the way the format writes it back, against what the
+			// host said it generated.
+			if out, ok := outputOf(st, ev); ok && usage.CompletionTokens > 0 {
+				if p, err := tokens.Render(call.model, body, out); err == nil && p.Generated >= 0 {
+					n := 0
+					for at, i := 0, 0; i < len(p.Tokens); i++ {
+						if at >= p.Generated {
+							n++
+						}
+						at += p.Tokens[i]
+					}
+					fmt.Fprintf(w, "; output counted %d, reported %d", n, usage.CompletionTokens)
+				}
+			}
+			fmt.Fprintln(w)
 		}
 		return nil
 	}, func(string, int) {})
@@ -462,4 +478,25 @@ func manualState(m core.ManualSummary) string {
 		parts = append(parts, "error: "+m.Error)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// outputOf reads what a finished call wrote.
+func outputOf(st *store.Store, ev *store.Event) (*tokens.Output, bool) {
+	if ev.Status != 200 || ev.Error != "" {
+		return nil, false
+	}
+	out := &tokens.Output{}
+	if ev.Text != "" {
+		data, _ := st.Get(ev.Text)
+		out.Content = string(data)
+	}
+	if ev.Reasoning != "" {
+		data, _ := st.Get(ev.Reasoning)
+		out.Reasoning = string(data)
+	}
+	for _, call := range ev.ToolCalls {
+		data, _ := st.Get(call.Arguments)
+		out.Calls = append(out.Calls, tokens.OutputCall{Name: call.Name, Arguments: string(data)})
+	}
+	return out, true
 }

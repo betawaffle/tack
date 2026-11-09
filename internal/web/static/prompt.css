@@ -1,21 +1,23 @@
 /* A call's prompt, as the model read it. Every color here is a variable, so a palette is one
-   block to swap. Each part of the request has a color (--k) for its bar, and a faint tint of
-   it (--region) behind its text; tokens alternate a step lighter and a step darker than that. */
+   block to swap. Each kind of part has a color (--k) for its bar and a faint tint of it behind
+   its text. These are provisional, until a palette is chosen. */
 :root {
-  --k-system: light-dark(#7d8590, #8b949e);
-  --k-tools: light-dark(#9aa0a8, #6e7681);
-  --k-user: light-dark(#2f6fbd, #6ea8f0);
-  --k-tool_result: light-dark(#a8741a, #d6a24a);
-  --k-reasoning: light-dark(#5f9e8f, #6fb8a6);
-  --k-content: light-dark(#2f8a57, #5cc48a);
-  --k-tool_call: light-dark(#b8582a, #e08a5c);
-  --k-effort: light-dark(#9aa0a8, #6e7681);
-  --region-strength: 7%;
-  --step-light: light-dark(#ffffff, #ffffff);
-  --step-dark: light-dark(#000000, #000000);
-  --step-amount: light-dark(4%, 3.5%);
-  --format-text: light-dark(#6a6f78, #8d939c);
-  --generated-mark: light-dark(#2f8a57, #5cc48a);
+  --k-system: light-dark(#3f6fb0, #79a7e6);
+  --k-tools: light-dark(#8a96a8, #66717f);
+  --k-user: light-dark(#3f6fb0, #79a7e6);
+  --k-tool_result: light-dark(#a87a22, #d8a64e);
+  --k-assistant: light-dark(#c0563e, #ec8a72);
+  --k-reasoning: light-dark(#c98472, #d99a8a);
+  --k-content: light-dark(#c0563e, #ec8a72);
+  --k-calls: light-dark(#c0563e, #ec8a72);
+  --k-tool_call: light-dark(#a8472f, #f0a08a);
+  --k-parameter: light-dark(#cf8a77, #c47e6c);
+  --k-value: light-dark(#e0b0a2, #9a5e50);
+  --k-effort: light-dark(#a6acb5, #5f666f);
+  --region-strength: 6%;
+  --hot: light-dark(rgb(0 0 0 / .13), rgb(255 255 255 / .16));
+  --format-text: light-dark(#b3b6bd, #5c6068);
+  --generated-mark: var(--k-assistant);
   --ins-bg: light-dark(#cdeccf, #1f4a2a);
   --del-bg: light-dark(#f6d2d2, #4d2224);
   --del-text: light-dark(#a1262b, #f19a9c);
@@ -29,63 +31,89 @@
 .prompt-head .brand { display: flex; align-items: center; }
 .prompt-head .brand svg { width: 24px; height: 24px; display: block; }
 .prompt-head .spacer { flex: 1; }
-.head-group { display: flex; align-items: center; gap: 6px; }
+.head-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .prompt-head .mini { display: inline-flex; align-items: center; height: 26px; margin: 0; padding: 0 10px; font: 12.5px/1 var(--ui); }
 .prompt-which { color: var(--muted); font: 12.5px/1 var(--ui); }
 .mini.toggle[aria-pressed="true"] { color: var(--text); border-color: var(--text); background: var(--hover); }
 .prompt-error { margin: 16px; color: var(--warn); font: 13px var(--ui); }
 
+/* The legend: a column in the corner beside the text, or a row under the header when the text
+   is wide. Marking an item changes only its colors, so nothing moves. */
 .legend {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 6px 16px;
-  border-bottom: 1px solid var(--line); color: var(--muted); font: 12px/1.4 var(--ui);
+  position: fixed; right: 16px; bottom: 16px; z-index: 2; display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  color: var(--muted); font: 12px/1.4 var(--ui);
 }
-.legend-item { display: inline-flex; align-items: center; gap: 5px; padding: 1px 4px; border-radius: 4px; transition: color .1s, background .1s; }
-.legend-item i { width: 10px; height: 10px; border-radius: 2px; background: var(--k); }
-.legend-item.on { color: var(--text); background: var(--hover); font-weight: 600; }
-.legend-sep { width: 1px; height: 14px; background: var(--line); }
-.legend-changes { display: inline-flex; gap: 14px; }
-.legend-changes[hidden] { display: none; }
+.legend-group { display: flex; flex-direction: column; gap: 1px; }
+.legend-group + .legend-group { padding-top: 8px; border-top: 1px solid var(--line); }
+.legend-group[hidden] { display: none; }
+.legend-item { display: flex; align-items: center; gap: 6px; padding: 1px 6px; border-radius: 4px; }
+.legend-item i { flex: none; width: 10px; height: 10px; border-radius: 2px; background: var(--k); }
+.legend-item.on { color: var(--text); background: var(--hover); box-shadow: inset 2px 0 0 var(--text); }
 .legend .sample { font: 11.5px/1.4 var(--mono); padding: 0 3px; border-radius: 3px; background: var(--hover); }
+.counts .count { display: flex; gap: 8px; justify-content: space-between; padding: 1px 6px; font: 11.5px/1.5 var(--mono); }
+.count-ok { color: var(--good); }
+.count-off { color: var(--warn); font-weight: 600; }
+.count.off { background: var(--warn-soft); border-radius: 4px; }
+.count-note { color: var(--muted); }
+body.wide .legend, .narrow-screen .legend {
+  position: static; order: 1; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 16px;
+  padding: 6px 16px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent;
+}
+body.wide .legend-group { flex-direction: row; flex-wrap: wrap; gap: 2px 8px; }
+body.wide .legend-group + .legend-group { padding: 0 0 0 12px; border-top: 0; border-left: 1px solid var(--line); }
+body.wide .prompt-head { order: 0; }
+body.wide .prompt-body { order: 2; }
 
 .prompt-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 0 40px; font: 13px/1.6 var(--mono); }
 .prompt-inner { max-width: 116ch; margin: 0 auto; padding-right: 16px; }
-.wide .prompt-inner { max-width: none; }
+body.wide .prompt-inner { max-width: none; }
+/* Narrow, the legend sits to the right of the text; this keeps the text clear of it. */
+body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 - 90px)); }
 
 .k-system { --k: var(--k-system); }
 .k-tools { --k: var(--k-tools); }
 .k-user { --k: var(--k-user); }
 .k-tool_result { --k: var(--k-tool_result); }
+.k-assistant { --k: var(--k-assistant); }
 .k-reasoning { --k: var(--k-reasoning); }
 .k-content { --k: var(--k-content); }
+.k-calls { --k: var(--k-calls); }
 .k-tool_call { --k: var(--k-tool_call); }
+.k-parameter { --k: var(--k-parameter); }
+.k-value { --k: var(--k-value); }
 .k-effort, .k-start, .k-next { --k: var(--k-effort); }
 
-.pl { display: flex; --region: color-mix(in srgb, var(--k) var(--region-strength), var(--bg)); }
+.pl { display: flex; }
 .pl.starts { margin-top: 3px; }
-/* The part's name where it starts, and its color down all its rows. */
 .pl-part {
-  flex: none; width: 84px; padding-right: 8px; text-align: right; color: var(--muted);
+  flex: none; width: 76px; padding-right: 6px; text-align: right; color: var(--muted);
   font: 11.5px/1.6 var(--ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none;
-  border-right: 3px solid var(--k);
 }
-.pl.gen .pl-part { color: var(--text); font-weight: 600; }
+.pl.gen .pl-part { color: var(--text); }
+/* One bar per level, the outermost nearest the text, with a small gap between them. */
+.pl-bars { flex: none; display: flex; gap: 2px; }
+.pl-bars i { width: 3px; background: var(--k, transparent); }
+.pl-bars i:not([class]) { background: transparent; }
 .pl-num { flex: none; width: 0; overflow: hidden; text-align: right; color: var(--muted); user-select: none; opacity: .7; }
-.numbers .pl-num { width: 48px; padding-right: 10px; }
-.pl-text { flex: 1; min-width: 0; padding: 0 0 0 8px; background: var(--region); white-space: nowrap; }
+.numbers .pl-num { width: 46px; padding-right: 10px; }
+.pl-text {
+  flex: 1; min-width: 0; padding: 0 0 0 8px; white-space: nowrap;
+  background: color-mix(in srgb, var(--k) var(--region-strength), var(--bg));
+}
 .wrap .pl-text { white-space: normal; }
+.indent { white-space: pre; }
 
 /* Each token is a box, so lines only ever break between tokens. One that's wider than the
    line on its own is the exception. */
 .tok { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; border-radius: 3px; }
-.tok.even { background: color-mix(in srgb, var(--region), var(--step-light) var(--step-amount)); }
-.tok.odd { background: color-mix(in srgb, var(--region), var(--step-dark) var(--step-amount)); }
-.tok.hot { outline: 1.5px solid color-mix(in srgb, var(--text) 55%, transparent); outline-offset: -1px; }
-.ws { color: var(--muted); opacity: .55; }
+.tok.hot { background: var(--hot); }
+.ws { color: var(--format-text); }
 
 /* The format's own text, which no field of the request holds. */
 .t { color: var(--format-text); }
-/* What the model wrote in this call: underlined in its color. */
-.g { text-decoration: underline; text-decoration-color: var(--generated-mark); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+/* What the model wrote in this call. */
+.g { text-decoration: underline; text-decoration-color: var(--generated-mark); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
 
 /* Changes since the call before. */
 .show-changes .tok.ins { background: var(--ins-bg); }
@@ -93,8 +121,19 @@
 .show-changes .tok.del { display: inline-block; background: var(--del-bg); color: var(--del-text); text-decoration: line-through; }
 .legend .tok.ins { background: var(--ins-bg); }
 .legend .tok.del { display: inline; background: var(--del-bg); color: var(--del-text); text-decoration: line-through; }
+.show-changes .tok.ins.hot, .show-changes .tok.del.hot { box-shadow: inset 0 0 0 99px var(--hot); }
 
+@media (max-width: 1100px) {
+  .legend {
+    position: static; order: 1; flex-direction: row; flex-wrap: wrap; gap: 4px 16px;
+    padding: 6px 16px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: var(--bg);
+  }
+  .legend-group { flex-direction: row; flex-wrap: wrap; gap: 2px 8px; }
+  .legend-group + .legend-group { padding: 0 0 0 12px; border-top: 0; border-left: 1px solid var(--line); }
+  .prompt-body { order: 0; }
+  body:not(.wide) .prompt-inner { margin-left: auto; }
+}
 @media (max-width: 700px) {
-  .pl-part { width: 64px; font-size: 10.5px; }
-  .numbers .pl-num { width: 36px; padding-right: 6px; }
+  .pl-part { width: 58px; font-size: 10.5px; }
+  .numbers .pl-num { width: 34px; padding-right: 6px; }
 }
