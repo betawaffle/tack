@@ -10,7 +10,7 @@ const DEFAULTS = { changes: true, wrap: true, numbers: true, wide: false, pretty
 const LABELS = {
   start: "Preamble", effort: "Effort", system: "System", prompt: "Prompt", tools: "Tools", tool: "Tool", user_turn: "User",
   user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
-  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", next: "",
+  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", next: "",
 };
 const DEPTHS = 5;
 // Whose each kind of part is, for the legend.
@@ -93,250 +93,64 @@ function appendVisible(parent, text) {
   flush();
 }
 
-// Where pretty-printed JSON breaks its rows, by byte offset, with how far the new row is
-// indented. Only the layout changes: the indent is padding, and the text's own spaces after a
-// break still show, taking up as much of the indent as they cover.
-function prettyBreaks(bytes, ranges) {
-  const out = new Map();
-  const SPACE = 32, QUOTE = 34, SLASH = 92;
-  const opens = new Set([123, 91]), closes = new Set([125, 93]), COMMA = 44;
-  for (const [from, to] of ranges) {
-    let depth = 0, inString = false, escaped = false;
-    const spacesAt = (x) => {
-      let n = 0;
-      while (x + n < to && bytes[x + n] === SPACE) n++;
-      return n;
-    };
-    const nextSolid = (x) => x + spacesAt(x);
-    const breakAt = (x, level) => out.set(x, Math.max(0, level * 2 - spacesAt(x)));
-    for (let i = from; i < to; i++) {
-      const c = bytes[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (c === SLASH) escaped = true;
-        else if (c === QUOTE) inString = false;
-        continue;
-      }
-      if (c === QUOTE) inString = true;
-      else if (opens.has(c)) {
-        depth++;
-        // An empty object or list stays on its row.
-        if (!closes.has(bytes[nextSolid(i + 1)])) breakAt(i + 1, depth);
-      } else if (closes.has(c)) {
-        depth--;
-        if (!opens.has(bytes[i - 1])) breakAt(i, depth);
-      } else if (c === COMMA) breakAt(i + 1, depth);
-    }
-  }
-  return out;
-}
-
 // Values that get rows of their own even though they're one line, because their parameter's
 // row wrapped with them in it.
 let ownRows = new Set();
 
+// render draws the rows tackPromptLayout works out.
 function render(data) {
-  const p = data.prompt;
-  const parts = p.parts;
-  const text = p.segments.map((s) => s.text).join("");
+  const { rows, parts } = tackPromptLayout.layout(data, { pretty: switches.pretty, ownRows });
   const body = $("prompt");
   const inner = el("div", "prompt-inner");
   // Rows go in a box as wide as the widest, so every row's background reaches the end when
   // lines aren't wrapped.
-  const rows = el("div", "prompt-rows");
-  inner.append(rows);
-  body.replaceChildren(inner);
-
-  // Offsets are in bytes, so the text is worked on as bytes and decoded a piece at a time.
-  const bytes = new TextEncoder().encode(text);
-  const decode = (a, b) => new TextDecoder().decode(bytes.subarray(a, b));
-  const segAt = [];
-  const partText = parts.map(() => "");
-  let at = 0;
-  for (const s of p.segments) {
-    const n = new TextEncoder().encode(s.text).length;
-    segAt.push({ start: at, end: at + n, seg: s });
-    partText[s.part] += s.text;
-    at += n;
-  }
-  const generated = p.generated >= 0 ? p.generated : bytes.length;
-
-  const chain = (i) => {
-    const out = [];
-    for (let k = i; k >= 0; k = parts[k].parent) out.unshift(k);
-    return out;
-  };
-  // The part a row is for. What the format puts before the model's turn goes with what
-  // follows it, and a value on one line stays in its parameter's row.
-  const rowPart = (i) => {
-    let k = i;
-    while (parts[k].kind === "next" && k + 1 < parts.length) k++;
-    if (parts[k].kind === "value" && !partText[k].includes("\n") && !ownRows.has(k)) k = parts[k].parent;
-    return k;
-  };
-
-  // What changed, by this call's tokens: inserted, or with deleted text just before it.
-  const inserted = new Set();
-  const deletedBefore = new Map();
-  if (data.changes) {
-    const prevBytes = new TextEncoder().encode(data.previous_text);
-    const prevAt = [];
-    let q = 0;
-    for (const n of data.previous_tokens) {
-      prevAt.push([q, q + n]);
-      q += n;
-    }
-    let i = 0, j = 0;
-    for (const e of data.changes) {
-      if (e.op === "same") {
-        i += e.n;
-        j += e.n;
-      } else if (e.op === "deleted") {
-        const pieces = [];
-        for (let k = i; k < i + e.n; k++) pieces.push(new TextDecoder().decode(prevBytes.subarray(...prevAt[k])));
-        deletedBefore.set(j, pieces);
-        i += e.n;
-      } else {
-        for (let k = j; k < j + e.n; k++) inserted.add(k);
-        j += e.n;
-      }
-    }
-  }
-
-  const breaks = switches.pretty
-    ? prettyBreaks(bytes, segAt.filter((x) => x.seg.field && parts[x.seg.part].kind === "tool").map((x) => [x.start, x.end]))
-    : new Map();
-
-  let row = null;
-  let region = -1;
-  let number = 0;
-  let lineDone = true;
-  let indent = 0;
-  const started = new Set();
-  const newRow = (partIndex) => {
-    const kinds = chain(partIndex);
-    row = el("div", `pl k-${parts[partIndex].kind}${parts[partIndex].generated ? " gen" : ""}`);
-    if (partIndex !== region) row.classList.add("starts");
-    // The name of the innermost part that starts here; the others are in the tooltip.
+  const box = el("div", "prompt-rows");
+  inner.append(box);
+  for (const r of rows) {
+    const part = parts[r.part];
+    const row = el("div", `pl k-${part.kind}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}`);
+    // The name of the innermost part that starts here; the whole chain is in the tooltip.
     const label = el("div", "pl-part");
-    const fresh = kinds.filter((k) => !started.has(k));
-    const named = fresh.filter((k) => LABELS[parts[k].kind]).at(-1);
+    const named = r.fresh.filter((k) => LABELS[parts[k].kind]).at(-1);
     if (named !== undefined) label.textContent = LABELS[parts[named].kind];
-    label.title = kinds.filter((k) => LABELS[parts[k].kind]).map((k) => LABELS[parts[k].kind]).join(" › ");
-    for (const k of fresh) started.add(k);
+    label.title = r.chain.filter((k) => LABELS[parts[k].kind]).map((k) => LABELS[parts[k].kind]).join(" › ");
     const bars = el("div", "pl-bars");
     for (let d = DEPTHS - 1; d >= 0; d--) {
-      const k = kinds[d];
-      const bar = el("i", k === undefined ? "" : `k-${parts[k].kind}${fresh.includes(k) ? " top" : ""}`);
-      bars.append(bar);
+      const k = r.chain[d];
+      bars.append(el("i", k === undefined ? "" : `k-${parts[k].kind}${r.fresh.includes(k) ? " top" : ""}`));
     }
-    const num = el("div", "pl-num", lineDone ? String(++number) : "");
+    const num = el("div", "pl-num", r.number === null ? "" : String(r.number));
     const content = el("div", "pl-text");
-    if (indent) content.style.paddingLeft = `calc(8px + ${indent}ch)`;
-    if (breaks.size) row.dataset.indent = indent;
+    if (r.indent || r.hang) content.style.paddingLeft = `calc(8px + ${r.indent + r.hang}ch)`;
+    if (r.hang) content.style.textIndent = `-${r.hang}ch`;
+    if (r.inlineValue !== undefined) row.dataset.inlineValue = r.inlineValue;
+    for (const item of r.items) {
+      if (item.deleted !== undefined) {
+        const del = el("span", "tok del");
+        appendVisible(del, item.deleted.replaceAll("\n", "↵"));
+        content.append(del);
+        continue;
+      }
+      const tok = el("span", `tok${item.inserted ? " ins" : ""}`);
+      tok.dataset.t = item.token;
+      for (const s of item.spans) {
+        const span = el("span", `${s.field ? "f" : "t"}${s.generated ? " g" : ""}`);
+        appendVisible(span, s.text);
+        if (s.newline) span.append(el("span", "ws nl", "↵"));
+        tok.append(span);
+      }
+      content.append(tok);
+    }
     // The name, bars and number stay put when the text scrolls sideways.
     const gutter = el("div", "pl-gutter");
     gutter.append(label, bars, num);
     row.append(gutter, content);
-    row.content = content;
-    rows.append(row);
-    region = partIndex;
-    lineDone = false;
-    indent = 0;
-  };
-
-  const charStart = (x) => {
-    while (x < bytes.length && (bytes[x] & 0xc0) === 0x80) x++;
-    return x;
-  };
-
-  let seg = 0;
-  let start = 0;
-  p.tokens.forEach((len, ti) => {
-    const end = start + len;
-    if (deletedBefore.has(ti)) {
-      if (!row) newRow(rowPart(segAt[seg].seg.part));
-      for (const piece of deletedBefore.get(ti)) {
-        const box = el("span", "tok del");
-        appendVisible(box, piece.replaceAll("\n", "↵"));
-        row.content.append(box);
-      }
-    }
-    // A token can end partway through a character; the character goes with the token it
-    // starts in.
-    let a = charStart(start);
-    const tokenEnd = charStart(end);
-    let box = null;
-    while (a < tokenEnd) {
-      while (segAt[seg].end <= a) seg++;
-      const s = segAt[seg].seg;
-      let b = Math.min(tokenEnd, segAt[seg].end);
-      if (a < generated && b > generated) b = generated;
-      // Pretty-printed, a row can break inside a token, which then carries on in the next row.
-      if (breaks.has(a) && row && row.content.childElementCount) {
-        indent = breaks.get(a);
-        row = null;
-        box = null;
-      }
-      for (let x = a + 1; x < b; x++) {
-        if (breaks.has(x)) {
-          b = x;
-          break;
-        }
-      }
-      b = charStart(b);
-      const piece = decode(a, b);
-      let r = rowPart(s.part);
-      // A newline of an outer part's ends the row it's on rather than opening one of its own.
-      if (row && r !== region && !s.field && /^\s+$/.test(piece) && chain(region).includes(r)) r = region;
-      const lines = piece.split("\n");
-      lines.forEach((line, k) => {
-        const last = k === lines.length - 1;
-        if (!line && last) return;
-        if (!row || r !== region) {
-          newRow(r);
-          box = null;
-        }
-        if (!box) {
-          box = el("span", `tok${inserted.has(ti) ? " ins" : ""}`);
-          box.dataset.t = ti;
-          row.content.append(box);
-        }
-        if (parts[s.part].kind === "value" && r !== s.part) row.dataset.inlineValue = s.part;
-        const span = el("span", `${s.field ? "f" : "t"}${a >= generated ? " g" : ""}`);
-        appendVisible(span, line);
-        if (!last) span.append(el("span", "ws nl", "↵"));
-        box.append(span);
-        if (!last) {
-          // The newline ends the line, and the token carries on in the next row.
-          lineDone = true;
-          row = null;
-          box = null;
-        }
-      });
-      a = b;
-    }
-    start = end;
-  });
-  if (breaks.size) hangStrings(inner);
-  applySwitches();
-  showCounts(data, bytes.length);
-  splitWrappedValues(data);
-}
-
-// In pretty-printed JSON, a string that wraps carries on under its first character, not
-// under the row's start. The font is monospace, so this is counting, not measuring.
-function hangStrings(inner) {
-  for (const row of inner.querySelectorAll(".pl[data-indent]")) {
-    const content = row.querySelector(".pl-text");
-    const text = content.textContent;
-    const keyed = text.match(/^[\s·]*"(?:[^"\\]|\\.)*"[\s·]*:[\s·]*"/) || text.match(/^[\s·]*"/);
-    if (!keyed) continue;
-    const k = keyed[0].length;
-    const indent = Number(row.dataset.indent);
-    content.style.paddingLeft = `calc(8px + ${indent + k}ch)`;
-    content.style.textIndent = `-${k}ch`;
+    box.append(row);
   }
+  body.replaceChildren(inner);
+  applySwitches();
+  showCounts(data);
+  splitWrappedValues(data);
 }
 
 // A value is kept in its parameter's row only if that row fits on one line. Rows that wrapped
@@ -369,7 +183,7 @@ window.addEventListener("resize", () => {
 });
 
 // Whether tack's count of the prompt and the reply is the host's.
-function showCounts(data, length) {
+function showCounts(data) {
   const p = data.prompt;
   let prompt = 0, output = 0, at = 0;
   for (const n of p.tokens) {
@@ -417,8 +231,68 @@ $("prompt").addEventListener("mouseover", (event) => {
   for (const item of document.querySelectorAll("[data-legend]")) item.classList.toggle("on", keys.has(item.dataset.legend));
 });
 
+// A made-up conversation of about this many tokens, of every kind of part, for seeing how
+// the page copes with a big prompt: /prompt#synthetic/250000.
+function syntheticRequest(tokens) {
+  const words = "the model reads every token of this prompt and some of them are long words while others are short".split(" ");
+  const sentence = (n) => Array.from({ length: n }, (_, i) => words[(i * 7) % words.length]).join(" ") + ".";
+  const tool = { type: "function", function: { name: "run_code", description: "Run code in a sandbox.", parameters: { type: "object", properties: { language: { type: "string" }, code: { type: "string" } }, required: ["language", "code"] } } };
+  const messages = [{ role: "system", content: sentence(60) + "\n\n" + sentence(40) }];
+  // Roughly four bytes to a token; the server counts them exactly.
+  let bytes = 0;
+  for (let i = 0; bytes < tokens * 4; i++) {
+    const code = Array.from({ length: 12 }, (_, k) => `print(${k} * ${i})`).join("\n");
+    const turn = [
+      { role: "user", content: sentence(80) },
+      { role: "assistant", reasoning: sentence(120), content: sentence(30), tool_calls: [{ id: `c${i}`, type: "function", function: { name: "run_code", arguments: JSON.stringify({ language: "python", code }) } }] },
+      { role: "tool", tool_call_id: `c${i}`, content: Array.from({ length: 12 }, (_, k) => String(k * i)).join("\n") },
+      { role: "assistant", reasoning: sentence(40), content: sentence(90) },
+    ];
+    messages.push(...turn);
+    bytes += JSON.stringify(turn).length;
+  }
+  messages.push({ role: "user", content: sentence(20) });
+  return { model: "deepseek/deepseek-v4.1-flash-1017", messages, tools: [tool] };
+}
+
+async function loadSynthetic(size) {
+  const n = Math.max(100, Math.min(Number(size) || 100000, 1100000));
+  const times = [];
+  let t = performance.now();
+  const request = syntheticRequest(n);
+  const res = await fetch("/api/prompt-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: request.model, request }),
+  });
+  if (!res.ok) {
+    $("error").textContent = (await res.text()) || res.statusText;
+    $("error").hidden = false;
+    return;
+  }
+  const data = await res.json();
+  times.push(["Fetched", performance.now() - t]);
+  current = { conv: "synthetic", data };
+  ownRows = new Set();
+  $("which").textContent = `Synthetic, about ${n.toLocaleString("en-US")} tokens`;
+  $("prev").disabled = $("next").disabled = true;
+  t = performance.now();
+  render(data);
+  times.push(["Drawn", performance.now() - t]);
+  // Laid out by the browser, which happens when it's next asked where something is.
+  t = performance.now();
+  $("prompt").scrollHeight;
+  times.push(["Laid out", performance.now() - t]);
+  for (const [label, ms] of times) {
+    const item = el("div", "count");
+    item.append(el("span", "count-label", label), el("span", "count-n", `${Math.round(ms).toLocaleString("en-US")} ms`), el("span"));
+    $("counts").append(item);
+  }
+}
+
 async function load() {
   const [conv, call] = location.hash.slice(1).split("/");
+  if (conv === "synthetic") return loadSynthetic(call);
   $("back").href = conv ? `/#${conv}` : "/";
   $("error").hidden = true;
   if (!conv) {

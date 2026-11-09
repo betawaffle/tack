@@ -553,6 +553,9 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 				w.template("\n</" + dsDSML + dsCalls + ">")
 				w.leave()
 			}
+			// Where the model stopped. The format writes it after every assistant message, and
+			// the model wrote it in the reply it generated.
+			w.part(Part{Kind: PartStop, Message: m.src})
 			w.template(dsEOS)
 		}
 		if i+1 < len(messages) && messages[i+1].role != "assistant" {

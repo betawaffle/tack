@@ -390,3 +390,13 @@ func TestManualRequests(t *testing.T) {
 	post(t, s.URL+"/api/manual-calls/"+first.ID+"/cancel", "", http.StatusConflict)
 	post(t, s.URL+"/api/manual-calls/nope/cancel", "", http.StatusNotFound)
 }
+
+func TestAnyRequestCanBePreviewed(t *testing.T) {
+	s := site(t)
+	out := post(t, s.URL+"/api/prompt-preview", `{"model":"deepseek/deepseek-v4.1-flash-1017","request":{"messages":[{"role":"user","content":"Hello there"}]}}`, 200)
+	if !strings.Contains(out, `Hello there`) || !strings.Contains(out, `"tokens":[`) {
+		t.Errorf("preview = %s", out)
+	}
+	post(t, s.URL+"/api/prompt-preview", `{"model":"other/model","request":{}}`, http.StatusNotFound)
+	post(t, s.URL+"/api/prompt-preview", `{"model":"deepseek/deepseek-v4.1-flash-1017","request":"nope"}`, http.StatusBadRequest)
+}

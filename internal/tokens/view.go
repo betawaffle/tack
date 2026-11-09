@@ -30,6 +30,7 @@ const (
 	PartTool       = "tool"        // one tool's schema, in the tools
 	PartUserTurn   = "user_turn"   // a user turn, around the messages and tool results in it
 	PartPrompt     = "prompt"      // a system message's text
+	PartStop       = "stop"        // the end of an assistant message
 )
 
 // Part is a piece of the request.

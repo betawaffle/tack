@@ -26,7 +26,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt.js static/prompt.css
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt.js static/prompt.css
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -170,6 +170,7 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/conversations/{id}/code-calls/{call}", s.answerCodeCall)
 	mux.HandleFunc("GET /prompt", s.promptPage)
 	mux.HandleFunc("GET /api/conversations/{id}/calls/{call}/prompt", s.callPrompt)
+	mux.HandleFunc("POST /api/prompt-preview", s.previewPrompt)
 	mux.HandleFunc("GET /code", s.codePage)
 	mux.HandleFunc("GET /docs", s.docsPage)
 	mux.HandleFunc("GET /api/source", s.sourceList)

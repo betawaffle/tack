@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"io/fs"
@@ -282,4 +283,32 @@ func (s *server) callPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, p)
+}
+
+// maxPreviewBytes is the most of a request body that can be previewed: a context window's
+// worth, with room to spare.
+const maxPreviewBytes = 32 << 20
+
+// previewPrompt shows any request body as the model would read it, without sending it. It's
+// for trying out a prompt, and for seeing how the page copes with a big one.
+func (s *server) previewPrompt(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Model   string         `json:"model"`
+		Request jsontext.Value `json:"request"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPreviewBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	p, err := tokens.Render(body.Model, body.Request, nil)
+	if errors.Is(err, tokens.ErrNoRenderer) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, core.CallPrompt{Model: body.Model, Prompt: p, Calls: []string{}})
 }
