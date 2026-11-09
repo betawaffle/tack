@@ -453,24 +453,32 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 	header := false
 	for i := range messages {
 		m := &messages[i]
-		if i == 0 {
+		// A system message is <｜System｜>, then its parts: the effort (in the first, when
+		// reasoning), the prompt, and the tools (in the first, when there are any).
+		if i == 0 && (thinking || m.role == "system") {
+			src := -1
+			if m.role == "system" {
+				src = m.src
+			}
+			w.part(Part{Kind: PartSystem, Message: src})
+			w.template(dsSystem)
 			if thinking {
-				w.template(dsSystem)
-				w.part(Part{Kind: PartEffort, Message: -1})
+				w.enter(Part{Kind: PartEffort, Message: -1})
 				w.template(fmt.Sprintf("Reasoning Effort: %d (range 1-100, the higher the value, the more thorough the reasoning)\n\n", effort))
-			} else if m.role == "system" {
-				w.template(dsSystem)
+				w.leave()
 			}
 		}
 		switch m.role {
 		case "system":
-			w.part(Part{Kind: PartSystem, Message: m.src})
 			if i > 0 {
+				w.part(Part{Kind: PartSystem, Message: m.src})
 				w.template(dsSystem)
 			}
+			w.enter(Part{Kind: PartPrompt, Message: m.src})
 			w.field(m.content)
+			w.leave()
 			if i == 0 && len(tools) > 0 {
-				w.part(Part{Kind: PartTools, Message: -1})
+				w.enter(Part{Kind: PartTools, Message: -1})
 				w.template("\n\n")
 				before, after, _ := strings.Cut(dsToolsTemplate, "{tool_schemas}")
 				w.template(before)
@@ -483,6 +491,7 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 					w.leave()
 				}
 				w.template(after)
+				w.leave()
 			}
 		case "user":
 			// One user turn can hold several messages and tool results, each a part inside it.

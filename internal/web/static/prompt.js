@@ -8,14 +8,14 @@ const $ = (id) => document.getElementById(id);
 const SWITCHES_KEY = "tack.prompt.switches";
 const DEFAULTS = { changes: true, wrap: true, numbers: true, wide: false, pretty: false };
 const LABELS = {
-  start: "Preamble", effort: "Effort", system: "System", tools: "Tools", tool: "Tool", user_turn: "User",
+  start: "Preamble", effort: "Effort", system: "System", prompt: "Prompt", tools: "Tools", tool: "Tool", user_turn: "User",
   user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
   calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", next: "",
 };
 const DEPTHS = 5;
 // Whose each kind of part is, for the legend.
 const AUTHOR = {
-  system: "k-system", tools: "k-system", tool: "k-system", user_turn: "k-user", user: "k-user", tool_result: "k-user",
+  system: "k-system", prompt: "k-system", effort: "k-system", tools: "k-system", tool: "k-system", user_turn: "k-user", user: "k-user", tool_result: "k-user",
   assistant: "k-model", reasoning: "k-model", content: "k-model", calls: "k-model", tool_call: "k-model",
   parameter: "k-model", value: "k-model",
 };
@@ -141,6 +141,10 @@ function render(data) {
   const text = p.segments.map((s) => s.text).join("");
   const body = $("prompt");
   const inner = el("div", "prompt-inner");
+  // Rows go in a box as wide as the widest, so every row's background reaches the end when
+  // lines aren't wrapped.
+  const rows = el("div", "prompt-rows");
+  inner.append(rows);
   body.replaceChildren(inner);
 
   // Offsets are in bytes, so the text is worked on as bytes and decoded a piece at a time.
@@ -230,9 +234,12 @@ function render(data) {
     const content = el("div", "pl-text");
     if (indent) content.style.paddingLeft = `calc(8px + ${indent}ch)`;
     if (breaks.size) row.dataset.indent = indent;
-    row.append(label, bars, num, content);
+    // The name, bars and number stay put when the text scrolls sideways.
+    const gutter = el("div", "pl-gutter");
+    gutter.append(label, bars, num);
+    row.append(gutter, content);
     row.content = content;
-    inner.append(row);
+    rows.append(row);
     region = partIndex;
     lineDone = false;
     indent = 0;

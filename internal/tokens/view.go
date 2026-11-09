@@ -14,8 +14,8 @@ import (
 // The kinds of part a prompt is made of.
 const (
 	PartStart      = "start"       // what the format starts every prompt with
-	PartEffort     = "effort"      // the reasoning effort, which the format writes from a setting
-	PartSystem     = "system"      // a system message
+	PartEffort     = "effort"      // the reasoning effort, which the format writes into the first system message
+	PartSystem     = "system"      // a system message, around its effort, prompt and tools
 	PartTools      = "tools"       // the tools offered, which the format writes into the first system message
 	PartUser       = "user"        // a user message, inside a user turn
 	PartToolResult = "tool_result" // a tool's result
@@ -29,6 +29,7 @@ const (
 	PartValue      = "value"       // an argument's value
 	PartTool       = "tool"        // one tool's schema, in the tools
 	PartUserTurn   = "user_turn"   // a user turn, around the messages and tool results in it
+	PartPrompt     = "prompt"      // a system message's text
 )
 
 // Part is a piece of the request.

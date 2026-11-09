@@ -7,7 +7,7 @@
   --k-system: light-dark(#2f6fbd, #6ea6ec);
   --k-user: light-dark(#3d8a3a, #74c06a);
   --k-model: light-dark(#d06a12, #f29a4a);
-  --k-effort: light-dark(#b4b9c0, #555b63);
+  --k-format: light-dark(#b4b9c0, #555b63);
   --region-strength: 6%;
   --hot: light-dark(rgb(0 0 0 / .13), rgb(255 255 255 / .16));
   --format-text: light-dark(#b3b6bd, #5c6068);
@@ -70,15 +70,16 @@ body.wide .prompt-inner { max-width: none; }
 body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 - 90px)); }
 
 /* Tools are in the system message, and tool results come back in a user turn. */
-.k-system, .k-tools, .k-tool { --k: var(--k-system); }
+.k-system, .k-prompt, .k-effort, .k-tools, .k-tool { --k: var(--k-system); }
 .k-user, .k-user_turn, .k-tool_result { --k: var(--k-user); }
 .k-assistant, .k-reasoning, .k-content, .k-calls, .k-tool_call, .k-parameter, .k-value { --k: var(--k-model); }
-.k-effort, .k-start, .k-next { --k: var(--k-effort); }
+.k-start, .k-next { --k: var(--k-format); }
 
 .pl { display: flex; }
 /* A part that starts gets a little room above it. Bars of parts that carry on through it
    fill that room, so a part's bar is unbroken from its first row to its last. */
-.pl.starts > .pl-part, .pl.starts > .pl-num, .pl.starts > .pl-text { margin-top: 3px; }
+.pl.starts .pl-part, .pl.starts .pl-num, .pl.starts > .pl-text { margin-top: 3px; }
+.pl-gutter { flex: none; display: flex; position: sticky; left: 0; z-index: 1; background: var(--bg); }
 .pl.starts .pl-bars i.top { margin-top: 3px; }
 .pl-part {
   flex: none; width: 76px; padding-right: 6px; text-align: right; color: var(--muted);
@@ -96,9 +97,11 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
   background: color-mix(in srgb, var(--k) var(--region-strength), var(--bg));
 }
 .wrap .pl-text { white-space: normal; }
-/* Unwrapped, every row is as wide as the longest, and the column scrolls sideways as one. */
-.prompt-body:not(.wrap) .prompt-inner { overflow-x: auto; }
-.prompt-body:not(.wrap) .pl { width: max-content; min-width: 100%; }
+/* Unwrapped, every row is as wide as the longest, and the column scrolls sideways as one,
+   with its own scroll bar at the bottom of the window. */
+.prompt-body:not(.wrap) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+.prompt-body:not(.wrap) .prompt-inner { flex: 1; min-height: 0; width: 100%; overflow: auto; padding-bottom: 40px; }
+.prompt-body:not(.wrap) .prompt-rows { width: max-content; min-width: 100%; }
 .indent { white-space: pre; }
 
 /* Each token is a box, so lines only ever break between tokens. One that's wider than the
