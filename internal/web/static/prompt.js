@@ -6,7 +6,7 @@
 
 const $ = (id) => document.getElementById(id);
 const SWITCHES_KEY = "tack.prompt.switches";
-const DEFAULTS = { changes: true, wrap: true, numbers: true, wide: false, pretty: false };
+const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false };
 const LABELS = {
   start: "Preamble", effort: "Effort", system: "System", prompt: "Prompt", tools: "Tools", tool: "Tool", user_turn: "User",
   user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
@@ -42,6 +42,7 @@ let current = null;
 function applySwitches() {
   const body = $("prompt");
   body.classList.toggle("show-changes", switches.changes);
+  body.classList.toggle("show-cache", switches.cache);
   body.classList.toggle("wrap", switches.wrap);
   body.classList.toggle("numbers", switches.numbers);
   document.body.classList.toggle("wide", switches.wide);
@@ -49,6 +50,7 @@ function applySwitches() {
     button.setAttribute("aria-pressed", String(Boolean(switches[button.dataset.switch])));
   }
   $("legend-changes").hidden = !switches.changes;
+  $("legend-cache").hidden = !switches.cache;
 }
 
 for (const button of document.querySelectorAll("[data-switch]")) {
@@ -94,6 +96,32 @@ function partKey(parts, k) {
   return out.join("/");
 }
 
+// What the host could cache of the prompt being drawn: the size of a block, how many of the
+// prompt's tokens came from the cache (or could have, if the host didn't say), and how many
+// tokens the prompt is. Tokens after it are what the model wrote, which is never cached.
+let cache = { block: 0, cached: -1, prompt: 0 };
+
+function cacheOf(data) {
+  const p = data.prompt;
+  let prompt = 0, at = 0;
+  for (const n of p.tokens) {
+    if (p.generated >= 0 && at >= p.generated) break;
+    prompt++;
+    at += n;
+  }
+  const cached = data.reported_prompt ? (data.reported_cached || 0) : data.previous ? (data.cacheable || 0) : -1;
+  return { block: data.cache_block || 0, cached, prompt };
+}
+
+// The classes a token gets for the cache: the start of a block, and not cached.
+function cacheClasses(t) {
+  if (!cache.block || t >= cache.prompt) return "";
+  let out = "";
+  if (t > 0 && t % cache.block === 0) out += " blk";
+  if (cache.cached >= 0 && t >= cache.cached) out += " nc";
+  return out;
+}
+
 // A row's HTML.
 function rowHTML(r, parts) {
   const part = parts[r.part];
@@ -120,7 +148,8 @@ function rowHTML(r, parts) {
       items += `<span class="tok del${v.cls}">${v.html}</span>`;
       continue;
     }
-    const ins = item.inserted ? " ins" : "";
+    const ins = (item.inserted ? " ins" : "") + cacheClasses(item.token);
+    const blockTitle = ins.includes(" blk") ? ` title="Cache block ${item.token / cache.block + 1} starts here"` : "";
     const piece = (sp) => {
       const v = visible(sp.text);
       return { cls: `${sp.field ? "f" : "t"}${sp.generated ? " g" : ""}${v.cls}`, html: v.html + (sp.newline ? '<span class="ws nl">↵</span>' : "") };
@@ -128,9 +157,9 @@ function rowHTML(r, parts) {
     // A token in one piece is one element; one in several has an element for each.
     if (item.spans.length === 1) {
       const v = piece(item.spans[0]);
-      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}">${v.html}</span>`;
+      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}"${blockTitle}>${v.html}</span>`;
     } else {
-      items += `<span class="tok${ins}" data-t="${item.token}">`;
+      items += `<span class="tok${ins}" data-t="${item.token}"${blockTitle}>`;
       for (const sp of item.spans) {
         const v = piece(sp);
         items += `<span class="${v.cls}">${v.html}</span>`;
@@ -157,6 +186,7 @@ let drawing = 0;
 function render(data, done, eager) {
   const parts = data.prompt.parts;
   const collapsed = new Set(parts.map((_, k) => k).filter((k) => collapsedKeys.has(partKey(parts, k))));
+  cache = cacheOf(data);
   const { rows } = tackPromptLayout.layout(data, { pretty: switches.pretty, collapsed });
   const body = $("prompt");
   const inner = el("div", "prompt-inner");
@@ -226,6 +256,15 @@ function showCounts(data) {
   };
   line("In", prompt, data.reported_prompt);
   if (p.generated >= 0) line("Out", output, data.reported_output);
+  if (data.reported_prompt || data.previous) {
+    const item = el("div", "count");
+    const cached = data.reported_prompt ? data.reported_cached || 0 : null;
+    item.append(el("span", "count-label", "Cached"), el("span", "count-n", (cached ?? data.cacheable ?? 0).toLocaleString("en-US")));
+    let note = cached === null ? "could be" : data.previous ? `could be ${(data.cacheable || 0).toLocaleString("en-US")}` : "";
+    item.append(el("span", cached !== null && data.previous && cached < (data.cacheable || 0) ? "count-off" : "count-note", note));
+    item.title = `The host caches a call's prompt in blocks of ${data.cache_block} tokens, and the next call can reuse the blocks it shares. What the model writes isn't cached.`;
+    box.append(item);
+  }
 }
 
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
@@ -268,7 +307,7 @@ $("prompt").addEventListener("mouseover", (event) => {
       const kind = [...bar.classList].find((c) => c.startsWith("k-"));
       if (kind) keys.add(AUTHOR[kind.slice(2)] || kind);
     }
-    for (const key of ["del", "ins"]) if (box.classList.contains(key)) keys.add(key);
+    for (const key of ["del", "ins", "blk", "nc"]) if (box.classList.contains(key)) keys.add(key);
     for (const key of ["t", "f", "g"]) if (box.classList.contains(key) || box.querySelector("." + key)) keys.add(key);
   }
   for (const item of document.querySelectorAll("[data-legend]")) item.classList.toggle("on", keys.has(item.dataset.legend));

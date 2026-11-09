@@ -15,6 +15,8 @@
   --ins-bg: light-dark(#cdeccf, #1f4a2a);
   --del-bg: light-dark(#f6d2d2, #4d2224);
   --del-text: light-dark(#a1262b, #f19a9c);
+  --cache-mark: light-dark(#55575f, #b8bac0);
+  --cache-hatch: light-dark(rgb(0 0 0 / .22), rgb(255 255 255 / .2));
 }
 
 .prompt-page { display: flex; flex-direction: column; height: 100%; background: var(--bg); color: var(--text); }
@@ -132,6 +134,11 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .legend .tok.ins { background: var(--ins-bg); }
 .legend .tok.del { display: inline; background: var(--del-bg); color: var(--del-text); text-decoration: line-through; }
 .show-changes .tok.ins.hot, .show-changes .tok.del.hot { box-shadow: inset 0 0 0 99px var(--hot); }
+
+/* The host's cache: a mark where each block of tokens starts, and hatching on what wasn't
+   (or can't be) served from it. */
+.show-cache .tok.blk, .legend .tok.blk { box-shadow: inset 2px 0 0 var(--cache-mark); }
+.show-cache .tok.nc, .legend .tok.nc { background-image: repeating-linear-gradient(135deg, var(--cache-hatch) 0 1px, transparent 1px 5px); }
 
 @media (max-width: 1100px) {
   .legend {

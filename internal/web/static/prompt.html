@@ -28,6 +28,7 @@
   <span class="spacer"></span>
   <div class="head-group" role="group" aria-label="What to show">
     <button class="mini toggle" type="button" data-switch="changes">Changes</button>
+    <button class="mini toggle" type="button" data-switch="cache">Cache</button>
     <button class="mini toggle" type="button" data-switch="wrap">Wrap</button>
     <button class="mini toggle" type="button" data-switch="numbers">Line Numbers</button>
     <button class="mini toggle" type="button" data-switch="pretty">Pretty JSON</button>
@@ -49,6 +50,10 @@
   <div id="legend-changes" class="legend-group">
     <span class="legend-item" data-legend="ins"><span class="sample tok ins">text</span>Inserted</span>
     <span class="legend-item" data-legend="del"><span class="sample tok del">text</span>Deleted</span>
+  </div>
+  <div id="legend-cache" class="legend-group">
+    <span class="legend-item" data-legend="blk"><span class="sample tok blk">text</span>Cache Block Starts</span>
+    <span class="legend-item" data-legend="nc"><span class="sample tok nc">text</span>Not Cached</span>
   </div>
   <div id="counts" class="legend-group counts"></div>
 </aside>

@@ -175,6 +175,9 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok((await p.getAttribute("[data-switch=wide]", "aria-pressed")) === "true", "the switches are buttons that stay pressed");
   await p.screenshot({ path: "shots/prompt.png" });
 
+  // The cache: the fake host reports what it cached, so the tokens after it are marked.
+  ok((await p.locator(".count-label", { hasText: "Cached" }).count()) === 1, "how much was cached is shown");
+
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");
   await p.waitForSelector(".pl.k-tool");
@@ -182,6 +185,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForFunction(() => [...document.querySelectorAll(".pl.k-tool .pl-text")].some((t) => parseFloat(getComputedStyle(t).paddingLeft) > 20));
   const indents = await p.evaluate(() => new Set([...document.querySelectorAll(".pl.k-tool .pl-text")].map((t) => getComputedStyle(t).paddingLeft)).size);
   ok(indents > 2, `pretty JSON is drawn indented (${indents} different indents)`);
+  ok((await p.locator(".tok.blk").count()) >= 5, "every cache block's start is marked");
   await p.click("[data-switch=pretty]");
 
   // On a phone.

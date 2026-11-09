@@ -310,5 +310,5 @@ func (s *server) previewPrompt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, core.CallPrompt{Model: body.Model, Prompt: p, Calls: []string{}})
+	writeJSON(w, core.CallPrompt{Model: body.Model, Prompt: p, Calls: []string{}, CacheBlock: core.CacheBlockTokens})
 }
