@@ -161,6 +161,16 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const after = await p.locator(".pl").count();
   ok(tools === 0 || (after > before && (await p.locator(".pl-num:not(:empty)").count()) === lines), `pretty JSON takes more rows, but no more lines (${tools} tool rows, ${before} then ${after})`);
   await p.click("[data-switch=pretty]");
+  // Collapsing a part by its name, and opening it again.
+  const rowsBefore = await p.locator(".pl").count();
+  await p.locator(".pl-part[data-p]", { hasText: "System" }).first().click();
+  await p.waitForSelector(".pl.is-collapsed");
+  const rowsAfter = await p.locator(".pl").count();
+  const note = await p.locator(".collapsed-note").first().textContent();
+  ok(rowsAfter < rowsBefore && /tokens/.test(note), `a part collapses to one row that says what it hides (${rowsBefore} rows, then ${rowsAfter}: ${note})`);
+  await p.click(".collapsed");
+  await p.waitForFunction(() => !document.querySelector(".pl.is-collapsed"));
+  ok((await p.locator(".pl").count()) === rowsBefore, "and opens again");
   await p.click("[data-switch=wide]");
   ok((await p.getAttribute("[data-switch=wide]", "aria-pressed")) === "true", "the switches are buttons that stay pressed");
   await p.screenshot({ path: "shots/prompt.png" });

@@ -85,6 +85,15 @@ function visible(text) {
   return { cls: "", html };
 }
 
+// Which parts are collapsed, by what they are rather than their index, so the same part stays
+// collapsed when moving to another call.
+const collapsedKeys = new Set();
+function partKey(parts, k) {
+  const out = [];
+  for (; k >= 0; k = parts[k].parent) out.unshift(`${parts[k].kind}.${parts[k].message}.${parts[k].call || 0}`);
+  return out.join("/");
+}
+
 // A row's HTML.
 function rowHTML(r, parts) {
   const part = parts[r.part];
@@ -94,12 +103,16 @@ function rowHTML(r, parts) {
   let bars = "";
   for (let d = DEPTHS - 1; d >= 0; d--) {
     const k = r.chain[d];
-    bars += k === undefined ? "<i></i>" : `<i class="k-${parts[k].kind}${r.fresh.includes(k) ? " top" : ""}"></i>`;
+    bars += k === undefined ? "<i></i>" : `<i class="k-${parts[k].kind}${r.fresh.includes(k) ? " top" : ""}" data-p="${k}"></i>`;
   }
   let style = "";
   if (r.indent || r.hang) style += `padding-left:calc(8px + ${r.indent + r.hang}ch);`;
   if (r.hang) style += `text-indent:-${r.hang}ch;`;
   let items = "";
+  if (r.collapsed !== undefined) {
+    const lines = `${r.lines.toLocaleString("en-US")} ${r.lines === 1 ? "line" : "lines"}`;
+    items = `<span class="collapsed" data-p="${r.collapsed}" title="Show it">…</span><span class="collapsed-note">${lines}, ${r.tokens.toLocaleString("en-US")} tokens</span>`;
+  }
   for (const item of r.items) {
     if (item.deleted !== undefined) {
       const v = visible(item.deleted.replaceAll("\n", "↵"));
@@ -124,10 +137,12 @@ function rowHTML(r, parts) {
       items += "</span>";
     }
   }
+  let number = r.number === null ? "" : String(r.number);
+  if (r.collapsed !== undefined && r.lastNumber !== r.number) number += `–${r.lastNumber}`;
   // The name, bars and number stay put when the text scrolls sideways.
-  return `<div class="pl k-${part.kind}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
-    `<div class="pl-gutter"><div class="pl-part" title="${escapeHTML(title)}">${escapeHTML(label)}</div>` +
-    `<div class="pl-bars">${bars}</div><div class="pl-num">${r.number === null ? "" : r.number}</div></div>` +
+  return `<div class="pl k-${part.kind}${r.collapsed !== undefined ? " is-collapsed" : ""}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
+    `<div class="pl-gutter"><div class="pl-part" title="${escapeHTML(title)}"${named === undefined ? "" : ` data-p="${named}"`}>${escapeHTML(label)}</div>` +
+    `<div class="pl-bars">${bars}</div><div class="pl-num">${number}</div></div>` +
     `<div class="pl-text"${style ? ` style="${style}"` : ""}>${items}</div></div>`;
 }
 
@@ -137,8 +152,11 @@ function rowHTML(r, parts) {
 const BLOCK_ROWS = 200;
 let drawing = 0;
 
-function render(data, done) {
-  const { rows, parts } = tackPromptLayout.layout(data, { pretty: switches.pretty });
+// eager draws every block at once, for when what's on screen has to stay put.
+function render(data, done, eager) {
+  const parts = data.prompt.parts;
+  const collapsed = new Set(parts.map((_, k) => k).filter((k) => collapsedKeys.has(partKey(parts, k))));
+  const { rows } = tackPromptLayout.layout(data, { pretty: switches.pretty, collapsed });
   const body = $("prompt");
   const inner = el("div", "prompt-inner");
   // Rows go in a box as wide as the widest, so every row's background reaches the end when
@@ -166,6 +184,7 @@ function render(data, done) {
     at = end;
   };
   block();
+  if (eager) while (at < rows.length) block();
   const more = () => {
     if (generation !== drawing) return;
     const until = performance.now() + 12;
@@ -203,6 +222,24 @@ function showCounts(data) {
   line("In", prompt, data.reported_prompt);
   if (p.generated >= 0) line("Out", output, data.reported_output);
 }
+
+// Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
+$("prompt").addEventListener("click", (event) => {
+  const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
+  if (!target || !current) return;
+  const key = partKey(current.data.prompt.parts, Number(target.dataset.p));
+  if (collapsedKeys.has(key)) collapsedKeys.delete(key);
+  else collapsedKeys.add(key);
+  // Keep the row that was clicked where it was on the screen.
+  const row = target.closest(".pl");
+  const top = row.getBoundingClientRect().top;
+  const scroller = switches.wrap ? $("prompt") : $("prompt").querySelector(".prompt-inner");
+  const scrolled = scroller.scrollTop;
+  render(current.data, null, true);
+  const again = [...$("prompt").querySelectorAll(`.pl [data-p="${target.dataset.p}"]`)][0]?.closest(".pl");
+  const newScroller = switches.wrap ? $("prompt") : $("prompt").querySelector(".prompt-inner");
+  newScroller.scrollTop = again ? scrolled + again.getBoundingClientRect().top - top : scrolled;
+});
 
 // Pointing at a token shades it, and marks what the legend says about it.
 let hot = [];

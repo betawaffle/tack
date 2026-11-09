@@ -90,6 +90,14 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .pl-bars { flex: none; display: flex; gap: 2px; }
 .pl-bars i { width: 3px; background: var(--k, transparent); }
 .pl-bars i:not([class]) { background: transparent; }
+/* A bar is narrow, so it's easier to hit than it looks. */
+.pl-bars i[data-p] { cursor: pointer; box-sizing: content-box; padding: 0 2px; margin: 0 -2px; background-clip: content-box; }
+.pl-bars i[data-p]:hover { background-color: var(--text); }
+.pl-part[data-p] { cursor: pointer; }
+.pl-part[data-p]:hover { color: var(--text); }
+.collapsed { cursor: pointer; padding: 0 6px; border-radius: 4px; background: var(--hover); color: var(--text); }
+.collapsed:hover { background: var(--line); }
+.collapsed-note { margin-left: 10px; color: var(--muted); font: 11.5px/1.6 var(--ui); }
 .pl-num { flex: none; width: 0; overflow: hidden; text-align: right; color: var(--muted); user-select: none; opacity: .7; }
 .numbers .pl-num { width: 46px; padding-right: 10px; }
 .pl-text {

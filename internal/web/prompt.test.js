@@ -132,3 +132,23 @@ test("a wrapped string hangs under its first character", () => {
   assert.equal(hangFor(' "write",'), 2);
   assert.equal(hangFor("}, "), 0);
 });
+
+test("a collapsed part is one row that says what it hides, and the numbering carries on", () => {
+  const full = layout(data, {});
+  const tools = full.parts.findIndex((p) => p.kind === "tools");
+  const inside = full.rows.filter((r) => r.chain.includes(tools));
+  const l = layout(data, { collapsed: new Set([tools]) });
+  const rows = l.rows.filter((r) => r.chain.includes(tools));
+  assert.equal(rows.length, 1);
+  const [row] = rows;
+  assert.equal(row.collapsed, tools);
+  assert.equal(row.items.length, 0);
+  const numbers = inside.map((r) => r.number).filter((n) => n !== null);
+  assert.equal(row.number, numbers[0]);
+  assert.equal(row.lastNumber, numbers.at(-1));
+  assert.equal(row.lines, numbers.length);
+  assert.ok(row.tokens > 10);
+  // The rows after it are unchanged.
+  assert.deepEqual(l.rows.at(-1), full.rows.at(-1));
+  assert.equal(l.rows.length, full.rows.length - inside.length + 1);
+});

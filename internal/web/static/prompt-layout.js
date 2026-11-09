@@ -12,6 +12,7 @@
 // - Pretty-printed JSON breaks rows where canonical pretty-printing would, even inside a
 //   token, and indents by padding: the text's own spaces after a break still show.
 // - A token that's split across rows is in each of them, with the same index.
+// - A collapsed part is one row, with everything in it hidden.
 "use strict";
 
 const tackPromptLayout = (() => {
@@ -96,6 +97,8 @@ const tackPromptLayout = (() => {
   //   indent and hang: pretty-printing's indent and string hang, in characters;
   //   items: what's in it, in order. An item is {deleted: text} or a token: {token, inserted,
   //   spans: [{text, field, generated, newline}]}.
+  // A collapsed part's row has collapsed (the part), no items, and lastNumber, lines and tokens
+  // for what it hides.
   function layout(data, options = {}) {
     const p = data.prompt;
     const parts = p.parts;
@@ -216,7 +219,41 @@ const tackPromptLayout = (() => {
         if (parts[r.part].kind === "tool") r.hang = hangFor(rowText(r));
       }
     }
-    return { rows, parts, text };
+    return { rows: collapse(rows, options.collapsed), parts, text };
+  }
+
+  // collapse turns the rows of each collapsed part into one row for it, which says how many
+  // lines and tokens it holds. Its number is the range of the lines in it. A part inside a
+  // collapsed one goes with it.
+  function collapse(rows, collapsed) {
+    if (!collapsed || !collapsed.size) return rows;
+    const out = [];
+    let tokens = null;
+    for (const r of rows) {
+      const at = r.chain.findIndex((k) => collapsed.has(k));
+      if (at < 0) {
+        out.push(r);
+        continue;
+      }
+      const c = r.chain[at];
+      let row = out.at(-1);
+      if (!row || row.collapsed !== c) {
+        row = {
+          part: c, chain: r.chain.slice(0, at + 1), fresh: r.fresh.filter((k) => r.chain.indexOf(k) <= at),
+          starts: true, number: null, lastNumber: null, indent: 0, hang: 0, items: [], collapsed: c, lines: 0, tokens: 0,
+        };
+        out.push(row);
+        tokens = new Set();
+      }
+      if (r.number !== null) {
+        row.number ??= r.number;
+        row.lastNumber = r.number;
+        row.lines++;
+      }
+      for (const item of r.items) if (item.spans) tokens.add(item.token);
+      row.tokens = tokens.size;
+    }
+    return out;
   }
 
   // A row's text as written, without deleted text.
