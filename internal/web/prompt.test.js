@@ -145,10 +145,13 @@ test("a collapsed part is one row that says what it hides, and the numbering car
   const [row] = rows;
   assert.equal(row.collapsed, tools);
   assert.equal(row.items.length, 0);
-  const numbers = inside.map((r) => r.number).filter((n) => n !== null);
-  assert.equal(row.number, numbers[0]);
-  assert.equal(row.lastNumber, numbers.at(-1));
-  assert.equal(row.lines, numbers.length);
+  const lines = [...new Set(inside.map((r) => r.line))];
+  assert.equal(row.number, lines[0]);
+  assert.equal(row.lastNumber, lines.at(-1));
+  assert.equal(row.lines, lines.length);
+  // A part inside a line is on one line, not none.
+  const stop = full.parts.findIndex((p) => p.kind === "stop");
+  assert.equal(layout(data, { collapsed: new Set([stop]) }).rows.find((r) => r.collapsed === stop).lines, 1);
   assert.ok(row.tokens > 10);
   // The rows after it are unchanged.
   assert.deepEqual(l.rows.at(-1), full.rows.at(-1));

@@ -160,7 +160,8 @@ function rowHTML(r, parts) {
   let items = "";
   if (r.collapsed !== undefined) {
     const lines = `${r.lines.toLocaleString("en-US")} ${r.lines === 1 ? "line" : "lines"}`;
-    items = `<span class="collapsed" data-p="${r.collapsed}" title="Show it">…</span><span class="collapsed-note">${lines}, ${r.tokens.toLocaleString("en-US")} tokens</span>` +
+    const tokens = `${r.tokens.toLocaleString("en-US")} ${r.tokens === 1 ? "token" : "tokens"}`;
+    items = `<span class="collapsed" data-p="${r.collapsed}" title="Show it">…</span><span class="collapsed-note">${lines}, ${tokens}</span>` +
       (r.changed ? '<span class="collapsed-changed">Changed</span>' : "");
   }
   for (const item of r.items) {

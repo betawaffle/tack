@@ -93,7 +93,8 @@ const tackPromptLayout = (() => {
 
   // layout returns the rows. Each row has:
   //   part: the part it's for; chain: that part and the ones around it, outermost first;
-  //   fresh: those in chain that start here; number: its line number, or null;
+  //   fresh: those in chain that start here; number: its line number, or null; line: the line
+  //   it's on;
   //   indent and hang: pretty-printing's indent and string hang, in characters;
   //   items: what's in it, in order. An item is {deleted: text} or a token: {token, inserted,
   //   spans: [{text, field, part, generated, newline}]}.
@@ -144,9 +145,11 @@ const tackPromptLayout = (() => {
       const fresh = kinds.filter((k) => !started.has(k));
       for (const k of fresh) started.add(k);
       const previous = rows.at(-1);
+      const numbered = lineDone;
+      if (numbered) number++;
       row = {
         part: partIndex, chain: kinds, fresh, starts: !previous || previous.part !== partIndex,
-        number: lineDone ? ++number : null, indent, hang: 0, items: [],
+        number: numbered ? number : null, line: number, indent, hang: 0, items: [],
       };
       rows.push(row);
       lineDone = false;
@@ -247,9 +250,10 @@ const tackPromptLayout = (() => {
         out.push(row);
         tokens = new Set();
       }
-      if (r.number !== null) {
-        row.number ??= r.number;
-        row.lastNumber = r.number;
+      // The lines it's on, counting one it only shares with what's around it.
+      if (row.lastNumber !== r.line) {
+        row.number ??= r.line;
+        row.lastNumber = r.line;
         row.lines++;
       }
       for (const item of r.items) {

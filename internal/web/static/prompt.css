@@ -102,7 +102,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .collapsed-note { margin-left: 10px; color: var(--muted); font: 11.5px/1.6 var(--ui); }
 .collapsed-changed { margin-left: 10px; padding: 0 6px; border-radius: 4px; background: var(--ins-bg); color: var(--text); font: 11.5px/1.6 var(--ui); }
 .pl-num { flex: none; width: 0; overflow: hidden; text-align: right; color: var(--muted); user-select: none; opacity: .7; }
-.numbers .pl-num { width: 46px; padding-right: 10px; }
+.numbers .pl-num { width: 52px; padding-right: 8px; }
 .pl-text {
   flex: 1; min-width: 0; padding: 0 0 0 8px; white-space: nowrap;
   background: color-mix(in srgb, var(--k) var(--region-strength), var(--bg));
@@ -170,7 +170,8 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .edit-box:focus { outline: none; border-color: var(--text); }
 
 /* A collapsed part's line range can be wider than the column; it runs to the left. */
-.is-collapsed .pl-num { display: flex; justify-content: flex-end; overflow: visible; white-space: nowrap; font-size: 11px; }
+.is-collapsed .pl-num { display: flex; justify-content: flex-end; white-space: nowrap; font-size: 10px; letter-spacing: -.02em; }
+.numbers .is-collapsed .pl-num { padding-right: 4px; }
 
 /* The call controls under a draft. */
 .send-bar {
