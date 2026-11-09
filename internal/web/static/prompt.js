@@ -324,6 +324,34 @@ function collapseAll(collapsed) {
 $("collapse-all").addEventListener("click", () => collapseAll(true));
 $("expand-all").addEventListener("click", () => collapseAll(false));
 
+// keepView draws again with the first line on the screen where it was. The text before it is
+// the same, so its line number finds it again.
+function keepView(draw) {
+  const box = scroller().getBoundingClientRect();
+  let line = null, top = 0;
+  for (const num of $("prompt").querySelectorAll(".pl:not([hidden]) .pl-num")) {
+    const rect = num.getBoundingClientRect();
+    if (rect.bottom > box.top && num.textContent && !num.textContent.includes("–")) {
+      line = num.textContent;
+      top = rect.top;
+      break;
+    }
+  }
+  const scrolled = scroller().scrollTop;
+  const result = draw();
+  const settle = () => {
+    const again = line && [...$("prompt").querySelectorAll(".pl-num")].find((n) => n.textContent === line);
+    if (!again) {
+      scroller().scrollTop = scrolled;
+      return;
+    }
+    for (let block = again.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
+    scroller().scrollTop += again.getBoundingClientRect().top - top;
+  };
+  if (result && result.then) return result.then(settle);
+  settle();
+}
+
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
 $("prompt").addEventListener("click", (event) => {
   const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
@@ -390,7 +418,7 @@ async function startDraft() {
   for (const call of reply.tool_calls || []) request.messages.push({ role: "tool", tool_call_id: call.id, content: "" });
   if (!reply.tool_calls) request.messages.push({ role: "user", content: "" });
   draft = { conv, call: data.call, from, before, request };
-  showSendBar();
+  await showSendBar();
   await previewDraft();
 }
 
@@ -412,16 +440,18 @@ async function previewDraft(anchor) {
   $("prev").disabled = $("next").disabled = true;
   $("edit").textContent = "Stop Editing";
   document.body.classList.add("drafting");
-  if (anchor === undefined) render(data, null, true);
+  if (anchor === undefined) keepView(() => render(data, null, true));
   else keepPlace(anchor, () => render(data, null, true));
 }
 
 async function stopDraft() {
   draft = null;
-  $("send-bar").hidden = true;
   $("edit").textContent = "Edit";
-  await load();
-  document.body.classList.remove("drafting");
+  await keepView(async () => {
+    $("send-bar").hidden = true;
+    await load();
+    document.body.classList.remove("drafting");
+  });
 }
 
 $("edit").addEventListener("click", () => (draft ? stopDraft() : startDraft()));
@@ -538,15 +568,16 @@ $("prompt").addEventListener("click", (event) => {
   if (span && fieldOf(parts, Number(span.dataset.f))) return openEditor(Number(span.dataset.f));
   const row = event.target.closest(".pl");
   if (!row) return;
-  for (const bar of row.querySelectorAll(".pl-bars [data-p]")) {
-    const k = Number(bar.dataset.p);
-    if (fieldOf(parts, k)) return openEditor(k);
-  }
-  // A row with nothing to edit, like <｜User｜>, opens a part inside it that's still empty.
-  for (const bar of row.querySelectorAll(".pl-bars [data-p]")) {
-    const k = parts.findIndex((p, i) => p.parent === Number(bar.dataset.p) && fieldOf(parts, i) && !fieldOf(parts, i).get());
-    if (k >= 0) return openEditor(k);
-  }
+  // The row's own part is its innermost bar, the first one drawn.
+  const own = Number(row.querySelector(".pl-bars [data-p]")?.dataset.p);
+  if (Number.isNaN(own)) return;
+  if (fieldOf(parts, own)) return openEditor(own);
+  // A row with nothing to edit of its own, like a parameter's or <｜User｜>, opens a part
+  // inside it: one that's still empty, or else its only one.
+  const inside = parts.map((p, i) => i).filter((i) => parts[i].parent === own && fieldOf(parts, i));
+  const empty = inside.find((i) => !fieldOf(parts, i).get());
+  if (empty !== undefined) return openEditor(empty);
+  if (inside.length === 1) return openEditor(inside[0]);
 });
 
 // The call controls, under a draft: the effort and most tokens always, the rest under More,

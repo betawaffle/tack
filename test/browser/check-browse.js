@@ -186,6 +186,15 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting"));
   ok((await p.innerText("#which")) === "Draft of the next call", "a draft starts from the call");
+  // Clicking a parameter's row opens its value, not some other part nearby.
+  const paramRow = p.locator(".pl.k-parameter").first();
+  if (await paramRow.count()) {
+    await paramRow.locator(".tok.t, .tok:has(.t)").first().click();
+    await p.waitForSelector(".edit-box");
+    ok(!(await p.inputValue(".edit-box")).includes("<"), "a parameter's row opens its value");
+    await p.keyboard.press("Escape");
+    await p.waitForFunction(() => !document.querySelector(".edit-box"));
+  }
   // It ends with an empty user message, opened from its <｜User｜> row.
   await p.locator(".pl.k-user_turn").last().click();
   await p.waitForSelector(".edit-box");

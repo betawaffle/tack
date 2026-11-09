@@ -192,3 +192,6 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .send-estimate { font: 12px var(--mono); }
 .send-bar .mini.spends { height: 28px; padding: 0 16px; }
 .drafting .legend { bottom: 64px; }
+/* Room past the last row, so redrawing doesn't pull the scroll back when it's down there. */
+.prompt-body.wrap { padding-bottom: 40vh; }
+.prompt-body:not(.wrap) .prompt-inner { padding-bottom: 40vh; }
