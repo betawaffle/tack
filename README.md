@@ -396,8 +396,10 @@ tack-show -tokens         # counted tokens against what hosts reported, for ever
 
 `go test ./...` covers the server, including a record in the first event format
 (`internal/core/testdata/record-v1`). Raw data is immutable, so every build has to
-read that record and render the exact requests it sent. The Markdown parser has its own tests, which
-need Node: `node --test internal/web/`.
+read that record and render the exact requests it sent. The Markdown parser and the prompt page's layout have
+their own tests, which need Node: `node --test internal/web/`. The layout's tests run on a
+prompt the Go renderer made, `internal/tokens/testdata/view_fixture.json`; after changing the
+renderer, `go test ./internal/tokens -run Fixture -update` writes it again.
 
 There are also optional browser tests in `test/browser/`. Nothing else depends
 on them, and they're the only part of tack that uses npm. They drive every
