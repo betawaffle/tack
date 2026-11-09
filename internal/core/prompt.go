@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json/jsontext"
 	"fmt"
+	"strings"
 
 	"github.com/betawaffle/tack/internal/store"
 	"github.com/betawaffle/tack/internal/tokens"
@@ -208,3 +209,123 @@ func pieces(text string, lengths []int) []string {
 // CacheBlockTokens is how many tokens the host caches at a time. Morph's, found from the record by
 // tack-show -cache: everything it reported as cached was a whole number of these.
 const CacheBlockTokens = 512
+
+// manualSource is a manual call's request and what it wrote, read under mu.
+func (c *Core) manualSource(m *manualCall) callSource {
+	src := callSource{id: "manual/" + m.started.Call, model: m.started.Model, request: m.started.Request}
+	ev := m.finished
+	if ev == nil {
+		return src
+	}
+	src.host = ev.Host
+	if len(ev.Usage) > 0 {
+		src.stats = statsFrom(ev)
+	}
+	if ev.Error == "" && usable(ev) {
+		out := &tokens.Output{}
+		if ev.Text != "" {
+			out.Content = c.text([]store.Part{{Block: ev.Text}})
+		}
+		if ev.Reasoning != "" {
+			out.Reasoning = c.text([]store.Part{{Block: ev.Reasoning}})
+		}
+		for _, call := range ev.ToolCalls {
+			args, _ := c.cfg.Store.Get(call.Arguments)
+			out.Calls = append(out.Calls, tokens.OutputCall{Name: call.Name, Arguments: string(args)})
+		}
+		src.out = out
+	}
+	return src
+}
+
+// sourceOf finds a call by conversation/call or manual/call. The caller holds mu.
+func (c *Core) sourceOf(ref string) (*callSource, string) {
+	where, id, ok := strings.Cut(ref, "/")
+	if !ok {
+		return nil, ""
+	}
+	if where == "manual" {
+		m := c.manualCall(id)
+		if m == nil {
+			return nil, ""
+		}
+		src := c.manualSource(m)
+		return &src, m.started.From
+	}
+	conv := c.convs[where]
+	if conv == nil {
+		return nil, ""
+	}
+	for _, it := range conv.items {
+		if it.callID == id && it.request != "" {
+			src := c.callSource(it)
+			return &src, ""
+		}
+	}
+	return nil, ""
+}
+
+// ManualRequest is a manual call's request and reply, to start a draft from.
+func (c *Core) ManualRequest(id string) (CallRequest, error) {
+	c.mu.Lock()
+	src, _ := c.sourceOf("manual/" + id)
+	c.mu.Unlock()
+	if src == nil {
+		return CallRequest{}, ErrNotFound
+	}
+	body, err := c.cfg.Store.Get(src.request)
+	if err != nil {
+		return CallRequest{}, err
+	}
+	return CallRequest{Model: src.model, Request: body, Output: src.out}, nil
+}
+
+// ManualPrompt shows a manual call as the model saw it, set against the call its draft was
+// made from. Its calls are the chain of drafts it came from, oldest first, as
+// conversation/call or manual/call.
+func (c *Core) ManualPrompt(id string) (CallPrompt, error) {
+	c.mu.Lock()
+	this, from := c.sourceOf("manual/" + id)
+	if this == nil {
+		c.mu.Unlock()
+		return CallPrompt{}, ErrNotFound
+	}
+	chain := []string{this.id}
+	var before *callSource
+	for ref, n := from, 0; ref != "" && n < 1000; n++ {
+		src, next := c.sourceOf(ref)
+		if src == nil {
+			break
+		}
+		if before == nil {
+			before = src
+		}
+		chain = append([]string{ref}, chain...)
+		ref = next
+	}
+	c.mu.Unlock()
+	out := CallPrompt{Call: this.id, Model: this.model, Host: this.host, Calls: chain, CacheBlock: CacheBlockTokens}
+	if this.stats != nil {
+		out.ReportedPrompt, out.ReportedOutput = this.stats.PromptTokens, this.stats.CompletionTokens
+	}
+	body, err := c.cfg.Store.Get(this.request)
+	if err != nil {
+		return out, err
+	}
+	if out.Prompt, err = tokens.Render(this.model, body, this.out); err != nil {
+		return out, err
+	}
+	if before == nil {
+		return out, nil
+	}
+	prev, err := c.cfg.Store.Get(before.request)
+	if err != nil {
+		return out, err
+	}
+	was, err := tokens.Render(before.model, prev, before.out)
+	if err != nil {
+		return out, nil
+	}
+	out.Previous = from
+	return out, compare(&out, this.model, was)
+}

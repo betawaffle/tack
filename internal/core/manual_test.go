@@ -15,7 +15,7 @@ func TestManualCallIsSentExactlyAndRecorded(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
 	body := []byte(`{"model":"test/model","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"The"}],"provider":{"order":["morph/fp8"]},"stream":true,"temperature":0}`)
-	id, updates, err := c.SendManual(body)
+	id, updates, err := c.SendManual(body, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestManualCallRefusesWhatIsntARequest(t *testing.T) {
 	f := newFake(t)
 	c := f.open()
 	for _, body := range []string{``, `[]`, `{"messages":[]}`, `{"model":"m"`, `"x"`} {
-		if _, _, err := c.SendManual([]byte(body)); !errors.Is(err, ErrBadRequest) {
+		if _, _, err := c.SendManual([]byte(body), ""); !errors.Is(err, ErrBadRequest) {
 			t.Errorf("%q: %v", body, err)
 		}
 	}
@@ -91,7 +91,7 @@ func TestManualCallCanBeCancelledAndHoldsUpARestart(t *testing.T) {
 	}
 	defer close(release)
 	c := f.open()
-	id, updates, err := c.SendManual([]byte(`{"model":"test/model","messages":[{"role":"user","content":"Hi"}]}`))
+	id, updates, err := c.SendManual([]byte(`{"model":"test/model","messages":[{"role":"user","content":"Hi"}]}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestManualCallCanBeCancelledAndHoldsUpARestart(t *testing.T) {
 		t.Fatal("drained while a manual call was running")
 	case <-time.After(50 * time.Millisecond):
 	}
-	if _, _, err := c.SendManual([]byte(`{"model":"m"}`)); !errors.Is(err, ErrRestarting) {
+	if _, _, err := c.SendManual([]byte(`{"model":"m"}`), ""); !errors.Is(err, ErrRestarting) {
 		t.Errorf("a new one during a restart: %v", err)
 	}
 	if list := c.ManualCalls(); len(list) != 1 || !list[0].Running {

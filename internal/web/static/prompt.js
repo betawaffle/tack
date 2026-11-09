@@ -340,7 +340,8 @@ let draft = null;
 
 async function startDraft() {
   const { conv, data } = current;
-  const res = await fetch(`/api/conversations/${conv}/calls/${data.call}/request`);
+  const from = conv === "manual" ? data.call : `${conv}/${data.call}`;
+  const res = await fetch(conv === "manual" ? `/api/manual-calls/${data.call.split("/")[1]}/request` : `/api/conversations/${conv}/calls/${data.call}/request`);
   if (!res.ok) {
     $("error").textContent = (await res.text()) || res.statusText;
     $("error").hidden = false;
@@ -356,7 +357,8 @@ async function startDraft() {
   }
   request.messages.push(reply);
   for (const call of reply.tool_calls || []) request.messages.push({ role: "tool", tool_call_id: call.id, content: "" });
-  draft = { conv, call: data.call, before, request };
+  draft = { conv, call: data.call, from, before, request };
+  showSendBar();
   await previewDraft();
 }
 
@@ -384,6 +386,7 @@ async function previewDraft(anchor) {
 
 async function stopDraft() {
   draft = null;
+  $("send-bar").hidden = true;
   $("edit").textContent = "Edit";
   await load();
   document.body.classList.remove("drafting");
@@ -502,6 +505,122 @@ $("prompt").addEventListener("click", (event) => {
   }
 });
 
+// The call controls, under a draft: the effort and most tokens always, the rest under More,
+// with what the call could cost, and Send. What's set here goes in the draft's request.
+const PAGE_REQUIRED = document.querySelector('meta[name="tack-page"]')?.dataset.required || "";
+let efforts = null;
+let estimating = 0;
+
+async function showSendBar() {
+  if (!efforts) {
+    try {
+      efforts = (await (await fetch("/api/defaults")).json()).efforts || [];
+    } catch {
+      efforts = [];
+    }
+  }
+  const req = draft.request;
+  const effort = $("send-effort");
+  effort.replaceChildren(el("option", "", "Host's default"));
+  effort.firstChild.value = "";
+  for (const name of efforts) {
+    const option = el("option", "", name[0].toUpperCase() + name.slice(1));
+    option.value = name;
+    effort.append(option);
+  }
+  effort.value = req.reasoning?.effort || "";
+  $("send-max").value = req.max_tokens ?? "";
+  for (const input of document.querySelectorAll("[data-param]")) input.value = req[input.dataset.param] ?? "";
+  $("send-bar").hidden = false;
+  estimate();
+}
+
+// A number from a box, or undefined to leave it out.
+const numberIn = (input) => (input.value.trim() === "" ? undefined : Number(input.value));
+
+function setParam(key, value) {
+  if (value === undefined || Number.isNaN(value)) delete draft.request[key];
+  else draft.request[key] = value;
+}
+
+$("send-effort").addEventListener("change", () => {
+  const value = $("send-effort").value;
+  if (value) draft.request.reasoning = { ...(draft.request.reasoning || {}), effort: value };
+  else if (draft.request.reasoning) {
+    delete draft.request.reasoning.effort;
+    if (!Object.keys(draft.request.reasoning).length) delete draft.request.reasoning;
+  }
+  // The effort is written into the prompt, so it's drawn again.
+  previewDraft();
+  estimate();
+});
+$("send-max").addEventListener("change", () => {
+  setParam("max_tokens", numberIn($("send-max")));
+  estimate();
+});
+for (const input of document.querySelectorAll("[data-param]")) {
+  input.addEventListener("change", () => setParam(input.dataset.param, numberIn(input)));
+}
+
+async function estimate() {
+  const mine = ++estimating;
+  const box = $("send-estimate");
+  try {
+    const res = await fetch("/api/estimate", { method: "POST", body: JSON.stringify(draft.request) });
+    const e = await res.json();
+    if (mine !== estimating) return;
+    const parts = [];
+    if (e.least_known) parts.push(`at least ${tackMoney.format(e.least_pico)}`);
+    if (e.likely_known) parts.push(`likely ${tackMoney.format(e.likely_pico)}`);
+    if (e.most_known) parts.push(`at most ${tackMoney.format(e.most_pico)}`);
+    box.textContent = parts.length ? parts.join(", ") : "No estimate";
+  } catch {
+    if (mine === estimating) box.textContent = "No estimate";
+  }
+}
+
+// Send sends the draft as a call of its own, then shows that call.
+$("send").addEventListener("click", async () => {
+  const button = $("send");
+  button.disabled = true;
+  button.textContent = "Sending…";
+  $("error").hidden = true;
+  let id = null;
+  try {
+    const res = await fetch(`/api/manual-calls?from=${encodeURIComponent(draft.from)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Tack-Page-Required": PAGE_REQUIRED },
+      body: JSON.stringify(draft.request),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    let failed = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffered.indexOf("\n")) >= 0) {
+        const u = JSON.parse(buffered.slice(0, nl));
+        buffered = buffered.slice(nl + 1);
+        if (u.kind === "call") id = u.id;
+        if (u.kind === "error") failed = u.text;
+        if (u.kind === "content" || u.kind === "reasoning") button.textContent = "Receiving…";
+      }
+    }
+    if (failed) throw new Error(failed);
+  } catch (err) {
+    $("error").textContent = `Sending failed: ${err.message}`;
+    $("error").hidden = false;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send";
+  }
+  if (id) location.hash = `manual/${id}`;
+});
+
 // A made-up conversation of about this many tokens, of every kind of part, for seeing how
 // the page copes with a big prompt: /prompt#synthetic/250000.
 function syntheticRequest(tokens) {
@@ -568,10 +687,12 @@ async function load() {
   if (draft) {
     // Going to another call throws the draft away.
     draft = null;
+    $("send-bar").hidden = true;
     document.body.classList.remove("drafting");
     $("edit").textContent = "Edit";
   }
   if (conv === "synthetic") return loadSynthetic(call);
+  if (conv === "manual") return loadManual(call);
   $("back").href = conv ? `/#${conv}` : "/";
   $("error").hidden = true;
   if (!conv) {
@@ -608,11 +729,36 @@ async function load() {
   render(data);
 }
 
+// A sent draft: shown like any call, with the chain of drafts it came from to move along.
+async function loadManual(id) {
+  $("error").hidden = true;
+  const res = await fetch(`/api/manual-calls/${id}/prompt`);
+  if (!res.ok) {
+    $("error").textContent = (await res.text()) || res.statusText;
+    $("error").hidden = false;
+    $("prompt").replaceChildren();
+    return;
+  }
+  const data = await res.json();
+  current = { conv: "manual", data };
+  const root = data.calls.find((c) => !c.startsWith("manual/"));
+  $("back").href = root ? `/#${root.split("/")[0]}` : "/";
+  $("edit").hidden = false;
+  const n = data.calls.indexOf(data.call);
+  $("which").textContent = `Sent draft, ${n + 1} of ${data.calls.length}`;
+  $("prev").disabled = n <= 0;
+  $("next").disabled = n >= data.calls.length - 1;
+  document.title = "Sent draft · tack";
+  render(data);
+}
+
 function go(step) {
   if (!current) return;
   const calls = current.data.calls;
   const n = calls.indexOf(current.data.call) + step;
-  if (n >= 0 && n < calls.length) location.hash = `${current.conv}/${calls[n]}`;
+  if (n < 0 || n >= calls.length) return;
+  // A sent draft's chain names each call in full; a conversation's are its own.
+  location.hash = calls[n].includes("/") ? calls[n] : `${current.conv}/${calls[n]}`;
 }
 
 $("prev").addEventListener("click", () => go(-1));

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"math"
 	"strconv"
@@ -179,8 +180,12 @@ func (c *Core) noteProcessed(model string, ev *store.Event) {
 // Estimate is three numbers for the next call: the least it could cost, the least it's likely
 // to, with the shortest reply ever seen from the model, and the most it could.
 type Estimate struct {
-	Least, Likely, Most                Pico
-	LeastKnown, LikelyKnown, MostKnown bool
+	Least       Pico `json:"least_pico"`
+	Likely      Pico `json:"likely_pico"`
+	Most        Pico `json:"most_pico"`
+	LeastKnown  bool `json:"least_known"`
+	LikelyKnown bool `json:"likely_known"`
+	MostKnown   bool `json:"most_known"`
 }
 
 // estimateFor works out the estimate of the request from prices. The caller holds mu.
@@ -199,9 +204,46 @@ func (c *Core) estimateFor(endpoints []openrouter.Endpoint, settings store.Setti
 		out.Likely, out.LikelyKnown = out.Least+Pico(shortest)*r.completion, true
 	}
 	if longest, ok := longestReply(endpoints, settings.Host, tokens); ok {
+		if asked := maxTokensOf(body); asked > 0 {
+			longest = min(longest, asked)
+		}
 		out.Most, out.MostKnown = Pico(tokens)*r.maxPrompt+Pico(longest)*r.maxCompletion, true
 	}
 	return out
+}
+
+// maxTokensOf is the most a request asks the model to write, or 0 if it doesn't say.
+func maxTokensOf(body []byte) int {
+	var limits struct {
+		MaxTokens           int `json:"max_tokens"`
+		MaxCompletionTokens int `json:"max_completion_tokens"`
+	}
+	if json.Unmarshal(body, &limits, json.RejectUnknownMembers(false)) != nil {
+		return 0
+	}
+	if limits.MaxCompletionTokens > 0 && (limits.MaxTokens == 0 || limits.MaxCompletionTokens < limits.MaxTokens) {
+		return limits.MaxCompletionTokens
+	}
+	return limits.MaxTokens
+}
+
+// EstimateRequest is what a request body would cost to send, from its model's prices and the
+// host its provider order names first.
+func (c *Core) EstimateRequest(ctx context.Context, body []byte) (Estimate, error) {
+	var head struct {
+		Model    string         `json:"model"`
+		Provider jsontext.Value `json:"provider"`
+	}
+	if err := json.Unmarshal(body, &head, json.RejectUnknownMembers(false)); err != nil || head.Model == "" {
+		return Estimate{}, ErrBadRequest
+	}
+	endpoints, ok := c.prices(ctx, head.Model)
+	if !ok {
+		return Estimate{}, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.estimateFor(endpoints, store.Settings{Model: head.Model, Host: manualHost(head.Provider)}, body), nil
 }
 
 // minimumFor is the least the request could cost, given prices, or false if it can't be

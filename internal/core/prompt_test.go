@@ -67,6 +67,20 @@ func TestACallsPromptIsShownWithItsReplyAndChanges(t *testing.T) {
 	if !strings.Contains(preview.Prompt.Text(), "three") || len(preview.Changes) == 0 || preview.Changes[0].Op != "same" || preview.PreviousPrompt == 0 || preview.PreviousPrompt >= len(preview.PreviousTokens) {
 		t.Errorf("preview = %+v", preview.Changes)
 	}
+	// Sending the draft: it's a manual call that remembers where it came from, shown against
+	// that call, and a draft can be made from it in turn.
+	sent, updates, err := c.SendManual([]byte(draft), id+"/"+calls[1])
+	mustFinish(t, updates, err)
+	shown, err := c.ManualPrompt(sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown.Previous != id+"/"+calls[1] || len(shown.Calls) != 2 || shown.Calls[1] != "manual/"+sent || shown.Prompt.Generated <= 0 || len(shown.Changes) == 0 {
+		t.Errorf("sent = %+v", shown)
+	}
+	if again, err := c.ManualRequest(sent); err != nil || again.Output == nil || !strings.Contains(string(again.Request), "three") {
+		t.Errorf("draft from the sent call = %+v, %v", again, err)
+	}
 	if _, err := c.Prompt(id, "nope"); err != ErrNotFound {
 		t.Errorf("an unknown call: %v", err)
 	}

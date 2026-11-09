@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -324,4 +325,41 @@ func (s *server) callRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, req)
+}
+
+func (s *server) manualPrompt(w http.ResponseWriter, r *http.Request) {
+	p, err := s.core.ManualPrompt(r.PathValue("id"))
+	if errors.Is(err, tokens.ErrNoRenderer) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, p)
+}
+
+func (s *server) manualRequest(w http.ResponseWriter, r *http.Request) {
+	req, err := s.core.ManualRequest(r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, req)
+}
+
+// estimate is what a request body would cost to send.
+func (s *server) estimate(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPreviewBytes))
+	if err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	e, err := s.core.EstimateRequest(r.Context(), body)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, e)
 }

@@ -351,7 +351,10 @@ type Event struct {
 	Edit string `json:"edit,omitzero"`
 
 	// model_call_started
-	Call           string              `json:"call,omitzero"`
+	Call string `json:"call,omitzero"`
+	// manual_call_started: the call a draft was made from, as conversation/call or
+	// manual/call, if it was.
+	From           string              `json:"from,omitzero"`
 	Context        []Entry             `json:"context,omitzero"`
 	Model          string              `json:"model,omitzero"`
 	Routing        jsontext.Value      `json:"routing,omitzero"`

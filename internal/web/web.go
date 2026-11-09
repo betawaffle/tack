@@ -161,6 +161,9 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/manual-calls/count", s.countManual)
 	mux.HandleFunc("GET /api/manual-calls/{id}", s.manualCall)
 	mux.HandleFunc("POST /api/manual-calls/{id}/cancel", s.cancelManual)
+	mux.HandleFunc("GET /api/manual-calls/{id}/prompt", s.manualPrompt)
+	mux.HandleFunc("GET /api/manual-calls/{id}/request", s.manualRequest)
+	mux.HandleFunc("POST /api/estimate", s.estimate)
 	mux.HandleFunc("GET /api/recorded-calls", s.recordedCalls)
 	mux.HandleFunc("GET /api/recorded-calls/{call}", s.recordedRequest)
 	mux.HandleFunc("GET /api/defaults", s.newDefaults)
@@ -327,7 +330,8 @@ func (s *server) sendManual(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	_, updates, err := s.core.SendManual(body)
+	// from is the call a draft was made from, as conversation/call or manual/call.
+	_, updates, err := s.core.SendManual(body, r.URL.Query().Get("from"))
 	if err != nil {
 		fail(w, err)
 		return

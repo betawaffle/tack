@@ -170,3 +170,20 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 
 /* A collapsed part's line range can be wider than the column; it runs to the left. */
 .is-collapsed .pl-num { display: flex; justify-content: flex-end; overflow: visible; white-space: nowrap; font-size: 11px; }
+
+/* The call controls under a draft. */
+.send-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px;
+  border-top: 1px solid var(--line); background: var(--bg); color: var(--muted); font: 12.5px/1.4 var(--ui);
+}
+.send-bar[hidden] { display: none; }
+.send-bar label { display: inline-flex; align-items: center; gap: 6px; }
+.send-bar input, .send-bar select { font: 12.5px var(--ui); padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); }
+.send-bar input[type=number] { width: 7em; }
+.send-bar .spacer { flex: 1; }
+.send-more { display: inline-flex; }
+.send-more[open] { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.send-more summary { cursor: pointer; }
+.send-estimate { font: 12px var(--mono); }
+.send-bar .mini.spends { height: 28px; padding: 0 16px; }
+.drafting .legend { bottom: 64px; }

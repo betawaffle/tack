@@ -10,6 +10,8 @@ const ok = (c, m) => {
   console.log((c ? "ok   " : "FAIL ") + m);
   if (!c) fails++;
 };
+const F = "http://127.0.0.1:18600";
+const bodies = async () => (await (await fetch(F + "/bodies")).json()).map((b) => JSON.parse(b));
 const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).feedback;
 
 (async () => {
@@ -193,9 +195,25 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
   ok((await p.locator(".tok.ins").count()) > 0, "the edit shows as a change from the call");
   ok((await p.locator(".tok.nc").count()) > 0, "and what's after it can't come from the cache");
+  // Sending it: the call controls, an estimate, and then the sent call, shown against the
+  // one it came from.
+  ok(await p.locator("#send-bar").isVisible(), "a draft has the call controls");
+  await p.fill("#send-max", "50");
+  await p.locator("#send-max").dispatchEvent("change");
+  await p.waitForFunction(() => /at most/.test(document.getElementById("send-estimate").textContent));
+  ok(true, "with what it could cost");
+  await p.click("#send");
+  await p.waitForFunction(() => location.hash.startsWith("#manual/") && /Sent draft, 2 of 2/.test(document.getElementById("which").textContent), null, { timeout: 15000 });
+  ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0, "the sent call shows, with what changed from the call it came from");
+  ok(!(await p.locator("#send-bar").isVisible()) && !(await p.isDisabled("#prev")), "and steps back to that call");
+  const sentBody = (await bodies()).at(-1);
+  ok(sentBody && sentBody.max_tokens === 50 && JSON.stringify(sentBody.messages).includes("Edited in the draft"), "what was sent is the draft, with its settings");
+  await p.click("#edit");
+  await p.waitForFunction(() => document.body.classList.contains("drafting"));
+  ok((await p.innerText("#which")) === "Draft of the next call", "a draft can be made from a sent call too");
   await p.click("#edit");
   await p.waitForFunction(() => !document.body.classList.contains("drafting"));
-  ok(!(await p.locator("#prompt").textContent()).includes("Edited"), "stopping throws the draft away");
+  ok(p.url().includes("#manual/") && (await p.innerText("#which")).startsWith("Sent draft"), "stopping goes back to the call");
 
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");

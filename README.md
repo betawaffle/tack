@@ -374,6 +374,28 @@ recorded the same way as a conversation's calls, as `manual_call_started` and
 reply whole, and that's read too. Nothing checks the body: what OpenRouter says about it is
 the result. Nothing runs the tool calls that come back. A restart waits for one that's running.
 
+## The prompt page
+
+Each reply's **Prompt** link opens `/prompt#conversation/call`: the exact text the call's
+request became, as the model read it, drawn token by token from tack's own renderer (whose
+counts match the host's on every recorded call). Each part of the request (system message,
+effort, prompt, tools, user turns and their messages and tool results, the assistant's
+reasoning, reply and calls, down to each argument) starts its own row, with a bar in its
+author's color beside it, and can be collapsed by clicking its bar or name. Switches show
+what changed since the call before, token by token; faint hatching on what the next call
+can't get from the host's cache (it caches a prompt in blocks of 512 tokens, never what the
+model wrote); wrapping; line numbers; pretty-printed tool schemas; and a wide column. The
+legend shows tack's token counts against the host's.
+
+**Edit** makes a draft of the next call from the one shown: its request, its reply, and an
+empty result for each tool call. Clicking a part's text edits that field of the request in a
+text box (Enter saves, Shift+Enter is a new line), and the draft is drawn again, compared with
+the call it came from. The controls under it set the effort, the most tokens and some
+sampling settings, and show what the call could cost. **Send** sends it as a custom request
+that remembers where it came from, so the page shows it against that call, and a draft can be
+made from it in turn. `/prompt#synthetic/250000` draws a made-up prompt that size, to see how
+the page copes.
+
 ## Reading the record
 
 `tack-show` prints conversations from the record. It only reads, so it's safe beside a

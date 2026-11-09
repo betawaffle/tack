@@ -7,6 +7,7 @@
 <meta name="tack-page" content="{{page_version}}" data-required="{{page_required}}">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/prompt.css">
+<script src="/static/money.js" defer></script>
 <script src="/static/prompt-layout.js" defer></script>
 <script src="/static/prompt.js" defer></script>
 </head>
@@ -38,6 +39,20 @@
 </header>
 <div id="error" class="prompt-error" hidden></div>
 <main id="prompt" class="prompt-body" aria-label="The prompt"></main>
+<footer id="send-bar" class="send-bar" hidden>
+  <label>Effort <select id="send-effort"></select></label>
+  <label>Max Tokens <input id="send-max" type="number" min="1" step="1" placeholder="host's limit"></label>
+  <details class="send-more">
+    <summary>More</summary>
+    <label>Temperature <input data-param="temperature" type="number" step="0.05" min="0" max="2"></label>
+    <label>Top P <input data-param="top_p" type="number" step="0.05" min="0" max="1"></label>
+    <label>Top K <input data-param="top_k" type="number" step="1" min="0"></label>
+    <label>Seed <input data-param="seed" type="number" step="1"></label>
+  </details>
+  <span class="spacer"></span>
+  <span id="send-estimate" class="send-estimate"></span>
+  <button id="send" class="mini spends" type="button">Send</button>
+</footer>
 <aside class="legend" aria-label="Legend">
   <div class="legend-group">
     <span class="legend-item k-system"><i></i>System</span>
