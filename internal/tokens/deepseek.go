@@ -422,11 +422,11 @@ func dsParameterTag(w *dsWriter, key string, isString bool, value string, messag
 	if isString {
 		kind = "true"
 	}
-	w.enter(Part{Kind: PartParameter, Message: message, Call: call})
+	w.enter(Part{Kind: PartParameter, Message: message, Call: call, Name: key, Raw: isString})
 	w.template("<" + dsDSML + dsParameter + ` name="`)
 	w.field(key)
 	w.template(`" string="` + kind + `">`)
-	w.enter(Part{Kind: PartValue, Message: message, Call: call})
+	w.enter(Part{Kind: PartValue, Message: message, Call: call, Name: key, Raw: isString})
 	w.field(value)
 	w.leave()
 	w.template("</" + dsDSML + dsParameter + ">")

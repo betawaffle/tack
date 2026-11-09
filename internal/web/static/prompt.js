@@ -105,6 +105,12 @@ function cacheOf(data) {
     prompt++;
     at += n;
   }
+  // A draft is the next call, so what it can't get from the cache is everything from the
+  // block its first change is in, or the end of what the call before sent, if that's sooner.
+  if (data.before_draft) {
+    const same = data.changes?.[0]?.op === "same" ? data.changes[0].n : 0;
+    return { block, from: Math.floor(Math.min(same, data.previous_prompt || 0) / block) * block };
+  }
   return { block, from: Math.floor(prompt / block) * block };
 }
 
@@ -149,17 +155,20 @@ function rowHTML(r, parts) {
     const ins = (item.inserted ? " ins" : "") + cacheClasses(item.token);
     const piece = (sp) => {
       const v = visible(sp.text);
-      return { cls: `${sp.field ? "f" : "t"}${sp.generated ? " g" : ""}${v.cls}`, html: v.html + (sp.newline ? '<span class="ws nl">↵</span>' : "") };
+      return {
+        cls: `${sp.field ? "f" : "t"}${sp.generated ? " g" : ""}${v.cls}`, html: v.html + (sp.newline ? '<span class="ws nl">↵</span>' : ""),
+        field: sp.field ? ` data-f="${sp.part}"` : "",
+      };
     };
     // A token in one piece is one element; one in several has an element for each.
     if (item.spans.length === 1) {
       const v = piece(item.spans[0]);
-      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}">${v.html}</span>`;
+      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}"${v.field}>${v.html}</span>`;
     } else {
       items += `<span class="tok${ins}" data-t="${item.token}">`;
       for (const sp of item.spans) {
         const v = piece(sp);
-        items += `<span class="${v.cls}">${v.html}</span>`;
+        items += `<span class="${v.cls}"${v.field}>${v.html}</span>`;
       }
       items += "</span>";
     }
@@ -309,6 +318,169 @@ $("prompt").addEventListener("mouseover", (event) => {
   for (const node of hot) node.classList.add("hot");
 });
 
+// Editing. A draft is the next call: the call being looked at, its reply, and an empty
+// result for each tool call in it. Clicking a part's text opens it in a text box over it;
+// when the box loses focus, the draft is drawn again, compared with the call it came from.
+let draft = null;
+
+async function startDraft() {
+  const { conv, data } = current;
+  const res = await fetch(`/api/conversations/${conv}/calls/${data.call}/request`);
+  if (!res.ok) {
+    $("error").textContent = (await res.text()) || res.statusText;
+    $("error").hidden = false;
+    return;
+  }
+  const before = await res.json();
+  const request = structuredClone(before.request);
+  const out = before.output || {};
+  const reply = { role: "assistant", content: out.content || "" };
+  if (out.reasoning) reply.reasoning = out.reasoning;
+  if (out.calls?.length) {
+    reply.tool_calls = out.calls.map((c, i) => ({ id: `draft-${i}`, type: "function", function: { name: c.name, arguments: c.arguments } }));
+  }
+  request.messages.push(reply);
+  for (const call of reply.tool_calls || []) request.messages.push({ role: "tool", tool_call_id: call.id, content: "" });
+  draft = { conv, call: data.call, before, request };
+  await previewDraft();
+}
+
+async function previewDraft() {
+  const res = await fetch("/api/prompt-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: draft.before.model, request: draft.request, before: draft.before }),
+  });
+  if (!res.ok) {
+    $("error").textContent = (await res.text()) || res.statusText;
+    $("error").hidden = false;
+    return;
+  }
+  const data = await res.json();
+  data.before_draft = true;
+  current = { conv: draft.conv, data, draft: true };
+  $("which").textContent = "Draft of the next call";
+  $("prev").disabled = $("next").disabled = true;
+  $("edit").textContent = "Stop Editing";
+  document.body.classList.add("drafting");
+  render(data, null, true);
+}
+
+async function stopDraft() {
+  draft = null;
+  $("edit").textContent = "Edit";
+  await load();
+  document.body.classList.remove("drafting");
+}
+
+$("edit").addEventListener("click", () => (draft ? stopDraft() : startDraft()));
+
+// A message's text, which can be a string or a list of parts.
+const textOf = (content) => (typeof content === "string" ? content : (content || []).map((p) => p.text || "").join("\n\n"));
+
+// The request field a part's text is, as something to read and change, or null if it can't be
+// edited as text.
+function fieldOf(parts, k) {
+  const part = parts[k];
+  const m = draft?.request.messages[part.message];
+  if (!m) return null;
+  switch (part.kind) {
+    case "prompt":
+    case "user":
+    case "tool_result":
+    case "content":
+      return { get: () => textOf(m.content), set: (t) => { m.content = t; } };
+    case "reasoning": {
+      const key = "reasoning_content" in m && !("reasoning" in m) ? "reasoning_content" : "reasoning";
+      return { get: () => m[key] || "", set: (t) => { m[key] = t; } };
+    }
+    case "value": {
+      const call = m.tool_calls?.[part.call];
+      if (!call) return null;
+      let args;
+      try {
+        args = JSON.parse(call.function.arguments);
+      } catch {
+        return null;
+      }
+      return {
+        get: () => (part.raw ? String(args[part.name] ?? "") : JSON.stringify(args[part.name])),
+        set: (t) => {
+          if (part.raw) args[part.name] = t;
+          else {
+            try {
+              args[part.name] = JSON.parse(t);
+            } catch {
+              args[part.name] = t;
+            }
+          }
+          call.function.arguments = JSON.stringify(args);
+        },
+      };
+    }
+  }
+  return null;
+}
+
+// openEditor puts a text box over the rows of part k, with the field's text in it.
+function openEditor(k) {
+  const parts = current.data.prompt.parts;
+  const field = fieldOf(parts, k);
+  if (!field) return;
+  const rows = [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`[data-f="${k}"], .pl-bars [data-p="${k}"]`));
+  if (!rows.length) return;
+  const editing = el("div", "pl editing");
+  editing.append(rows[0].querySelector(".pl-gutter").cloneNode(true));
+  const text = el("div", "pl-text");
+  const area = el("textarea", "edit-box");
+  const was = field.get();
+  area.value = was;
+  area.rows = Math.max(1, was.split("\n").length);
+  area.spellcheck = false;
+  text.append(area);
+  editing.append(text);
+  rows[0].before(editing);
+  for (const row of rows) row.hidden = true;
+  area.focus();
+  const grow = () => {
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+  };
+  grow();
+  area.addEventListener("input", grow);
+  let done = false;
+  const close = (save) => {
+    if (done) return;
+    done = true;
+    if (save && area.value !== was) {
+      field.set(area.value);
+      previewDraft();
+      return;
+    }
+    editing.remove();
+    for (const row of rows) row.hidden = false;
+  };
+  area.addEventListener("blur", () => close(true));
+  area.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close(false);
+  });
+}
+
+// In a draft, clicking a part's text edits it: the field under the pointer, or else the
+// innermost part of the row that can be edited.
+$("prompt").addEventListener("click", (event) => {
+  if (!draft || event.target.closest(".pl-gutter, .collapsed, .edit-box")) return;
+  const parts = current.data.prompt.parts;
+  const span = event.target.closest("[data-f]");
+  if (span && fieldOf(parts, Number(span.dataset.f))) return openEditor(Number(span.dataset.f));
+  const row = event.target.closest(".pl");
+  if (!row) return;
+  for (const bar of row.querySelectorAll(".pl-bars [data-p]")) {
+    const k = Number(bar.dataset.p);
+    if (fieldOf(parts, k)) return openEditor(k);
+  }
+});
+
 // A made-up conversation of about this many tokens, of every kind of part, for seeing how
 // the page copes with a big prompt: /prompt#synthetic/250000.
 function syntheticRequest(tokens) {
@@ -372,6 +544,12 @@ async function loadSynthetic(size) {
 
 async function load() {
   const [conv, call] = location.hash.slice(1).split("/");
+  if (draft) {
+    // Going to another call throws the draft away.
+    draft = null;
+    document.body.classList.remove("drafting");
+    $("edit").textContent = "Edit";
+  }
   if (conv === "synthetic") return loadSynthetic(call);
   $("back").href = conv ? `/#${conv}` : "/";
   $("error").hidden = true;
@@ -400,6 +578,7 @@ async function load() {
   }
   const data = await res.json();
   current = { conv, data };
+  $("edit").hidden = false;
   const n = data.calls.indexOf(data.call);
   $("which").textContent = `Call ${n + 1} of ${data.calls.length}`;
   $("prev").disabled = n <= 0;

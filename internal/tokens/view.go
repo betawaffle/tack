@@ -44,6 +44,10 @@ type Part struct {
 	Generated bool `json:"generated,omitzero"`
 	// Parent is the part this one is inside, or -1.
 	Parent int `json:"parent"`
+	// Name is a parameter's name, for a parameter or its value. Raw says the value was
+	// written as it is rather than as JSON.
+	Name string `json:"name,omitzero"`
+	Raw  bool   `json:"raw,omitzero"`
 }
 
 // Segment is a run of text from one place: the format's (Field false) or a request field's.
@@ -294,15 +298,15 @@ func (p *Prompt) Text() string { return p.text }
 
 // Output is what the model wrote in a call.
 type Output struct {
-	Reasoning string
-	Content   string
-	Calls     []OutputCall
+	Reasoning string       `json:"reasoning,omitzero"`
+	Content   string       `json:"content,omitzero"`
+	Calls     []OutputCall `json:"calls,omitzero"`
 }
 
 // OutputCall is a tool call the model made.
 type OutputCall struct {
-	Name      string
-	Arguments string
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // ErrNoRenderer is for a model whose prompt format tack doesn't know.
@@ -399,4 +403,16 @@ func tokensDeepSeekV41(text string) ([]int, error) {
 		return nil, err
 	}
 	return t.Tokens(text), nil
+}
+
+// SplitAt is the tokens that end at or before a byte offset of the text they cover.
+func SplitAt(lengths []int, offset int) []int {
+	at := 0
+	for i, n := range lengths {
+		if at+n > offset {
+			return lengths[:i]
+		}
+		at += n
+	}
+	return lengths
 }

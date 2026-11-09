@@ -54,6 +54,19 @@ func TestACallsPromptIsShownWithItsReplyAndChanges(t *testing.T) {
 	if second.CacheBlock != CacheBlockTokens {
 		t.Errorf("cache block = %d", second.CacheBlock)
 	}
+	// A draft of the next call: this call's request and reply, with a message added.
+	req, err := c.Request(id, calls[1])
+	if err != nil || req.Output == nil || req.Output.Content == "" || !strings.Contains(string(req.Request), "two") {
+		t.Fatalf("request = %+v, %v", req, err)
+	}
+	draft := strings.Replace(string(req.Request), `"two"}]`, `"two"},{"role":"assistant","content":"`+req.Output.Content+`"},{"role":"user","content":"three"}]`, 1)
+	preview, err := Preview(req.Model, []byte(draft), &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(preview.Prompt.Text(), "three") || len(preview.Changes) == 0 || preview.Changes[0].Op != "same" || preview.PreviousPrompt == 0 || preview.PreviousPrompt >= len(preview.PreviousTokens) {
+		t.Errorf("preview = %+v", preview.Changes)
+	}
 	if _, err := c.Prompt(id, "nope"); err != ErrNotFound {
 		t.Errorf("an unknown call: %v", err)
 	}

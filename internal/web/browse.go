@@ -289,19 +289,21 @@ func (s *server) callPrompt(w http.ResponseWriter, r *http.Request) {
 // worth, with room to spare.
 const maxPreviewBytes = 32 << 20
 
-// previewPrompt shows any request body as the model would read it, without sending it. It's
-// for trying out a prompt, and for seeing how the page copes with a big one.
+// previewPrompt shows any request body as the model would read it, without sending it, and
+// with before, compared with that request and its reply. It's for drafting the next call, and
+// for seeing how the page copes with a big prompt.
 func (s *server) previewPrompt(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model   string         `json:"model"`
-		Request jsontext.Value `json:"request"`
+		Model   string            `json:"model"`
+		Request jsontext.Value    `json:"request"`
+		Before  *core.CallRequest `json:"before"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxPreviewBytes)
 	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	p, err := tokens.Render(body.Model, body.Request, nil)
+	p, err := core.Preview(body.Model, body.Request, body.Before)
 	if errors.Is(err, tokens.ErrNoRenderer) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -310,5 +312,16 @@ func (s *server) previewPrompt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, core.CallPrompt{Model: body.Model, Prompt: p, Calls: []string{}, CacheBlock: core.CacheBlockTokens})
+	writeJSON(w, p)
+}
+
+// callRequest is a call's request body and the model's reply, to start a draft from. Only the
+// body, never the headers.
+func (s *server) callRequest(w http.ResponseWriter, r *http.Request) {
+	req, err := s.core.Request(r.PathValue("id"), r.PathValue("call"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, req)
 }

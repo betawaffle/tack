@@ -171,6 +171,7 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("GET /prompt", s.promptPage)
 	mux.HandleFunc("GET /api/conversations/{id}/calls/{call}/prompt", s.callPrompt)
 	mux.HandleFunc("POST /api/prompt-preview", s.previewPrompt)
+	mux.HandleFunc("GET /api/conversations/{id}/calls/{call}/request", s.callRequest)
 	mux.HandleFunc("GET /code", s.codePage)
 	mux.HandleFunc("GET /docs", s.docsPage)
 	mux.HandleFunc("GET /api/source", s.sourceList)

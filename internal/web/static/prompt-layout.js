@@ -96,7 +96,7 @@ const tackPromptLayout = (() => {
   //   fresh: those in chain that start here; number: its line number, or null;
   //   indent and hang: pretty-printing's indent and string hang, in characters;
   //   items: what's in it, in order. An item is {deleted: text} or a token: {token, inserted,
-  //   spans: [{text, field, generated, newline}]}.
+  //   spans: [{text, field, part, generated, newline}]}.
   // A collapsed part's row has collapsed (the part), no items, and lastNumber, lines and tokens
   // for what it hides.
   function layout(data, options = {}) {
@@ -202,7 +202,7 @@ const tackPromptLayout = (() => {
             item = { token: ti, inserted: inserted.has(ti), spans: [] };
             row.items.push(item);
           }
-          item.spans.push({ text: line, field: s.field, generated: a >= generated, newline: !last });
+          item.spans.push({ text: line, field: s.field, part: s.part, generated: a >= generated, newline: !last });
           if (!last) {
             lineDone = true;
             row = null;

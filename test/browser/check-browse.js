@@ -178,6 +178,25 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // The cache: the fake host reports what it cached, so the tokens after it are marked.
   ok((await p.locator(".count-label", { hasText: "Not cached" }).count()) === 1 && (await p.locator(".tok.nc").count()) > 0, "what the next call can't get from the cache is shown");
 
+  // Editing: a draft of the next call, with a message changed in place.
+  await p.goto(B + "/prompt#" + promptAt);
+  await p.waitForSelector(".pl");
+  await p.click("#edit");
+  await p.waitForFunction(() => document.body.classList.contains("drafting"));
+  ok((await p.innerText("#which")) === "Draft of the next call", "a draft starts from the call");
+  const userText = p.locator(".pl.k-user .tok.f, .pl.k-user .tok:has(.f)").first();
+  await userText.click();
+  await p.waitForSelector(".edit-box");
+  const original = await p.inputValue(".edit-box");
+  await p.fill(".edit-box", original + " Edited in the draft.");
+  await p.locator(".prompt-head").click();
+  await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
+  ok((await p.locator(".tok.ins").count()) > 0, "the edit shows as a change from the call");
+  ok((await p.locator(".tok.nc").count()) > 0, "and what's after it can't come from the cache");
+  await p.click("#edit");
+  await p.waitForFunction(() => !document.body.classList.contains("drafting"));
+  ok(!(await p.locator("#prompt").textContent()).includes("Edited"), "stopping throws the draft away");
+
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");
   await p.waitForSelector(".pl.k-tool");

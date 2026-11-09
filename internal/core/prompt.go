@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 
 	"github.com/betawaffle/tack/internal/store"
@@ -16,9 +17,11 @@ type CallPrompt struct {
 	Prompt *tokens.Prompt `json:"prompt"`
 	// The call before, in the same conversation, and how its prompt and reply became this
 	// call's prompt, token by token. This call's own reply isn't in the comparison.
-	Previous       string        `json:"previous,omitzero"`
-	PreviousText   string        `json:"previous_text,omitzero"`
-	PreviousTokens []int         `json:"previous_tokens,omitzero"`
+	Previous       string `json:"previous,omitzero"`
+	PreviousText   string `json:"previous_text,omitzero"`
+	PreviousTokens []int  `json:"previous_tokens,omitzero"`
+	// PreviousPrompt is how many of the previous tokens are its prompt, before its reply.
+	PreviousPrompt int           `json:"previous_prompt,omitzero"`
 	Changes        []tokens.Edit `json:"changes,omitzero"`
 	// Calls lists every call in the conversation, in order, to move between them.
 	Calls []string `json:"calls"`
@@ -113,17 +116,82 @@ func (c *Core) Prompt(convID, callID string) (CallPrompt, error) {
 		// A call to a model whose format isn't known can't be compared with.
 		return out, nil
 	}
+	out.Previous = before.id
+	return out, compare(&out, this.model, was)
+}
+
+// compare sets what changed from the prompt and reply before to this prompt, token by token,
+// and how much of the prompt before there was, which is what the host could have cached.
+func compare(out *CallPrompt, model string, was *tokens.Prompt) error {
 	end := out.Prompt.Generated
 	if end < 0 {
 		end = len(out.Prompt.Text())
 	}
-	now, err := tokens.Tokenize(this.model, out.Prompt.Text()[:end])
+	now, err := tokens.Tokenize(model, out.Prompt.Text()[:end])
 	if err != nil {
-		return out, fmt.Errorf("splitting the prompt: %w", err)
+		return fmt.Errorf("splitting the prompt: %w", err)
 	}
-	out.Previous, out.PreviousText, out.PreviousTokens = before.id, was.Text(), was.Tokens
+	out.PreviousText, out.PreviousTokens = was.Text(), was.Tokens
+	out.PreviousPrompt = len(was.Tokens)
+	if was.Generated >= 0 {
+		out.PreviousPrompt = len(tokens.SplitAt(was.Tokens, was.Generated))
+	}
 	out.Changes = tokens.Diff(pieces(was.Text(), was.Tokens), pieces(out.Prompt.Text()[:end], now))
-	return out, nil
+	return nil
+}
+
+// CallRequest is what a call sent and what the model wrote back, to start a draft from.
+type CallRequest struct {
+	Model   string         `json:"model"`
+	Request jsontext.Value `json:"request"`
+	Output  *tokens.Output `json:"output,omitzero"`
+}
+
+// Request is a call's request and reply.
+func (c *Core) Request(convID, callID string) (CallRequest, error) {
+	c.mu.Lock()
+	conv := c.convs[convID]
+	if conv == nil {
+		c.mu.Unlock()
+		return CallRequest{}, ErrNotFound
+	}
+	var src *callSource
+	for _, it := range conv.items {
+		if it.callID == callID && it.request != "" {
+			s := c.callSource(it)
+			src = &s
+			break
+		}
+	}
+	c.mu.Unlock()
+	if src == nil {
+		return CallRequest{}, ErrNotFound
+	}
+	body, err := c.cfg.Store.Get(src.request)
+	if err != nil {
+		return CallRequest{}, err
+	}
+	return CallRequest{Model: src.model, Request: body, Output: src.out}, nil
+}
+
+// Preview shows a request as the model would read it, without sending it. With before, it's
+// compared with that request and the reply to it, the way a call is compared with the call
+// before it.
+func Preview(model string, request jsontext.Value, before *CallRequest) (CallPrompt, error) {
+	out := CallPrompt{Model: model, Calls: []string{}, CacheBlock: CacheBlockTokens}
+	p, err := tokens.Render(model, request, nil)
+	if err != nil {
+		return out, err
+	}
+	out.Prompt = p
+	if before == nil {
+		return out, nil
+	}
+	was, err := tokens.Render(before.Model, before.Request, before.Output)
+	if err != nil {
+		return out, err
+	}
+	return out, compare(&out, model, was)
 }
 
 // pieces cuts text into its tokens' text.

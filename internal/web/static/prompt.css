@@ -156,3 +156,13 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
   .pl-part { width: 58px; font-size: 10.5px; }
   .numbers .pl-num { width: 34px; padding-right: 6px; }
 }
+
+/* Editing a draft: the text of a part that can be edited shows it can be clicked, and the one
+   being edited is a plain text box in the same font. */
+.drafting .pl-text .f { cursor: text; }
+.drafting .prompt-which { color: var(--wait); }
+.edit-box {
+  display: block; width: 100%; margin: 0; padding: 0 4px; border: 1px solid var(--muted); border-radius: 4px;
+  background: var(--surface); color: var(--text); font: inherit; line-height: inherit; resize: none; overflow: hidden;
+}
+.edit-box:focus { outline: none; border-color: var(--text); }
