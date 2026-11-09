@@ -29,8 +29,8 @@ type CallPrompt struct {
 	ReportedCached int `json:"reported_cached,omitzero"`
 	// Cacheable is how much of the prompt could have come from the cache: the whole blocks of
 	// it that the call before's prompt had too. CacheBlock is the size of a block.
-	Cacheable  int `json:"cacheable,omitzero"`
-	CacheBlock int `json:"cache_block"`
+	Cacheable      int `json:"cacheable,omitzero"`
+	CacheBlock     int `json:"cache_block"`
 	ReportedOutput int `json:"reported_output,omitzero"`
 }
 
