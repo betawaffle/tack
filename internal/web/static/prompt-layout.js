@@ -98,7 +98,7 @@ const tackPromptLayout = (() => {
   //   items: what's in it, in order. An item is {deleted: text} or a token: {token, inserted,
   //   spans: [{text, field, part, generated, newline}]}.
   // A collapsed part's row has collapsed (the part), no items, and lastNumber, lines and tokens
-  // for what it hides.
+  // for what it hides, and changed if any of it changed since the call before.
   function layout(data, options = {}) {
     const p = data.prompt;
     const parts = p.parts;
@@ -252,7 +252,10 @@ const tackPromptLayout = (() => {
         row.lastNumber = r.number;
         row.lines++;
       }
-      for (const item of r.items) if (item.spans) tokens.add(item.token);
+      for (const item of r.items) {
+        if (item.spans) tokens.add(item.token);
+        if (item.inserted || item.deleted !== undefined) row.changed = true;
+      }
       row.tokens = tokens.size;
     }
     return out;

@@ -480,8 +480,12 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 			if i == 0 && len(tools) > 0 {
 				w.enter(Part{Kind: PartTools, Message: -1})
 				w.template("\n\n")
+				// The format's fixed text about tools, before and after the schemas, is a part of
+				// its own on each side, so it can be set aside.
 				before, after, _ := strings.Cut(dsToolsTemplate, "{tool_schemas}")
+				w.enter(Part{Kind: PartStatic, Message: -1})
 				w.template(before)
+				w.leave()
 				for j, tool := range tools {
 					if j > 0 {
 						w.template("\n")
@@ -490,7 +494,9 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 					w.field(tool)
 					w.leave()
 				}
+				w.enter(Part{Kind: PartStatic, Message: -1, Call: 1})
 				w.template(after)
+				w.leave()
 				w.leave()
 			}
 		case "user":

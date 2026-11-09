@@ -163,3 +163,15 @@ test("only the newline that ends a part's last row is in it, so a part has no em
     if (kind === "tool" || kind === "tool_result") assert.notEqual(rowText(r), "\n", `an empty ${kind} row`);
   }
 });
+
+test("a collapsed part says when something in it changed", () => {
+  const l0 = layout(data, {});
+  const system = l0.parts.findIndex((p) => p.kind === "system");
+  const user = l0.parts.findLastIndex((p) => p.kind === "user_turn");
+  const l = layout(data, { collapsed: new Set([system, user]) });
+  // The system prompt changed since the call before; the last user turn is all new.
+  assert.ok(l.rows.find((r) => r.collapsed === system).changed);
+  assert.ok(l.rows.find((r) => r.collapsed === user).changed);
+  const start = l0.parts.findIndex((p) => p.kind === "start");
+  assert.ok(!layout(data, { collapsed: new Set([start]) }).rows.find((r) => r.collapsed === start).changed);
+});

@@ -31,6 +31,7 @@ const (
 	PartUserTurn   = "user_turn"   // a user turn, around the messages and tool results in it
 	PartPrompt     = "prompt"      // a system message's text
 	PartStop       = "stop"        // the end of an assistant message
+	PartStatic     = "static"      // the format's fixed text about tools
 )
 
 // Part is a piece of the request.

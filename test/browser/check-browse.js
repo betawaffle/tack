@@ -197,7 +197,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForSelector(".edit-box");
   const original = await p.inputValue(".edit-box");
   await p.fill(".edit-box", original + " Edited in the draft.");
-  await p.locator(".prompt-head").click();
+  await p.locator("#which").click();
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
   ok((await p.locator(".tok.ins").count()) > 0, "the edit shows as a change from the call");
   ok((await p.locator(".tok.nc").count()) > 0, "and what's after it can't come from the cache");
@@ -229,6 +229,11 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const indents = await p.evaluate(() => new Set([...document.querySelectorAll(".pl.k-tool .pl-text")].map((t) => getComputedStyle(t).paddingLeft)).size);
   ok(indents > 2, `pretty JSON is drawn indented (${indents} different indents)`);
   ok((await p.locator(".pl-num.blk").count()) >= 5, "rows where a cache block starts are marked");
+  ok((await p.locator(".pl.is-collapsed.k-static").count()) === 2, "the tools' fixed text starts collapsed, as Static");
+  await p.click("#collapse-all");
+  const open = await p.locator(".pl:not(.is-collapsed)").count();
+  await p.click("#expand-all");
+  ok(open <= 2 && (await p.locator(".pl.is-collapsed").count()) === 0, `Collapse All folds the top parts (${open} left open), and Expand All opens everything`);
   await p.click("[data-switch=pretty]");
 
   // On a phone.

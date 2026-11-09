@@ -10,7 +10,7 @@ const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: 
 const LABELS = {
   start: "Preamble", effort: "Effort", system: "System", prompt: "Prompt", tools: "Tools", tool: "Tool", user_turn: "User",
   user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
-  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", next: "",
+  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", static: "Static", next: "",
 };
 const DEPTHS = 5;
 
@@ -82,8 +82,24 @@ function visible(text) {
 }
 
 // Which parts are collapsed, by what they are rather than their index, so the same part stays
-// collapsed when moving to another call.
+// collapsed when moving to another call. Some kinds start collapsed until they're opened.
 const collapsedKeys = new Set();
+const openedKeys = new Set();
+const COLLAPSED_AT_FIRST = new Set(["static"]);
+const isCollapsed = (parts, k) => {
+  const key = partKey(parts, k);
+  return collapsedKeys.has(key) || (COLLAPSED_AT_FIRST.has(parts[k].kind) && !openedKeys.has(key));
+};
+function setCollapsed(parts, k, collapsed) {
+  const key = partKey(parts, k);
+  if (collapsed) {
+    collapsedKeys.add(key);
+    openedKeys.delete(key);
+  } else {
+    collapsedKeys.delete(key);
+    openedKeys.add(key);
+  }
+}
 function partKey(parts, k) {
   const out = [];
   for (; k >= 0; k = parts[k].parent) out.unshift(`${parts[k].kind}.${parts[k].message}.${parts[k].call || 0}`);
@@ -144,7 +160,8 @@ function rowHTML(r, parts) {
   let items = "";
   if (r.collapsed !== undefined) {
     const lines = `${r.lines.toLocaleString("en-US")} ${r.lines === 1 ? "line" : "lines"}`;
-    items = `<span class="collapsed" data-p="${r.collapsed}" title="Show it">…</span><span class="collapsed-note">${lines}, ${r.tokens.toLocaleString("en-US")} tokens</span>`;
+    items = `<span class="collapsed" data-p="${r.collapsed}" title="Show it">…</span><span class="collapsed-note">${lines}, ${r.tokens.toLocaleString("en-US")} tokens</span>` +
+      (r.changed ? '<span class="collapsed-changed">Changed</span>' : "");
   }
   for (const item of r.items) {
     if (item.deleted !== undefined) {
@@ -192,7 +209,7 @@ let drawing = 0;
 // eager draws every block at once, for when what's on screen has to stay put.
 function render(data, done, eager) {
   const parts = data.prompt.parts;
-  const collapsed = new Set(parts.map((_, k) => k).filter((k) => collapsedKeys.has(partKey(parts, k))));
+  const collapsed = new Set(parts.map((_, k) => k).filter((k) => isCollapsed(parts, k)));
   cache = cacheOf(data);
   const { rows } = tackPromptLayout.layout(data, { pretty: switches.pretty, collapsed });
   const body = $("prompt");
@@ -294,13 +311,25 @@ function keepPlace(k, draw) {
   scroller().scrollTop = scrolled + after.getBoundingClientRect().top - top;
 }
 
+// Collapse All folds every top-level part that has a name; Expand All opens everything.
+function collapseAll(collapsed) {
+  if (!current) return;
+  const parts = current.data.prompt.parts;
+  parts.forEach((part, k) => {
+    if (collapsed ? part.parent === -1 && LABELS[part.kind] && part.kind !== "start" : true) setCollapsed(parts, k, collapsed);
+  });
+  render(current.data, null, true);
+}
+$("collapse-all").addEventListener("click", () => collapseAll(true));
+$("expand-all").addEventListener("click", () => collapseAll(false));
+
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
 $("prompt").addEventListener("click", (event) => {
   const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
   if (!target || !current) return;
-  const key = partKey(current.data.prompt.parts, Number(target.dataset.p));
-  if (collapsedKeys.has(key)) collapsedKeys.delete(key);
-  else collapsedKeys.add(key);
+  const parts = current.data.prompt.parts;
+  const k = Number(target.dataset.p);
+  setCollapsed(parts, k, !isCollapsed(parts, k));
   // Keep the row that was clicked where it was on the screen.
   keepPlace(Number(target.dataset.p), () => render(current.data, null, true));
 });
