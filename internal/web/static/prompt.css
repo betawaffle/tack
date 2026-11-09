@@ -89,13 +89,14 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .pl.gen .pl-part { color: var(--text); }
 /* One bar per level, the outermost nearest the text, with a small gap between them. */
 .pl-bars { flex: none; display: flex; gap: 2px; }
-.pl-bars i { width: 3px; background: var(--k, transparent); }
+.pl-bars i { width: 4px; background: var(--k, transparent); }
 .pl-bars i:not([class]) { background: transparent; }
 /* A bar is narrow, so it's easier to hit than it looks. */
 .pl-bars i[data-p] { cursor: pointer; box-sizing: content-box; padding: 0 2px; margin: 0 -2px; background-clip: content-box; }
-.pl-bars i[data-p]:hover { background-color: var(--text); }
+/* Pointing at a bar or a name marks the whole bar and its name; only colors change. */
+.pl-bars i.hot-bar { background-color: var(--text); }
 .pl-part[data-p] { cursor: pointer; }
-.pl-part[data-p]:hover { color: var(--text); }
+.pl-part.hot-bar { color: var(--text); }
 .collapsed { cursor: pointer; padding: 0 6px; border-radius: 4px; background: var(--hover); color: var(--text); }
 .collapsed:hover { background: var(--line); }
 .collapsed-note { margin-left: 10px; color: var(--muted); font: 11.5px/1.6 var(--ui); }
@@ -119,6 +120,8 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
    line on its own is the exception. */
 .tok { display: inline-block; text-indent: 0; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; border-radius: 3px; }
 .tok.hot { background: var(--hot); }
+/* Faint text would be fainter on the shade, so a token being pointed at shows at full strength. */
+.tok.hot, .tok.hot .t, .tok.hot .ws, .tok.hot.sp::before, .tok.hot .sp::before { color: var(--text); }
 .ws { color: var(--format-text); }
 .sp::before { content: "·"; color: var(--format-text); }
 
@@ -136,7 +139,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 
 /* The host's cache: a mark beside rows where a block starts, and faint hatching on what the
    next call is certain not to get from it. */
-.pl-num.blk { box-shadow: inset -2px 0 0 var(--cache-mark); }
+.pl-num.blk { box-shadow: inset -3px 0 0 var(--cache-mark); }
 .tok.nc { background-image: repeating-linear-gradient(135deg, var(--cache-hatch) 0 1px, transparent 1px 5px); }
 
 @media (max-width: 1100px) {

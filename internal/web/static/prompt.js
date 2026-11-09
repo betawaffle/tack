@@ -281,6 +281,17 @@ $("prompt").addEventListener("click", (event) => {
   newScroller.scrollTop = again ? scrolled + again.getBoundingClientRect().top - top : scrolled;
 });
 
+// Pointing at a part's bar or name marks its whole bar and its name.
+let hotBar = [];
+$("prompt").addEventListener("mouseover", (event) => {
+  const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p]");
+  const k = target?.dataset.p;
+  if (hotBar.length && hotBar[0].dataset.p === k) return;
+  for (const node of hotBar) node.classList.remove("hot-bar");
+  hotBar = k === undefined ? [] : [...$("prompt").querySelectorAll(`.pl-bars [data-p="${k}"], .pl-part[data-p="${k}"]`)];
+  for (const node of hotBar) node.classList.add("hot-bar");
+});
+
 // Pointing at a token shades it, with any rows it carries on into.
 let hot = [];
 $("prompt").addEventListener("mouseover", (event) => {
