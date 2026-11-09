@@ -17,7 +17,7 @@ const (
 	PartEffort     = "effort"      // the reasoning effort, which the format writes from a setting
 	PartSystem     = "system"      // a system message
 	PartTools      = "tools"       // the tools offered, which the format writes into the first system message
-	PartUser       = "user"        // a user message
+	PartUser       = "user"        // a user message, inside a user turn
 	PartToolResult = "tool_result" // a tool's result
 	PartReasoning  = "reasoning"   // an assistant's reasoning
 	PartContent    = "content"     // an assistant's reply
@@ -27,6 +27,8 @@ const (
 	PartCalls      = "calls"       // the block an assistant's tool calls are in
 	PartParameter  = "parameter"   // one argument of a tool call
 	PartValue      = "value"       // an argument's value
+	PartTool       = "tool"        // one tool's schema, in the tools
+	PartUserTurn   = "user_turn"   // a user turn, around the messages and tool results in it
 )
 
 // Part is a piece of the request.

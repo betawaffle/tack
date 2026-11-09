@@ -448,6 +448,9 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 	// With tools, reasoning is kept all the way back. Without them, only since the last user.
 	drop := len(tools) == 0
 	last := dsLastUser(messages)
+	// The model's turn starts after a user or a later system message. When an assistant message
+	// follows, its start is written as part of that message.
+	header := false
 	for i := range messages {
 		m := &messages[i]
 		if i == 0 {
@@ -475,22 +478,25 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 					if j > 0 {
 						w.template("\n")
 					}
+					w.enter(Part{Kind: PartTool, Message: -1, Call: j})
 					w.field(tool)
+					w.leave()
 				}
 				w.template(after)
 			}
 		case "user":
+			// One user turn can hold several messages and tool results, each a part inside it.
+			w.part(Part{Kind: PartUserTurn, Message: m.src})
+			w.template(dsUser)
 			for j, block := range m.blocks {
+				if j > 0 {
+					w.template("\n\n")
+				}
 				kind := PartUser
 				if block.tool {
 					kind = PartToolResult
 				}
-				w.part(Part{Kind: kind, Message: block.src})
-				if j == 0 {
-					w.template(dsUser)
-				} else {
-					w.template("\n\n")
-				}
+				w.enter(Part{Kind: kind, Message: block.src})
 				if block.tool {
 					w.template("<tool_result>")
 					w.field(block.text)
@@ -498,15 +504,25 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 				} else {
 					w.field(block.text)
 				}
+				w.leave()
 			}
 		case "assistant":
 			w.part(Part{Kind: PartAssistant, Message: m.src})
+			if header {
+				w.template(dsAssistant)
+			}
 			if thinking && (!drop || i > last) {
 				w.enter(Part{Kind: PartReasoning, Message: m.src})
+				if header {
+					w.template(dsThink)
+				}
 				w.field(m.reasoning)
 				w.template(dsThinkEnd)
 				w.leave()
+			} else if header {
+				w.template(dsThinkEnd)
 			}
+			header = false
 			w.enter(Part{Kind: PartContent, Message: m.src})
 			w.field(m.content)
 			w.leave()
@@ -534,6 +550,10 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 			continue
 		}
 		if m.role == "user" || (m.role == "system" && i > 0) {
+			if i+1 < len(messages) {
+				header = true
+				continue
+			}
 			w.part(Part{Kind: PartNext, Message: -1})
 			w.template(dsAssistant)
 			if thinking && (!drop || i >= last) {

@@ -2,11 +2,10 @@
    block to swap. Each kind of part has a color (--k) for its bar and a faint tint of it behind
    its text. These are provisional, until a palette is chosen. */
 :root {
-  /* By author: the system prompt, the user, the tools, and the model. Everything inside the
-     model's message is the model's color. */
+  /* By author: the system message (with the tools), the user (with tool results), and the
+     model. Everything inside the model's message is the model's color. */
   --k-system: light-dark(#2f6fbd, #6ea6ec);
   --k-user: light-dark(#3d8a3a, #74c06a);
-  --k-tools: light-dark(#8a909a, #7c838d);
   --k-model: light-dark(#d06a12, #f29a4a);
   --k-effort: light-dark(#b4b9c0, #555b63);
   --region-strength: 6%;
@@ -70,9 +69,9 @@ body.wide .prompt-inner { max-width: none; }
 /* Narrow, the legend sits to the right of the text; this keeps the text clear of it. */
 body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 - 90px)); }
 
-.k-system { --k: var(--k-system); }
-.k-user { --k: var(--k-user); }
-.k-tools, .k-tool_result { --k: var(--k-tools); }
+/* Tools are in the system message, and tool results come back in a user turn. */
+.k-system, .k-tools, .k-tool { --k: var(--k-system); }
+.k-user, .k-user_turn, .k-tool_result { --k: var(--k-user); }
 .k-assistant, .k-reasoning, .k-content, .k-calls, .k-tool_call, .k-parameter, .k-value { --k: var(--k-model); }
 .k-effort, .k-start, .k-next { --k: var(--k-effort); }
 
@@ -97,6 +96,9 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
   background: color-mix(in srgb, var(--k) var(--region-strength), var(--bg));
 }
 .wrap .pl-text { white-space: normal; }
+/* Unwrapped, every row is as wide as the longest, and the column scrolls sideways as one. */
+.prompt-body:not(.wrap) .prompt-inner { overflow-x: auto; }
+.prompt-body:not(.wrap) .pl { width: max-content; min-width: 100%; }
 .indent { white-space: pre; }
 
 /* Each token is a box, so lines only ever break between tokens. One that's wider than the
@@ -107,8 +109,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 
 /* The format's own text, which no field of the request holds. */
 .t { color: var(--format-text); }
-/* What the model wrote in this call. */
-.g { text-decoration: underline; text-decoration-color: var(--generated-mark); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+
 
 /* Changes since the call before. */
 .show-changes .tok.ins { background: var(--ins-bg); }

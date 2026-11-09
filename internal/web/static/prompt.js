@@ -8,15 +8,16 @@ const $ = (id) => document.getElementById(id);
 const SWITCHES_KEY = "tack.prompt.switches";
 const DEFAULTS = { changes: true, wrap: true, numbers: true, wide: false, pretty: false };
 const LABELS = {
-  start: "Start", effort: "Effort", system: "System", tools: "Tools", user: "User", tool_result: "Result",
-  assistant: "Assistant", reasoning: "Reasoning", content: "Reply", calls: "Calls", tool_call: "Call",
-  parameter: "Parameter", value: "Value", next: "",
+  start: "Preamble", effort: "Effort", system: "System", tools: "Tools", tool: "Tool", user_turn: "User",
+  user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
+  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", next: "",
 };
 const DEPTHS = 5;
 // Whose each kind of part is, for the legend.
 const AUTHOR = {
-  system: "k-system", user: "k-user", tools: "k-tools", tool_result: "k-tools", assistant: "k-model", reasoning: "k-model",
-  content: "k-model", calls: "k-model", tool_call: "k-model", parameter: "k-model", value: "k-model",
+  system: "k-system", tools: "k-system", tool: "k-system", user_turn: "k-user", user: "k-user", tool_result: "k-user",
+  assistant: "k-model", reasoning: "k-model", content: "k-model", calls: "k-model", tool_call: "k-model",
+  parameter: "k-model", value: "k-model",
 };
 
 function loadSwitches() {
@@ -166,7 +167,6 @@ function render(data) {
   const rowPart = (i) => {
     let k = i;
     while (parts[k].kind === "next" && k + 1 < parts.length) k++;
-    if (parts[k].kind === "start" && k + 1 < parts.length && parts[k + 1].kind === "effort") k++;
     if (parts[k].kind === "value" && !partText[k].includes("\n") && !ownRows.has(k)) k = parts[k].parent;
     return k;
   };
@@ -229,6 +229,7 @@ function render(data) {
     const num = el("div", "pl-num", lineDone ? String(++number) : "");
     const content = el("div", "pl-text");
     if (indent) content.style.paddingLeft = `calc(8px + ${indent}ch)`;
+    if (breaks.size) row.dataset.indent = indent;
     row.append(label, bars, num, content);
     row.content = content;
     inner.append(row);
@@ -310,9 +311,25 @@ function render(data) {
     }
     start = end;
   });
+  if (breaks.size) hangStrings(inner);
   applySwitches();
   showCounts(data, bytes.length);
   splitWrappedValues(data);
+}
+
+// In pretty-printed JSON, a string that wraps carries on under its first character, not
+// under the row's start. The font is monospace, so this is counting, not measuring.
+function hangStrings(inner) {
+  for (const row of inner.querySelectorAll(".pl[data-indent]")) {
+    const content = row.querySelector(".pl-text");
+    const text = content.textContent;
+    const keyed = text.match(/^[\s·]*"(?:[^"\\]|\\.)*"[\s·]*:[\s·]*"/) || text.match(/^[\s·]*"/);
+    if (!keyed) continue;
+    const k = keyed[0].length;
+    const indent = Number(row.dataset.indent);
+    content.style.paddingLeft = `calc(8px + ${indent + k}ch)`;
+    content.style.textIndent = `-${k}ch`;
+  }
 }
 
 // A value is kept in its parameter's row only if that row fits on one line. Rows that wrapped
