@@ -328,14 +328,14 @@ $("expand-all").addEventListener("click", () => collapseAll(false));
 // the same, so its line number finds it again.
 function keepView(draw) {
   const box = scroller().getBoundingClientRect();
+  // The first line on the screen, or with only the room past the end showing, the last line.
   let line = null, top = 0;
   for (const num of $("prompt").querySelectorAll(".pl:not([hidden]) .pl-num")) {
+    if (!num.textContent || num.textContent.includes("–")) continue;
     const rect = num.getBoundingClientRect();
-    if (rect.bottom > box.top && num.textContent && !num.textContent.includes("–")) {
-      line = num.textContent;
-      top = rect.top;
-      break;
-    }
+    line = num.textContent;
+    top = rect.top;
+    if (rect.bottom > box.top) break;
   }
   const scrolled = scroller().scrollTop;
   const result = draw();
