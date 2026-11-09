@@ -476,7 +476,7 @@ function fieldOf(parts, k) {
       return { get: () => m[key] || "", set: (t) => { m[key] = t; } };
     }
     case "value": {
-      const call = m.tool_calls?.[part.call];
+      const call = m.tool_calls?.[part.call || 0]; // The first call's index, 0, is left out of the JSON.
       if (!call) return null;
       let args;
       try {
