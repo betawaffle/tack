@@ -231,6 +231,7 @@ type dsBlock struct {
 	tool bool
 	id   string
 	text string
+	src  int // the request message it came from
 }
 
 type dsCall struct {
@@ -244,6 +245,7 @@ type dsMessage struct {
 	blocks    []dsBlock
 	reasoning string
 	calls     []dsCall
+	src       int // the request message it came from, or -1
 }
 
 type dsRequest struct {
@@ -325,14 +327,14 @@ func dsMerge(req *dsRequest) ([]dsMessage, error) {
 		}
 		switch m.Role {
 		case "tool", "user":
-			block := dsBlock{tool: m.Role == "tool", id: m.ToolCallID, text: text}
+			block := dsBlock{tool: m.Role == "tool", id: m.ToolCallID, text: text, src: i}
 			if n := len(out); n > 0 && out[n-1].role == "user" {
 				out[n-1].blocks = append(out[n-1].blocks, block)
 			} else {
-				out = append(out, dsMessage{role: "user", blocks: []dsBlock{block}})
+				out = append(out, dsMessage{role: "user", blocks: []dsBlock{block}, src: i})
 			}
 		default:
-			message := dsMessage{role: m.Role, content: text, reasoning: m.ReasoningContent}
+			message := dsMessage{role: m.Role, content: text, reasoning: m.ReasoningContent, src: i}
 			if message.reasoning == "" {
 				message.reasoning = m.Reasoning
 			}
@@ -371,7 +373,7 @@ func dsLastUser(messages []dsMessage) int {
 	return -1
 }
 
-func dsArguments(arguments string) string {
+func dsArguments(w *dsWriter, arguments string) {
 	value := jsontext.Value(arguments)
 	// Double-encoded arguments are tolerated, like the original does.
 	if value.IsValid() && value.Kind() == '"' {
@@ -381,12 +383,12 @@ func dsArguments(arguments string) string {
 		}
 	}
 	if !value.IsValid() || value.Kind() != '{' {
-		return dsParameterTag("arguments", true, arguments)
+		dsParameterTag(w, "arguments", true, arguments)
+		return
 	}
-	var lines []string
 	dec := jsontext.NewDecoder(bytes.NewReader(value))
 	dec.ReadToken()
-	for dec.PeekKind() != '}' {
+	for n := 0; dec.PeekKind() != '}'; n++ {
 		token, err := dec.ReadToken()
 		if err != nil {
 			break
@@ -396,33 +398,49 @@ func dsArguments(arguments string) string {
 		if err != nil {
 			break
 		}
+		if n > 0 {
+			w.template("\n")
+		}
 		if raw.Kind() == '"' {
 			var text string
 			json.Unmarshal(raw, &text)
-			lines = append(lines, dsParameterTag(key, true, text))
+			dsParameterTag(w, key, true, text)
 		} else {
 			text, err := pyJSON(raw)
 			if err != nil {
 				text = string(raw)
 			}
-			lines = append(lines, dsParameterTag(key, false, text))
+			dsParameterTag(w, key, false, text)
 		}
 	}
-	return strings.Join(lines, "\n")
 }
 
-func dsParameterTag(key string, isString bool, value string) string {
+// dsParameterTag writes one argument. Its name and value are what the model wrote, and the
+// rest is the format's.
+func dsParameterTag(w *dsWriter, key string, isString bool, value string) {
 	kind := "false"
 	if isString {
 		kind = "true"
 	}
-	return "<" + dsDSML + dsParameter + ` name="` + key + `" string="` + kind + `">` + value + "</" + dsDSML + dsParameter + ">"
+	w.template("<" + dsDSML + dsParameter + ` name="`)
+	w.field(key)
+	w.template(`" string="` + kind + `">`)
+	w.field(value)
+	w.template("</" + dsDSML + dsParameter + ">")
 }
 
 // dsPrompt renders the whole prompt. Effort is only shown when thinking.
 func dsPrompt(messages []dsMessage, tools []string, thinking bool, effort int) string {
-	var out strings.Builder
-	out.WriteString(dsBOS)
+	var w dsWriter
+	dsWrite(&w, messages, tools, thinking, effort)
+	return w.String()
+}
+
+// dsWrite renders the prompt as segments, each the format's own text or a request field's,
+// and each in a part of the request.
+func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, effort int) {
+	w.part(Part{Kind: PartStart, Message: -1})
+	w.template(dsBOS)
 	// With tools, reasoning is kept all the way back. Without them, only since the last user.
 	drop := len(tools) == 0
 	last := dsLastUser(messages)
@@ -430,62 +448,91 @@ func dsPrompt(messages []dsMessage, tools []string, thinking bool, effort int) s
 		m := &messages[i]
 		if i == 0 {
 			if thinking {
-				out.WriteString(dsSystem)
-				fmt.Fprintf(&out, "Reasoning Effort: %d (range 1-100, the higher the value, the more thorough the reasoning)\n\n", effort)
+				w.template(dsSystem)
+				w.part(Part{Kind: PartEffort, Message: -1})
+				w.template(fmt.Sprintf("Reasoning Effort: %d (range 1-100, the higher the value, the more thorough the reasoning)\n\n", effort))
 			} else if m.role == "system" {
-				out.WriteString(dsSystem)
+				w.template(dsSystem)
 			}
 		}
 		switch m.role {
 		case "system":
+			w.part(Part{Kind: PartSystem, Message: m.src})
 			if i > 0 {
-				out.WriteString(dsSystem)
+				w.template(dsSystem)
 			}
-			out.WriteString(m.content)
+			w.field(m.content)
 			if i == 0 && len(tools) > 0 {
-				out.WriteString("\n\n")
-				out.WriteString(strings.Replace(dsToolsTemplate, "{tool_schemas}", strings.Join(tools, "\n"), 1))
+				w.part(Part{Kind: PartTools, Message: -1})
+				w.template("\n\n")
+				before, after, _ := strings.Cut(dsToolsTemplate, "{tool_schemas}")
+				w.template(before)
+				for j, tool := range tools {
+					if j > 0 {
+						w.template("\n")
+					}
+					w.field(tool)
+				}
+				w.template(after)
 			}
 		case "user":
-			out.WriteString(dsUser)
 			for j, block := range m.blocks {
-				if j > 0 {
-					out.WriteString("\n\n")
+				kind := PartUser
+				if block.tool {
+					kind = PartToolResult
+				}
+				w.part(Part{Kind: kind, Message: block.src})
+				if j == 0 {
+					w.template(dsUser)
+				} else {
+					w.template("\n\n")
 				}
 				if block.tool {
-					out.WriteString("<tool_result>" + block.text + "</tool_result>")
+					w.template("<tool_result>")
+					w.field(block.text)
+					w.template("</tool_result>")
 				} else {
-					out.WriteString(block.text)
+					w.field(block.text)
 				}
 			}
 		case "assistant":
 			if thinking && (!drop || i > last) {
-				out.WriteString(m.reasoning)
-				out.WriteString(dsThinkEnd)
+				w.part(Part{Kind: PartReasoning, Message: m.src})
+				w.field(m.reasoning)
+				w.template(dsThinkEnd)
 			}
-			out.WriteString(m.content)
+			w.part(Part{Kind: PartContent, Message: m.src})
+			w.field(m.content)
 			if len(m.calls) > 0 {
-				var calls []string
-				for _, call := range m.calls {
-					calls = append(calls, "<"+dsDSML+dsInvoke+` name="`+call.name+`">`+"\n"+dsArguments(call.arguments)+"\n</"+dsDSML+dsInvoke+">")
+				w.template("\n\n<" + dsDSML + dsCalls + ">\n")
+				for j, call := range m.calls {
+					w.part(Part{Kind: PartToolCall, Message: m.src, Call: j})
+					if j > 0 {
+						w.template("\n")
+					}
+					w.template("<" + dsDSML + dsInvoke + ` name="`)
+					w.field(call.name)
+					w.template(`">` + "\n")
+					dsArguments(w, call.arguments)
+					w.template("\n</" + dsDSML + dsInvoke + ">")
 				}
-				out.WriteString("\n\n<" + dsDSML + dsCalls + ">\n" + strings.Join(calls, "\n") + "\n</" + dsDSML + dsCalls + ">")
+				w.template("\n</" + dsDSML + dsCalls + ">")
 			}
-			out.WriteString(dsEOS)
+			w.template(dsEOS)
 		}
 		if i+1 < len(messages) && messages[i+1].role != "assistant" {
 			continue
 		}
 		if m.role == "user" || (m.role == "system" && i > 0) {
-			out.WriteString(dsAssistant)
+			w.part(Part{Kind: PartNext, Message: -1})
+			w.template(dsAssistant)
 			if thinking && (!drop || i >= last) {
-				out.WriteString(dsThink)
+				w.template(dsThink)
 			} else {
-				out.WriteString(dsThinkEnd)
+				w.template(dsThinkEnd)
 			}
 		}
 	}
-	return out.String()
 }
 
 func dsRender(body []byte, thinking bool, effort int) (string, error) {
@@ -507,7 +554,7 @@ func dsRender(body []byte, thinking bool, effort int) (string, error) {
 	}
 	if len(tools) > 0 && (len(messages) == 0 || messages[0].role != "system") {
 		// The tools go in a system message, so one has to be there to carry them.
-		messages = append([]dsMessage{{role: "system"}}, messages...)
+		messages = append([]dsMessage{{role: "system", src: -1}}, messages...)
 	}
 	return dsPrompt(messages, tools, thinking, effort), nil
 }

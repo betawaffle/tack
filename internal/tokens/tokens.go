@@ -10,9 +10,12 @@ type Counter struct {
 	Request func(body []byte) (int, error)
 	// Text counts a piece of text on its own, without what surrounds it in a prompt.
 	Text func(text string) (int, error)
+
+	render func(body []byte, out *Output) (*Prompt, error)
+	tokens func(text string) ([]int, error)
 }
 
-var deepSeekV41 = Counter{Request: countDeepSeekV41, Text: countDeepSeekV41Text}
+var deepSeekV41 = Counter{Request: countDeepSeekV41, Text: countDeepSeekV41Text, render: renderDeepSeekV41, tokens: tokensDeepSeekV41}
 
 // counters has what's known. Adding a model means adding it here.
 var counters = map[string]Counter{

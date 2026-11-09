@@ -364,6 +364,12 @@ function renderReply(item, key, decision) {
   if (item.removed) main.append(el("div", "hint", "This reply is no longer sent."));
   const fork = el("div", "fork-row");
   fork.append(button("Fork from here", "mini net", () => beginFork(item.index + 1, "")));
+  if (item.call && current) {
+    const link = el("a", "mini", "Prompt");
+    link.href = `/prompt#${current}/${item.call}`;
+    link.title = "This call's prompt, as the model read it";
+    fork.append(" ", link);
+  }
   if (item.edited) fork.append(" ", el("span", "tag", "Edited"));
   if (item.staged) fork.append(" ", el("span", "tag waiting", "Changed for this fork"));
   if (!isRefused("written_assistant") && item.call) {

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt · tack</title>
+<meta name="tack-page" content="{{page_version}}" data-required="{{page_required}}">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/prompt.css">
+<script src="/static/prompt.js" defer></script>
+</head>
+<body class="prompt-page">
+<header class="prompt-head">
+  <a class="brand" href="/" aria-label="tack, back to conversations">
+    <svg class="tack" viewBox="0 0 24 24" aria-hidden="true">
+      <path class="tack-pin" d="M12 13 L12 23 L12.9 13 Z M12 13 L11.1 13 L12 23 Z"/>
+      <ellipse class="tack-head" cx="12" cy="8.5" rx="9" ry="6.5"/>
+      <ellipse class="tack-shine" cx="9" cy="6.6" rx="3.2" ry="1.5"/>
+    </svg>
+  </a>
+  <a id="back" class="mini" href="/">Conversation</a>
+  <div class="row" role="group" aria-label="Which call">
+    <button id="prev" class="mini" type="button" aria-label="The call before">←</button>
+    <span id="which" class="prompt-which"></span>
+    <button id="next" class="mini" type="button" aria-label="The call after">→</button>
+  </div>
+  <span id="facts" class="prompt-facts"></span>
+  <span class="spacer"></span>
+  <div class="row switches" role="group" aria-label="What to show">
+    <label><input type="checkbox" data-switch="changes"> Changes</label>
+    <label><input type="checkbox" data-switch="tokens"> Tokens</label>
+    <label><input type="checkbox" data-switch="wrap"> Wrap</label>
+    <label><input type="checkbox" data-switch="numbers"> Line numbers</label>
+  </div>
+</header>
+<div id="error" class="prompt-error" hidden></div>
+<main id="prompt" class="prompt-body" aria-label="The prompt"></main>
+</body>
+</html>

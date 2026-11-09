@@ -1,0 +1,58 @@
+/* A call's prompt, as the model read it. */
+.prompt-page { display: flex; flex-direction: column; height: 100%; background: var(--bg); color: var(--text); }
+.prompt-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px;
+  border-bottom: 1px solid var(--line); font: 13px/1.4 var(--ui);
+}
+.prompt-head .brand svg { width: 24px; height: 24px; display: block; }
+.prompt-head .spacer { flex: 1; }
+.prompt-which, .prompt-facts { color: var(--muted); font: 12px/1.4 var(--mono); }
+.prompt-facts .unknown { color: var(--wait); }
+.switches { gap: 12px; color: var(--muted); font-size: 12.5px; }
+.switches label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.prompt-error { margin: 16px; color: var(--warn); font: 13px var(--ui); }
+
+.prompt-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 0 40px; font: 13px/1.55 var(--mono); }
+.pl { display: flex; min-width: max-content; }
+.wrap .pl { min-width: 0; }
+/* The part's name, where it starts, and a bar in its color down its lines. */
+.pl-part {
+  flex: none; width: 92px; padding-right: 8px; text-align: right; color: var(--muted);
+  font: 11px/1.55 var(--ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none;
+  border-right: 3px solid var(--bar, transparent);
+}
+.pl-num { flex: none; width: 52px; padding-right: 10px; text-align: right; color: var(--muted); user-select: none; opacity: .7; }
+.pl-num[hidden] { display: none; }
+.pl-text { flex: 1; padding-left: 10px; white-space: pre; }
+.wrap .pl-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The format's own text, which no field of the request holds. */
+.t { color: var(--spend); background: color-mix(in srgb, var(--spend) 9%, transparent); border-radius: 2px; }
+/* What the model wrote in this call. */
+.g { background: color-mix(in srgb, var(--link) 8%, transparent); }
+.hot { outline: 1px solid color-mix(in srgb, var(--text) 30%, transparent); background: color-mix(in srgb, var(--text) 7%, transparent); }
+
+.k-system { --bar: light-dark(#8e8e96, #6c6c74); }
+.k-tools { --bar: light-dark(#b0b0b8, #4c4c54); }
+.k-user { --bar: light-dark(#1a66c2, #7cb7ff); }
+.k-tool_result { --bar: light-dark(#8a6410, #d9a441); }
+.k-reasoning { --bar: light-dark(#a7a0d8, #5a5290); }
+.k-content { --bar: var(--spend); }
+.k-tool_call { --bar: light-dark(#c47a1c, #e0a050); }
+
+/* Token boundaries: every other token shaded, and whitespace made visible. */
+.show-tokens .odd { background-image: linear-gradient(color-mix(in srgb, var(--text) 9%, transparent), color-mix(in srgb, var(--text) 9%, transparent)); }
+.ws { display: none; color: var(--muted); opacity: .6; }
+.show-tokens .ws { display: inline; }
+.show-tokens .wsp { display: none; }
+
+/* Changes since the call before. */
+.show-changes .ins { background: color-mix(in srgb, var(--good) 22%, transparent); }
+.del { display: none; }
+.show-changes .del { display: inline; background: color-mix(in srgb, var(--warn) 20%, transparent); text-decoration: line-through; color: var(--warn); }
+
+@media (max-width: 700px) {
+  .prompt-head { padding: 8px 16px; }
+  .pl-part { width: 64px; }
+  .pl-num { width: 40px; }
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/betawaffle/tack/internal/docs"
 	"github.com/betawaffle/tack/internal/prompt"
 	"github.com/betawaffle/tack/internal/store"
+	"github.com/betawaffle/tack/internal/tokens"
 )
 
 // The codebase and documentation pages show tack's source as this binary was built from it,
@@ -61,6 +62,7 @@ func (s *server) docsPage(w http.ResponseWriter, _ *http.Request) {
 
 var codePage = sync.OnceValue(func() []byte { return page("static/code.html") })
 var docsPage = sync.OnceValue(func() []byte { return page("static/docs.html") })
+var promptPage = sync.OnceValue(func() []byte { return page("static/prompt.html") })
 
 func page(name string) []byte {
 	data, err := static.ReadFile(name)
@@ -260,4 +262,24 @@ func (s *server) removeDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *server) promptPage(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(promptPage())
+}
+
+// callPrompt is a call as the model saw it. Only the body is shown, never the headers.
+func (s *server) callPrompt(w http.ResponseWriter, r *http.Request) {
+	p, err := s.core.Prompt(r.PathValue("id"), r.PathValue("call"))
+	if errors.Is(err, tokens.ErrNoRenderer) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, p)
 }
