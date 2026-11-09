@@ -9,6 +9,7 @@
 //	tack-show -events teapot  also its raw events
 //	tack-show -manual         list requests sent from the request page
 //	tack-show -manual last    one of them, by "last" or the start of its ID
+//	tack-show -cache          how much of each call's prompt the call before could have cached
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/betawaffle/tack/internal/config"
 	"github.com/betawaffle/tack/internal/core"
@@ -42,6 +44,7 @@ func main() {
 	events := flag.Bool("events", false, "also show the conversation's raw events")
 	counts := flag.Bool("tokens", false, "compare counted tokens with what hosts reported, for every call in the record")
 	manual := flag.Bool("manual", false, "list requests sent from the request page, or show one")
+	cache := flag.Bool("cache", false, "compare each call's cached tokens with what it shares with the calls before, for every call in the record")
 	flag.Parse()
 
 	dir := *dataDir
@@ -66,6 +69,12 @@ func main() {
 	}
 	if *counts {
 		if err := compareTokens(os.Stdout, st); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if *cache {
+		if err := compareCache(os.Stdout, st); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -499,4 +508,157 @@ func outputOf(st *store.Store, ev *store.Event) (*tokens.Output, bool) {
 		out.Calls = append(out.Calls, tokens.OutputCall{Name: call.Name, Arguments: string(data)})
 	}
 	return out, true
+}
+
+// compareCache sets each call's cached tokens against the longest token prefix its prompt
+// shares with the call before it in the conversation (that call's prompt, and its prompt
+// followed by what it wrote, rendered as the next request carries it), and with any call
+// before it at all. Where the shared prefix ends, it shows which part of the earlier
+// call's text that is, and the tokens around it.
+func compareCache(w io.Writer, st *store.Store) error {
+	type rendered struct {
+		conv, call, host string
+		finished         time.Time
+		prompt, whole    []string // tokens' text
+		generated        int      // tokens in whole before what the model wrote, or -1
+		p                *tokens.Prompt
+	}
+	type started struct {
+		model string
+		body  store.Ref
+		time  time.Time
+	}
+	calls := map[string]started{}
+	last := map[string]*rendered{}
+	var all []*rendered
+	common := func(a, b []string) int {
+		n := 0
+		for n < len(a) && n < len(b) && a[n] == b[n] {
+			n++
+		}
+		return n
+	}
+	fmt.Fprintln(w, "conversation call host gap prev_prompt prev_whole prompt common_prompt common_whole best_any cached")
+	err := st.Replay(func(ev *store.Event) error {
+		switch ev.Type {
+		case store.CallStarted, store.ManualCallStarted:
+			calls[ev.Call] = started{ev.Model, ev.Request, ev.Time}
+		case store.CallFinished, store.ManualCallFinished:
+			call, ok := calls[ev.Call]
+			if !ok {
+				return nil
+			}
+			body, err := st.Get(call.body)
+			if err != nil {
+				return err
+			}
+			p, err := tokens.Render(call.model, body, nil)
+			if err != nil {
+				return nil
+			}
+			r := &rendered{conv: ev.Conversation, call: ev.Call, host: ev.Host, finished: ev.Time, generated: -1}
+			r.prompt = piecesOf(p.Text(), p.Tokens)
+			r.whole, r.p = r.prompt, p
+			if out, ok := outputOf(st, ev); ok {
+				if q, err := tokens.Render(call.model, body, out); err == nil && q.Generated >= 0 {
+					r.whole, r.p = piecesOf(q.Text(), q.Tokens), q
+					at := 0
+					for i, n := range q.Tokens {
+						if at >= q.Generated {
+							r.generated = i
+							break
+						}
+						at += n
+					}
+				}
+			}
+			var usage struct {
+				PromptTokens        int `json:"prompt_tokens"`
+				PromptTokensDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
+			}
+			if len(ev.Usage) > 0 {
+				_ = json.Unmarshal(ev.Usage, &usage)
+			}
+			best := 0
+			for _, o := range all {
+				best = max(best, common(o.prompt, r.prompt), common(o.whole, r.prompt))
+			}
+			where := ev.Conversation
+			if ev.Type == store.ManualCallFinished {
+				where = "manual"
+			}
+			prev := last[ev.Conversation]
+			if ev.Type == store.ManualCallFinished {
+				prev = nil
+			}
+			if prev == nil {
+				fmt.Fprintf(w, "%s %s %s - - - %d - - %d %d\n", where, ev.Call, ev.Host, len(r.prompt), best, usage.PromptTokensDetails.CachedTokens)
+			} else {
+				cp, cw := common(prev.prompt, r.prompt), common(prev.whole, r.prompt)
+				fmt.Fprintf(w, "%s %s %s %s %d %d %d %d %d %d %d\n", where, ev.Call, ev.Host, call.time.Sub(prev.finished).Round(time.Second), len(prev.prompt), len(prev.whole), len(r.prompt), cp, cw, best, usage.PromptTokensDetails.CachedTokens)
+				// Less cached than the call before shares, by more than the 512-token blocks
+				// hosts have been seen to cache in: what each earlier prompt here shares.
+				if usage.PromptTokensDetails.CachedTokens+512 <= cp {
+					fmt.Fprint(w, "  shares with earlier prompts:")
+					for _, o := range all {
+						if o.conv == ev.Conversation {
+							fmt.Fprintf(w, " %s %d", o.call, common(o.prompt, r.prompt))
+						}
+					}
+					fmt.Fprintln(w)
+				}
+				// Where the earlier text stops being this prompt's, unless it's all here.
+				if cw < len(prev.whole) && cw < len(r.prompt) {
+					fmt.Fprintf(w, "  diverges at token %d (model's own from %d), in the earlier call's %s; this call's %s\n", cw, prev.generated, partAt(prev.p, prev.whole, cw), partAt(r.p, r.prompt, cw))
+					lo, hi := max(0, cw-6), cw+6
+					fmt.Fprintf(w, "    before: %q\n    now:    %q\n", prev.whole[lo:min(hi, len(prev.whole))], r.prompt[lo:min(hi, len(r.prompt))])
+				}
+			}
+			if ev.Type == store.CallFinished {
+				last[ev.Conversation] = r
+			}
+			all = append(all, r)
+		}
+		return nil
+	}, func(string, int) {})
+	return err
+}
+
+func piecesOf(text string, lengths []int) []string {
+	out := make([]string, 0, len(lengths))
+	at := 0
+	for _, n := range lengths {
+		out = append(out, text[at:at+n])
+		at += n
+	}
+	return out
+}
+
+// partAt names the part the token at i starts in.
+func partAt(p *tokens.Prompt, pieces []string, i int) string {
+	if p == nil || i >= len(pieces) {
+		return "end"
+	}
+	at := 0
+	for _, s := range pieces[:i] {
+		at += len(s)
+	}
+	for _, seg := range p.Segments {
+		if at < len(seg.Text) {
+			part := p.Parts[seg.Part]
+			kind := "format"
+			if seg.Field {
+				kind = "field"
+			}
+			gen := ""
+			if part.Generated {
+				gen = ", generated"
+			}
+			return fmt.Sprintf("%s (%s of message %d%s)", part.Kind, kind, part.Message, gen)
+		}
+		at -= len(seg.Text)
+	}
+	return "end"
 }
