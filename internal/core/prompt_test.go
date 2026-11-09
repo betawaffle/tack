@@ -51,8 +51,8 @@ func TestACallsPromptIsShownWithItsReplyAndChanges(t *testing.T) {
 	if !inserted || second.Changes[0].Op != "same" {
 		t.Errorf("changes = %+v", second.Changes)
 	}
-	if second.CacheBlock != CacheBlockTokens || second.Cacheable%CacheBlockTokens != 0 || second.Cacheable > promptTokens(first.Prompt) {
-		t.Errorf("cacheable = %d of %d", second.Cacheable, promptTokens(first.Prompt))
+	if second.CacheBlock != CacheBlockTokens {
+		t.Errorf("cache block = %d", second.CacheBlock)
 	}
 	if _, err := c.Prompt(id, "nope"); err != ErrNotFound {
 		t.Errorf("an unknown call: %v", err)

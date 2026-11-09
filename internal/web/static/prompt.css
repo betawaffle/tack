@@ -16,7 +16,7 @@
   --del-bg: light-dark(#f6d2d2, #4d2224);
   --del-text: light-dark(#a1262b, #f19a9c);
   --cache-mark: light-dark(#55575f, #b8bac0);
-  --cache-hatch: light-dark(rgb(0 0 0 / .22), rgb(255 255 255 / .2));
+  --cache-hatch: light-dark(rgb(0 0 0 / .07), rgb(255 255 255 / .07));
 }
 
 .prompt-page { display: flex; flex-direction: column; height: 100%; background: var(--bg); color: var(--text); }
@@ -45,7 +45,6 @@
 .legend-group[hidden] { display: none; }
 .legend-item { display: flex; align-items: center; gap: 6px; padding: 1px 6px; border-radius: 4px; }
 .legend-item i { flex: none; width: 10px; height: 10px; border-radius: 2px; background: var(--k); }
-.legend-item.on { color: var(--text); background: var(--hover); box-shadow: inset 2px 0 0 var(--text); }
 .legend .sample { font: 11.5px/1.4 var(--mono); padding: 0 3px; border-radius: 3px; background: var(--hover); }
 .counts { display: grid; grid-template-columns: auto auto 1fr; column-gap: 8px; }
 .counts .count { display: contents; font: 11.5px/1.5 var(--mono); }
@@ -135,10 +134,10 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .legend .tok.del { display: inline; background: var(--del-bg); color: var(--del-text); text-decoration: line-through; }
 .show-changes .tok.ins.hot, .show-changes .tok.del.hot { box-shadow: inset 0 0 0 99px var(--hot); }
 
-/* The host's cache: a mark where each block of tokens starts, and hatching on what wasn't
-   (or can't be) served from it. */
-.show-cache .tok.blk, .legend .tok.blk { box-shadow: inset 2px 0 0 var(--cache-mark); }
-.show-cache .tok.nc, .legend .tok.nc { background-image: repeating-linear-gradient(135deg, var(--cache-hatch) 0 1px, transparent 1px 5px); }
+/* The host's cache: a mark beside rows where a block starts, and faint hatching on what the
+   next call is certain not to get from it. */
+.pl-num.blk { box-shadow: inset -2px 0 0 var(--cache-mark); }
+.tok.nc { background-image: repeating-linear-gradient(135deg, var(--cache-hatch) 0 1px, transparent 1px 5px); }
 
 @media (max-width: 1100px) {
   .legend {

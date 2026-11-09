@@ -152,7 +152,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const lines = await p.locator(".pl-num:not(:empty)").count();
   ok(lines < (await p.locator(".pl").count()), "parts that start partway along a line get their own row, without a line number");
   await p.locator(".tok.f, .tok:has(.f)").first().hover();
-  ok((await p.locator(".legend-item.on").count()) >= 2, "pointing at a token lights up the legend");
+  ok((await p.locator(".tok.hot").count()) >= 1, "pointing at a token shades it");
   // The fake host's counts are made up, so they're shown as not matching.
   ok((await p.locator(".count.off").count()) >= 1 && (await p.locator(".count-off").first().innerText()).startsWith("host said"), "a count the host disagrees with is shown");
   const before = await p.locator(".pl").count();
@@ -176,7 +176,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.screenshot({ path: "shots/prompt.png" });
 
   // The cache: the fake host reports what it cached, so the tokens after it are marked.
-  ok((await p.locator(".count-label", { hasText: "Cached" }).count()) === 1, "how much was cached is shown");
+  ok((await p.locator(".count-label", { hasText: "Not cached" }).count()) === 1 && (await p.locator(".tok.nc").count()) > 0, "what the next call can't get from the cache is shown");
 
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");
@@ -185,7 +185,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForFunction(() => [...document.querySelectorAll(".pl.k-tool .pl-text")].some((t) => parseFloat(getComputedStyle(t).paddingLeft) > 20));
   const indents = await p.evaluate(() => new Set([...document.querySelectorAll(".pl.k-tool .pl-text")].map((t) => getComputedStyle(t).paddingLeft)).size);
   ok(indents > 2, `pretty JSON is drawn indented (${indents} different indents)`);
-  ok((await p.locator(".tok.blk").count()) >= 5, "every cache block's start is marked");
+  ok((await p.locator(".pl-num.blk").count()) >= 5, "rows where a cache block starts are marked");
   await p.click("[data-switch=pretty]");
 
   // On a phone.

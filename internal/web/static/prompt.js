@@ -13,12 +13,6 @@ const LABELS = {
   calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", next: "",
 };
 const DEPTHS = 5;
-// Whose each kind of part is, for the legend.
-const AUTHOR = {
-  system: "k-system", prompt: "k-system", effort: "k-system", tools: "k-system", tool: "k-system", user_turn: "k-user", user: "k-user", tool_result: "k-user",
-  assistant: "k-model", reasoning: "k-model", content: "k-model", calls: "k-model", tool_call: "k-model",
-  parameter: "k-model", value: "k-model",
-};
 
 function loadSwitches() {
   try {
@@ -96,30 +90,34 @@ function partKey(parts, k) {
   return out.join("/");
 }
 
-// What the host could cache of the prompt being drawn: the size of a block, how many of the
-// prompt's tokens came from the cache (or could have, if the host didn't say), and how many
-// tokens the prompt is. Tokens after it are what the model wrote, which is never cached.
-let cache = { block: 0, cached: -1, prompt: 0 };
+// What the next call can't get from the host's cache. The host caches a call's prompt in
+// whole blocks, and never what the model wrote, so everything from the end of this prompt's
+// last whole block on is certain to be sent at full price: the cheapest part to change.
+let cache = { block: 0, from: Infinity };
 
 function cacheOf(data) {
   const p = data.prompt;
+  const block = data.cache_block || 0;
+  if (!block) return { block: 0, from: Infinity };
   let prompt = 0, at = 0;
   for (const n of p.tokens) {
     if (p.generated >= 0 && at >= p.generated) break;
     prompt++;
     at += n;
   }
-  const cached = data.reported_prompt ? (data.reported_cached || 0) : data.previous ? (data.cacheable || 0) : -1;
-  return { block: data.cache_block || 0, cached, prompt };
+  return { block, from: Math.floor(prompt / block) * block };
 }
 
-// The classes a token gets for the cache: the start of a block, and not cached.
+// The class a token gets for the cache: not cached for the next call.
 function cacheClasses(t) {
-  if (!cache.block || t >= cache.prompt) return "";
-  let out = "";
-  if (t > 0 && t % cache.block === 0) out += " blk";
-  if (cache.cached >= 0 && t >= cache.cached) out += " nc";
-  return out;
+  return t >= cache.from ? " nc" : "";
+}
+
+// Whether a row has the start of a cache block in it, for a mark beside its number.
+function blockIn(r) {
+  if (!cache.block) return 0;
+  for (const item of r.items) if (item.spans && item.token > 0 && item.token % cache.block === 0) return item.token / cache.block + 1;
+  return 0;
 }
 
 // A row's HTML.
@@ -149,7 +147,6 @@ function rowHTML(r, parts) {
       continue;
     }
     const ins = (item.inserted ? " ins" : "") + cacheClasses(item.token);
-    const blockTitle = ins.includes(" blk") ? ` title="Cache block ${item.token / cache.block + 1} starts here"` : "";
     const piece = (sp) => {
       const v = visible(sp.text);
       return { cls: `${sp.field ? "f" : "t"}${sp.generated ? " g" : ""}${v.cls}`, html: v.html + (sp.newline ? '<span class="ws nl">↵</span>' : "") };
@@ -157,9 +154,9 @@ function rowHTML(r, parts) {
     // A token in one piece is one element; one in several has an element for each.
     if (item.spans.length === 1) {
       const v = piece(item.spans[0]);
-      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}"${blockTitle}>${v.html}</span>`;
+      items += `<span class="tok ${v.cls}${ins}" data-t="${item.token}">${v.html}</span>`;
     } else {
-      items += `<span class="tok${ins}" data-t="${item.token}"${blockTitle}>`;
+      items += `<span class="tok${ins}" data-t="${item.token}">`;
       for (const sp of item.spans) {
         const v = piece(sp);
         items += `<span class="${v.cls}">${v.html}</span>`;
@@ -167,12 +164,13 @@ function rowHTML(r, parts) {
       items += "</span>";
     }
   }
+  const block = blockIn(r);
   let number = r.number === null ? "" : String(r.number);
   if (r.collapsed !== undefined && r.lastNumber !== r.number) number += `–${r.lastNumber}`;
   // The name, bars and number stay put when the text scrolls sideways.
   return `<div class="pl k-${part.kind}${r.collapsed !== undefined ? " is-collapsed" : ""}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
     `<div class="pl-gutter"><div class="pl-part" title="${escapeHTML(title)}"${named === undefined ? "" : ` data-p="${named}"`}>${escapeHTML(label)}</div>` +
-    `<div class="pl-bars">${bars}</div><div class="pl-num">${number}</div></div>` +
+    `<div class="pl-bars">${bars}</div><div class="pl-num${block ? " blk" : ""}"${block ? ` title="Cache block ${block} starts in this row"` : ""}>${number}</div></div>` +
     `<div class="pl-text"${style}>${items}</div></div>`;
 }
 
@@ -256,13 +254,11 @@ function showCounts(data) {
   };
   line("In", prompt, data.reported_prompt);
   if (p.generated >= 0) line("Out", output, data.reported_output);
-  if (data.reported_prompt || data.previous) {
+  if (cache.block) {
     const item = el("div", "count");
-    const cached = data.reported_prompt ? data.reported_cached || 0 : null;
-    item.append(el("span", "count-label", "Cached"), el("span", "count-n", (cached ?? data.cacheable ?? 0).toLocaleString("en-US")));
-    let note = cached === null ? "could be" : data.previous ? `could be ${(data.cacheable || 0).toLocaleString("en-US")}` : "";
-    item.append(el("span", cached !== null && data.previous && cached < (data.cacheable || 0) ? "count-off" : "count-note", note));
-    item.title = `The host caches a call's prompt in blocks of ${data.cache_block} tokens, and the next call can reuse the blocks it shares. What the model writes isn't cached.`;
+    const n = p.tokens.length - Math.min(cache.from, p.tokens.length);
+    item.append(el("span", "count-label", "Not cached"), el("span", "count-n", n.toLocaleString("en-US")), el("span", "count-note", "next call"));
+    item.title = `The host caches a call's prompt in blocks of ${cache.block} tokens, and never what the model writes, so the next call can't get these from its cache, whatever it changes.`;
     box.append(item);
   }
 }
@@ -285,7 +281,7 @@ $("prompt").addEventListener("click", (event) => {
   newScroller.scrollTop = again ? scrolled + again.getBoundingClientRect().top - top : scrolled;
 });
 
-// Pointing at a token shades it, and marks what the legend says about it.
+// Pointing at a token shades it, with any rows it carries on into.
 let hot = [];
 $("prompt").addEventListener("mouseover", (event) => {
   const box = event.target.closest(".tok");
@@ -300,17 +296,6 @@ $("prompt").addEventListener("mouseover", (event) => {
     for (let n = 0; n < 9 && row; n++, row = row.nextElementSibling) hot.push(...row.querySelectorAll(`.tok[data-t="${t}"]`));
   } else if (box) hot = [box];
   for (const node of hot) node.classList.add("hot");
-  const keys = new Set();
-  if (box) {
-    const row = box.closest(".pl");
-    for (const bar of row.querySelectorAll(".pl-bars i[class]")) {
-      const kind = [...bar.classList].find((c) => c.startsWith("k-"));
-      if (kind) keys.add(AUTHOR[kind.slice(2)] || kind);
-    }
-    for (const key of ["del", "ins", "blk", "nc"]) if (box.classList.contains(key)) keys.add(key);
-    for (const key of ["t", "f", "g"]) if (box.classList.contains(key) || box.querySelector("." + key)) keys.add(key);
-  }
-  for (const item of document.querySelectorAll("[data-legend]")) item.classList.toggle("on", keys.has(item.dataset.legend));
 });
 
 // A made-up conversation of about this many tokens, of every kind of part, for seeing how
