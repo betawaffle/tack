@@ -111,7 +111,9 @@ test("a user turn can hold tool results and a message", () => {
   const turn = l.rows.findIndex((r) => rowText(r).includes("what's in b.txt"));
   assert.ok(turn > 0);
   assert.deepEqual(l.rows[turn].chain.map((k) => l.parts[k].kind), ["user_turn", "user"]);
-  assert.equal(kindOf(l, l.rows[turn - 1]), "tool_result");
+  // Between them, the turn's own blank line.
+  assert.equal(kindOf(l, l.rows[turn - 1]), "user_turn");
+  assert.equal(kindOf(l, l.rows[turn - 2]), "tool_result");
 });
 
 test("pretty JSON breaks where canonical printing would, and indents the rest", () => {
@@ -151,4 +153,13 @@ test("a collapsed part is one row that says what it hides, and the numbering car
   // The rows after it are unchanged.
   assert.deepEqual(l.rows.at(-1), full.rows.at(-1));
   assert.equal(l.rows.length, full.rows.length - inside.length + 1);
+});
+
+test("only the newline that ends a part's last row is in it, so a part has no empty last row", () => {
+  const l = layout(data, {});
+  for (const r of l.rows) {
+    const kind = kindOf(l, r);
+    // A field's own blank lines are its, but the format's newline after a part isn't.
+    if (kind === "tool" || kind === "tool_result") assert.notEqual(rowText(r), "\n", `an empty ${kind} row`);
+  }
 });

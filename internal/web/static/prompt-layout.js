@@ -194,8 +194,10 @@ const tackPromptLayout = (() => {
         lines.forEach((line, k) => {
           const last = k === lines.length - 1;
           if (!line && last) return;
-          if (!row || r !== row.part) {
-            newRow(r);
+          // Only the newline that ends the row stays with it; after that, it's its own part's.
+          const here = k === 0 ? r : rowPart(s.part);
+          if (!row || here !== row.part) {
+            newRow(here);
             item = null;
           }
           if (!item) {

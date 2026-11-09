@@ -272,6 +272,21 @@ function showCounts(data) {
   }
 }
 
+// The element that scrolls up and down: the page body, or the column when lines aren't
+// wrapped. Drawing again replaces the column, so it's looked up each time.
+const scroller = () => (switches.wrap ? $("prompt") : $("prompt").querySelector(".prompt-inner") || $("prompt"));
+const firstRowOf = (k) => $("prompt").querySelector(`.pl:not([hidden]) [data-f="${k}"], .pl:not([hidden]) .pl-bars [data-p="${k}"], .pl.editing`)?.closest(".pl");
+
+// keepPlace draws again with part k's first row where it was on the screen.
+function keepPlace(k, draw) {
+  const before = firstRowOf(k);
+  const top = before?.getBoundingClientRect().top;
+  const scrolled = scroller().scrollTop;
+  draw();
+  const after = $("prompt").querySelector(`.pl [data-f="${k}"], .pl .pl-bars [data-p="${k}"]`)?.closest(".pl");
+  scroller().scrollTop = before && after ? scrolled + after.getBoundingClientRect().top - top : scrolled;
+}
+
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
 $("prompt").addEventListener("click", (event) => {
   const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
@@ -280,14 +295,7 @@ $("prompt").addEventListener("click", (event) => {
   if (collapsedKeys.has(key)) collapsedKeys.delete(key);
   else collapsedKeys.add(key);
   // Keep the row that was clicked where it was on the screen.
-  const row = target.closest(".pl");
-  const top = row.getBoundingClientRect().top;
-  const scroller = switches.wrap ? $("prompt") : $("prompt").querySelector(".prompt-inner");
-  const scrolled = scroller.scrollTop;
-  render(current.data, null, true);
-  const again = [...$("prompt").querySelectorAll(`.pl [data-p="${target.dataset.p}"]`)][0]?.closest(".pl");
-  const newScroller = switches.wrap ? $("prompt") : $("prompt").querySelector(".prompt-inner");
-  newScroller.scrollTop = again ? scrolled + again.getBoundingClientRect().top - top : scrolled;
+  keepPlace(Number(target.dataset.p), () => render(current.data, null, true));
 });
 
 // Pointing at a part's bar or name marks its whole bar and its name.
@@ -345,7 +353,7 @@ async function startDraft() {
   await previewDraft();
 }
 
-async function previewDraft() {
+async function previewDraft(anchor) {
   const res = await fetch("/api/prompt-preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -363,7 +371,8 @@ async function previewDraft() {
   $("prev").disabled = $("next").disabled = true;
   $("edit").textContent = "Stop Editing";
   document.body.classList.add("drafting");
-  render(data, null, true);
+  if (anchor === undefined) render(data, null, true);
+  else keepPlace(anchor, () => render(data, null, true));
 }
 
 async function stopDraft() {
@@ -454,15 +463,20 @@ function openEditor(k) {
     done = true;
     if (save && area.value !== was) {
       field.set(area.value);
-      previewDraft();
+      previewDraft(k);
       return;
     }
     editing.remove();
     for (const row of rows) row.hidden = false;
   };
   area.addEventListener("blur", () => close(true));
+  // Enter saves, and Shift+Enter is a new line.
   area.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close(false);
+    else if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      area.blur();
+    }
   });
 }
 

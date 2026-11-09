@@ -166,3 +166,6 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
   background: var(--surface); color: var(--text); font: inherit; line-height: inherit; resize: none; overflow: hidden;
 }
 .edit-box:focus { outline: none; border-color: var(--text); }
+
+/* A collapsed part's line range can be wider than the column; it runs to the left. */
+.is-collapsed .pl-num { display: flex; justify-content: flex-end; overflow: visible; white-space: nowrap; font-size: 11px; }
