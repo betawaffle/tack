@@ -194,5 +194,5 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .drafting .legend { bottom: 64px; }
 /* Room past the last row for it to be at the top of the screen, so drawing again never runs
    out of room and pulls the scroll back. */
-.prompt-body.wrap { padding-bottom: calc(100vh + 64px); }
-.prompt-body:not(.wrap) .prompt-inner { padding-bottom: calc(100vh + 64px); }
+.prompt-body.wrap { padding-bottom: 100vh; }
+.prompt-body:not(.wrap) .prompt-inner { padding-bottom: 100vh; }

@@ -207,8 +207,12 @@ function rowHTML(r, parts) {
 const BLOCK_ROWS = 200;
 let drawing = 0;
 
-// eager draws every block at once, for when what's on screen has to stay put.
+// eager draws every block at once, for when what's on screen has to stay put. drawAllNext
+// asks that of the next drawing, wherever it comes from.
+let drawAllNext = false;
 function render(data, done, eager) {
+  eager = eager || drawAllNext;
+  drawAllNext = false;
   const parts = data.prompt.parts;
   const collapsed = new Set(parts.map((_, k) => k).filter((k) => isCollapsed(parts, k)));
   cache = cacheOf(data);
@@ -449,6 +453,7 @@ async function stopDraft() {
   $("edit").textContent = "Edit";
   await keepView(async () => {
     $("send-bar").hidden = true;
+    drawAllNext = true;
     await load();
     document.body.classList.remove("drafting");
   });
