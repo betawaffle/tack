@@ -123,22 +123,27 @@ function render(data) {
 
   let line = null;
   let number = 0;
-  let labelled = -1;
+  const labelled = new Set();
   const newLine = (partIndex) => {
     number++;
     line = el("div", "pl");
-    const part = p.parts[partIndex];
-    const side = el("div", `pl-part k-${part.kind}`);
-    if (partIndex !== labelled && LABELS[part.kind]) {
-      side.textContent = LABELS[part.kind] + (part.generated ? " ✦" : "");
-      side.title = `${part.kind}${part.message >= 0 ? `, message ${part.message}` : ""}${part.generated ? ", written by the model in this call" : ""}`;
-      labelled = partIndex;
-    }
+    const side = el("div", `pl-part k-${p.parts[partIndex].kind}`);
     const num = el("div", "pl-num", String(number));
     const content = el("div", "pl-text");
     line.append(side, num, content);
     line.content = content;
+    line.side = side;
     body.append(line);
+  };
+  // A part is named on the line it starts on, even partway along it.
+  const name = (partIndex) => {
+    const part = p.parts[partIndex];
+    if (labelled.has(partIndex) || !LABELS[part.kind]) return;
+    labelled.add(partIndex);
+    const label = LABELS[part.kind] + (part.generated ? " ✦" : "");
+    const what = `${part.kind}${part.message >= 0 ? `, message ${part.message}` : ""}${part.generated ? ", written by the model in this call" : ""}`;
+    line.side.textContent = line.side.textContent ? `${line.side.textContent} · ${label}` : label;
+    line.side.title = line.side.title ? `${line.side.title}\n${what}` : what;
   };
 
   let seg = 0;
@@ -166,7 +171,10 @@ function render(data) {
       // One span per line of the piece.
       const lines = piece.split("\n");
       lines.forEach((part, k) => {
+        const last = k === lines.length - 1;
+        if (!part && last) return;
         if (!line) newLine(s.part);
+        name(s.part);
         if (part) {
           const span = el("span");
           const cls = [];
@@ -179,7 +187,7 @@ function render(data) {
           appendVisible(span, part);
           line.content.append(span);
         }
-        if (k < lines.length - 1) {
+        if (!last) {
           const mark = el("span", "ws" + (inserted.has(ti) ? " ins" : ""), "↵");
           line.content.append(mark);
           line = null;

@@ -33,12 +33,14 @@ type callSource struct {
 
 func (c *Core) callSource(it *item) callSource {
 	src := callSource{id: it.callID, model: it.model, host: it.host, request: it.request}
-	if it.finished != nil && it.finished.Status == 200 {
-		out := &tokens.Output{Content: c.text(it.parts)}
-		if it.reasoning != "" {
-			if data, err := c.cfg.Store.Get(it.reasoning); err == nil {
-				out.Reasoning = string(data)
-			}
+	// What the model wrote, before anyone changed it.
+	if ev := it.finished; ev != nil && ev.Error == "" && usable(ev) {
+		out := &tokens.Output{}
+		if ev.Text != "" {
+			out.Content = c.text([]store.Part{{Block: ev.Text}})
+		}
+		if ev.Reasoning != "" {
+			out.Reasoning = c.text([]store.Part{{Block: ev.Reasoning}})
 		}
 		for _, call := range it.calls {
 			args, _ := c.cfg.Store.Get(call.Arguments)
