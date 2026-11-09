@@ -92,21 +92,42 @@ function appendVisible(parent, text) {
   flush();
 }
 
-// Follows JSON's nesting across tokens, outside strings, to pretty-print it between tokens.
-function jsonState() {
-  return { depth: 0, inString: false, escaped: false };
-}
-
-function stepJSON(state, text) {
-  for (const ch of text) {
-    if (state.inString) {
-      if (state.escaped) state.escaped = false;
-      else if (ch === "\\") state.escaped = true;
-      else if (ch === '"') state.inString = false;
-    } else if (ch === '"') state.inString = true;
-    else if (ch === "{" || ch === "[") state.depth++;
-    else if (ch === "}" || ch === "]") state.depth--;
+// Where pretty-printed JSON breaks its rows, by byte offset, with how far the new row is
+// indented. Only the layout changes: the indent is padding, and the text's own spaces after a
+// break still show, taking up as much of the indent as they cover.
+function prettyBreaks(bytes, ranges) {
+  const out = new Map();
+  const SPACE = 32, QUOTE = 34, SLASH = 92;
+  const opens = new Set([123, 91]), closes = new Set([125, 93]), COMMA = 44;
+  for (const [from, to] of ranges) {
+    let depth = 0, inString = false, escaped = false;
+    const spacesAt = (x) => {
+      let n = 0;
+      while (x + n < to && bytes[x + n] === SPACE) n++;
+      return n;
+    };
+    const nextSolid = (x) => x + spacesAt(x);
+    const breakAt = (x, level) => out.set(x, Math.max(0, level * 2 - spacesAt(x)));
+    for (let i = from; i < to; i++) {
+      const c = bytes[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (c === SLASH) escaped = true;
+        else if (c === QUOTE) inString = false;
+        continue;
+      }
+      if (c === QUOTE) inString = true;
+      else if (opens.has(c)) {
+        depth++;
+        // An empty object or list stays on its row.
+        if (!closes.has(bytes[nextSolid(i + 1)])) breakAt(i + 1, depth);
+      } else if (closes.has(c)) {
+        depth--;
+        if (!opens.has(bytes[i - 1])) breakAt(i, depth);
+      } else if (c === COMMA) breakAt(i + 1, depth);
+    }
   }
+  return out;
 }
 
 // Values that get rows of their own even though they're one line, because their parameter's
@@ -178,6 +199,10 @@ function render(data) {
     }
   }
 
+  const breaks = switches.pretty
+    ? prettyBreaks(bytes, segAt.filter((x) => x.seg.field && parts[x.seg.part].kind === "tools").map((x) => [x.start, x.end]))
+    : new Map();
+
   let row = null;
   let region = -1;
   let number = 0;
@@ -203,7 +228,7 @@ function render(data) {
     }
     const num = el("div", "pl-num", lineDone ? String(++number) : "");
     const content = el("div", "pl-text");
-    if (indent) content.append(el("span", "indent", "  ".repeat(indent)));
+    if (indent) content.style.paddingLeft = `calc(8px + ${indent}ch)`;
     row.append(label, bars, num, content);
     row.content = content;
     inner.append(row);
@@ -217,7 +242,6 @@ function render(data) {
     return x;
   };
 
-  const json = jsonState();
   let seg = 0;
   let start = 0;
   p.tokens.forEach((len, ti) => {
@@ -235,24 +259,28 @@ function render(data) {
     let a = charStart(start);
     const tokenEnd = charStart(end);
     let box = null;
-    let tokenText = "";
-    let inTools = false;
     while (a < tokenEnd) {
       while (segAt[seg].end <= a) seg++;
       const s = segAt[seg].seg;
       let b = Math.min(tokenEnd, segAt[seg].end);
       if (a < generated && b > generated) b = generated;
+      // Pretty-printed, a row can break inside a token, which then carries on in the next row.
+      if (breaks.has(a) && row && row.content.childElementCount) {
+        indent = breaks.get(a);
+        row = null;
+        box = null;
+      }
+      for (let x = a + 1; x < b; x++) {
+        if (breaks.has(x)) {
+          b = x;
+          break;
+        }
+      }
       b = charStart(b);
       const piece = decode(a, b);
       let r = rowPart(s.part);
       // A newline of an outer part's ends the row it's on rather than opening one of its own.
       if (row && r !== region && !s.field && /^\s+$/.test(piece) && chain(region).includes(r)) r = region;
-      inTools = switches.pretty && s.field && parts[s.part].kind === "tools";
-      // Pretty-printed, a closing bracket starts a row of its own, at its depth.
-      if (inTools && !json.inString && /^\s*[}\]]/.test(piece) && row && row.content.childElementCount) {
-        indent = Math.max(0, json.depth - 1);
-        row = null;
-      }
       const lines = piece.split("\n");
       lines.forEach((line, k) => {
         const last = k === lines.length - 1;
@@ -278,14 +306,7 @@ function render(data) {
           box = null;
         }
       });
-      if (inTools) stepJSON(json, piece);
-      tokenText += piece;
       a = b;
-    }
-    // Pretty-printed, an opening bracket or a comma ends the row, without ending the line.
-    if (inTools && !json.inString && /[{[,]\s*$/.test(tokenText)) {
-      indent = json.depth;
-      row = null;
     }
     start = end;
   });
