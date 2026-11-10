@@ -142,7 +142,7 @@ func compare(out *CallPrompt, model string, was *tokens.Prompt) error {
 	if was.Generated >= 0 {
 		out.PreviousPrompt = len(tokens.SplitAt(was.Tokens, was.Generated))
 	}
-	out.Changes = tokens.Diff(pieces(was.Text(), was.Tokens), pieces(out.Prompt.Text()[:end], now))
+	out.Changes = tokens.Compare(was, pieces(was.Text(), was.Tokens), out.Prompt, pieces(out.Prompt.Text()[:end], now))
 	return nil
 }
 

@@ -61,7 +61,8 @@ const tackPromptLayout = (() => {
     return keyed ? [...keyed[0]].length : 0;
   }
 
-  // What changed since the call before, by this call's tokens.
+  // What changed since the call before, by this call's tokens. Deleted text is in runs, each
+  // with where it was (its place, as placeOf gives it), before the token that came after it.
   function changesOf(data) {
     const inserted = new Set();
     const deletedBefore = new Map();
@@ -81,7 +82,8 @@ const tackPromptLayout = (() => {
       } else if (e.op === "deleted") {
         const pieces = [];
         for (let k = i; k < i + e.n; k++) pieces.push(new TextDecoder().decode(prevBytes.subarray(...prevAt[k])));
-        deletedBefore.set(j, pieces);
+        if (!deletedBefore.has(j)) deletedBefore.set(j, []);
+        deletedBefore.get(j).push({ pieces, place: e.place || "" });
         i += e.n;
       } else {
         for (let k = j; k < j + e.n; k++) inserted.add(k);
@@ -130,6 +132,14 @@ const tackPromptLayout = (() => {
       return k;
     };
     const { inserted, deletedBefore } = changesOf(data);
+    // Where a part is: its kind and each one's around it, outermost first, with names, the way
+    // the server gives deleted text's place.
+    const places = [];
+    const placeOf = (k) => {
+      if (k < 0) return "";
+      if (places[k] === undefined) places[k] = `${placeOf(parts[k].parent)}/${parts[k].kind}${parts[k].name ? `:${parts[k].name}` : ""}`;
+      return places[k];
+    };
     const breaks = options.pretty
       ? prettyBreaks(bytes, segAt.filter((x) => x.seg.field && parts[x.seg.part].kind === "tool").map((x) => [x.start, x.end]))
       : new Map();
@@ -159,14 +169,37 @@ const tackPromptLayout = (() => {
       while (x < bytes.length && (bytes[x] & 0xc0) === 0x80) x++;
       return x;
     };
+    // A row for deleted text from a part that isn't there any more, in the part around it that
+    // is. It has no number of its own.
+    const goneRow = (partIndex) => {
+      if (row && row.gone && row.part === partIndex) return;
+      row = { part: partIndex, chain: chain(partIndex), fresh: [], starts: true, number: null, line: number, indent: 0, hang: 0, items: [], gone: true };
+      rows.push(row);
+    };
 
     let seg = 0;
     let start = 0;
     p.tokens.forEach((len, ti) => {
       const end = start + len;
       if (deletedBefore.has(ti)) {
-        if (!row) newRow(rowPart(segAt[seg].seg.part));
-        for (const piece of deletedBefore.get(ti)) row.items.push({ deleted: piece });
+        let at = seg;
+        while (segAt[at].end <= start) at++;
+        const k = segAt[at].seg.part;
+        const here = placeOf(k);
+        for (const run of deletedBefore.get(ti)) {
+          // Deleted text from another part goes in a row of its own, in the part both are in.
+          const around = run.place && run.place !== here ? chain(k).findLast((a) => run.place.startsWith(`${placeOf(a)}/`) || run.place === placeOf(a)) : undefined;
+          if (around !== undefined) goneRow(around);
+          else if (run.place && run.place !== here) {
+            // With no part in common, it goes at the start of the next token's row.
+            if (!row || row.gone || row.part !== rowPart(k)) newRow(rowPart(k));
+          } else {
+            if (row?.gone) row = null;
+            if (!row) newRow(rowPart(k));
+          }
+          for (const piece of run.pieces) row.items.push({ deleted: piece });
+        }
+        if (row?.gone) row = null;
       }
       // A token can end partway through a character; the character goes with the token it
       // starts in.

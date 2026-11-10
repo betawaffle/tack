@@ -178,3 +178,15 @@ test("a collapsed part says when something in it changed", () => {
   const start = l0.parts.findIndex((p) => p.kind === "start");
   assert.ok(!layout(data, { collapsed: new Set([start]) }).rows.find((r) => r.collapsed === start).changed);
 });
+
+test("a deleted part is on a row of its own, not in the part after it", () => {
+  const l = layout(data, {});
+  const deleted = (r) => r.items.filter((i) => i.deleted !== undefined).map((i) => i.deleted).join("");
+  // The tool that was left out is in a row of the tools part, with no number of its own.
+  const gone = l.rows.filter((r) => r.gone);
+  assert.ok(gone.some((r) => kindOf(l, r) === "tools" && deleted(r).includes("old_tool") && r.number === null));
+  // No tool's row has any of it.
+  for (const r of l.rows) if (kindOf(l, r) === "tool") assert.equal(deleted(r), "");
+  // A change inside a part stays in that part's row.
+  assert.ok(l.rows.some((r) => kindOf(l, r) === "prompt" && deleted(r).trim() === "short"));
+});

@@ -81,7 +81,7 @@ async function preview(anchor) {
   const { prompt: data, problem } = saved;
   if (!data || !drawn()) return show(data, { problem });
   hideError();
-  if (anchor === undefined) keepView(() => show(data, { eager: true }));
+  if (anchor === undefined) await keepView(() => show(data, { eager: true }));
   else keepPlace(anchor, () => show(data, { eager: true }));
 }
 
@@ -236,6 +236,15 @@ function addMessageControls() {
     if (!row || rows.has(i)) return;
     rows.set(i, row);
     row.querySelector(".pl-part").prepend(checkbox(i, true));
+    // The last result of a batch can have a message from the person after it.
+    const messages = draft.request.messages;
+    if (part.kind === "tool_result" && messages[i + 1]?.role !== "tool") {
+      const add = el("button", "mini up-to-here add-message", messages[i + 1]?.role === "user" ? "Write a Message" : "Add a Message");
+      add.type = "button";
+      add.dataset.message = i;
+      add.title = "A message from you, after these results, in the same turn";
+      row.querySelector(".pl-text").append(add);
+    }
     if (i < last) {
       const up = el("button", "mini up-to-here", "Only Up To Here");
       up.type = "button";
@@ -266,8 +275,25 @@ $("prompt").addEventListener("change", (event) => {
 });
 $("prompt").addEventListener("click", (event) => {
   const up = event.target.closest(".up-to-here");
-  if (up && draft) onlyUpTo(Number(up.dataset.message));
+  if (!up || !draft) return;
+  if (up.classList.contains("add-message")) addMessage(Number(up.dataset.message));
+  else onlyUpTo(Number(up.dataset.message));
 });
+
+// addMessage puts an empty message from the person after the result at i, unless there's one
+// there already, and opens it to write in.
+async function addMessage(i) {
+  const messages = draft.request.messages;
+  const at = i + 1;
+  if (messages[at]?.role !== "user") {
+    messages.splice(at, 0, { role: "user", content: "" });
+    draft.off = draft.off.map((j) => (j >= at ? j + 1 : j));
+    await preview();
+  }
+  const parts = drawn()?.prompt.parts || [];
+  const k = parts.findIndex((p) => p.kind === "user" && indexOf(p) === at);
+  if (k >= 0) openEditor(k);
+}
 
 // Each tool call in a draft gets a Run button by its result, which runs the call as the draft's
 // agent and puts what the model will see in the result. Beside it is what the approval card

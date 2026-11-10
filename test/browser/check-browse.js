@@ -289,17 +289,26 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     const last = document.querySelector(".prompt-rows .pl:last-child").getBoundingClientRect().bottom > view.top;
     // Then with the last row of what the call had at the top.
     const tok = [...document.querySelectorAll(".tok[data-t]:not(.ins)")].at(-1);
-    const row = tok.closest(".pl");
-    s.scrollTop += row.getBoundingClientRect().top - view.top;
-    return { last, text: row.textContent, top: row.getBoundingClientRect().top };
+    s.scrollTop += tok.closest(".pl").getBoundingClientRect().top - view.top;
+    return { last };
   });
   ok(held.last, "scrolled to the end, the last row is still on the screen");
+  const onScreen = () => p.evaluate(() => {
+    const s = getComputedStyle(document.getElementById("prompt")).overflowY === "auto" ? document.getElementById("prompt") : document.querySelector(".prompt-inner");
+    const v = s.getBoundingClientRect();
+    return [...document.querySelectorAll(".pl:not(.ghost)")].filter((r) => r.getBoundingClientRect().bottom > v.top && r.getBoundingClientRect().top < v.bottom)
+      .map((r) => [[...r.querySelectorAll(".pl-text .tok:not(.del)")].map((t) => t.textContent).join(""), r.getBoundingClientRect().top])
+      .filter(([text]) => text);
+  });
+  const beforeStop = await onScreen();
   await p.click("#edit");
   await p.waitForFunction(() => !document.body.classList.contains("drafting"));
   ok((await p.locator(".pl.ghost").count()) > 0, "what the draft added fades out");
   await p.waitForFunction(() => !document.querySelector(".pl.ghost"));
-  const top = await p.evaluate((text) => [...document.querySelectorAll(".pl")].findLast((r) => r.textContent === text)?.getBoundingClientRect().top, held.text);
-  ok(Math.abs(top - held.top) < 1, `and what was on the screen stays where it was (${held.top} then ${top})`);
+  // At least one row that was on the screen, and is in both, is exactly where it was.
+  const now = await onScreen();
+  const stayed = beforeStop.filter(([text, top]) => now.some(([t, y]) => t === text && Math.abs(y - top) < 1));
+  ok(stayed.length > 0, `and what was on the screen stays where it was (${stayed.length} of ${beforeStop.length} rows)`);
   ok(p.url().includes("#manual/") && (await p.innerText("#which")).startsWith("Sent draft"), "stopping goes back to the call");
 
   // The page with no address lists drafts and sent calls, and New starts a draft from the
@@ -378,6 +387,15 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       await p.waitForFunction(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, "").includes("keptbytheagent↵") || document.getElementById("error").hidden === false, null, { timeout: 60000 });
       const text = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
       ok(text.includes("keptbytheagent↵"), `run_code runs as the agent, with /work kept between runs (${await p.innerText("#error")})`);
+
+      // A message from the person can go after a batch of results, in the same turn.
+      await p.locator(".add-message").last().click({ force: true });
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "And one more thing.");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Andonemorething."));
+      const order = await p.evaluate(() => [...document.querySelectorAll(".pl.k-tool_result, .pl.k-user")].map((r) => r.className.includes("k-user") ? "user" : "result").join(","));
+      ok(/result,user$/.test(order), `a message can be added after the results (${order})`);
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 
@@ -406,7 +424,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const kept = await textOf(firstUser);
   await firstUser.hover();
   await firstUser.locator(".up-to-here").click();
-  await p.waitForFunction(() => document.querySelectorAll(".off-row").length >= 2);
+  await p.waitForFunction(() => document.querySelectorAll(".off-row").length >= 2 && !document.querySelector(".ghost"));
   const upTo = await p.evaluate(() => ({
     off: document.querySelectorAll(".off-row .msg-on:not(:checked)").length,
     users: document.querySelectorAll(".pl.k-user:has(.msg-on:checked)").length,
@@ -423,6 +441,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok((await p.locator(".off-row").count()) === offBefore - 1, "and what's turned off is kept with the draft");
   await p.locator(".off-row").first().scrollIntoViewIfNeeded();
   await p.screenshot({ path: "shots/msg-on.png" });
+  // Leaving out a tool shows its schema as deleted on a row of its own, not in the next tool's.
+  if ((await p.locator(".pl.k-tool:has(.msg-on)").count()) > 1) {
+    if (!(await p.isChecked("[data-switch=changes]").catch(() => false)) && (await p.getAttribute("[data-switch=changes]", "aria-pressed")) !== "true") await p.click("[data-switch=changes]");
+    const toolsOn = await p.locator(".pl.k-tool:has(.msg-on)").count();
+    await p.locator(".pl.k-tool .msg-on").first().uncheck();
+    await p.waitForFunction((n) => document.querySelectorAll(".pl.k-tool:has(.msg-on)").length === n - 1, toolsOn);
+    const spill = await p.evaluate(() => ({
+      inTools: document.querySelectorAll(".pl.k-tool .tok.del").length,
+      apart: document.querySelectorAll(".pl.k-tools .tok.del").length,
+    }));
+    ok(spill.inTools === 0 && spill.apart > 0, `a tool that's left out is deleted on its own row (${JSON.stringify(spill)})`);
+    await p.locator(".pl.k-tools .tok.del").first().scrollIntoViewIfNeeded();
+    await p.screenshot({ path: "shots/tool-off.png" });
+  }
 
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");

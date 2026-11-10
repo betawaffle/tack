@@ -404,7 +404,11 @@ in a draft has a checkbox where it starts: one that's unticked isn't sent, and s
 to tick again until the draft is sent (a model's message with tool calls and their results go
 together). **Only Up To Here**, on the row being pointed at, leaves out everything after a
 message, which is how to start again from an earlier one. Each tool's schema has a checkbox
-too, to leave the tool out the same way. **Send** sends it as a
+too, to leave the tool out the same way. **Add a Message**, on the last result of a batch, puts a
+message from you after the results, in the same turn. Changes are compared token by token, but
+only within the same kind of part (and the same tool, by name), so leaving out a tool or
+rewriting a prompt shows as deleted there, on a row of its own if the part is gone, rather than
+running into what comes after it. **Send** sends it as a
 custom request that remembers where it came from, so the page shows it against that call, and
 a draft can be made from it in turn. The reply is drawn as it comes in, as text, and as tokens
 once it's done. `/prompt` on its own lists the drafts that haven't been sent and the calls

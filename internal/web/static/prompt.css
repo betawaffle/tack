@@ -222,7 +222,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
    Only Up To Here, shown on the row being pointed at. */
 .msg-on {
   appearance: none; display: inline-grid; place-content: center; width: 11px; height: 11px; margin: 0 5px 0 0;
-  border: 1.5px solid var(--muted); border-radius: 3px; vertical-align: -1px; cursor: pointer;
+  border: 1.5px solid var(--muted); border-radius: 3px; vertical-align: middle; position: relative; top: -1px; cursor: pointer;
 }
 .msg-on:checked { background: var(--k, var(--muted)); border-color: var(--k, var(--muted)); }
 .msg-on:checked::after {

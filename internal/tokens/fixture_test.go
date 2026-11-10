@@ -31,11 +31,13 @@ const fixtureBody = `{"model":"deepseek/deepseek-v4.1-flash-1017","reasoning":{"
  {"type":"function","function":{"name":"scratch","description":"Keep notes.","parameters":{"type":"object","properties":{}}}}]}`
 
 // fixtureEarlier is the call before: everything up to the first reply, with a system prompt
-// that's since changed, so the comparison has a deletion as well as insertions.
+// that's since changed and a tool that's since been left out, so the comparison has deletions,
+// in a part and of one, as well as insertions.
 const fixtureEarlier = `{"model":"deepseek/deepseek-v4.1-flash-1017","reasoning":{"effort":"high"},"messages":[
 {"role":"system","content":"You are an agent.\n\nBe short."},
 {"role":"user","content":"List the files."}],
 "tools":[
+ {"type":"function","function":{"name":"old_tool","description":"Since left out.","parameters":{"type":"object","properties":{}}}},
  {"type":"function","function":{"name":"run_code","description":"Run code.","parameters":{"type":"object","properties":{"language":{"type":"string","enum":["python"]},"code":{"type":"string","description":"A long description that goes on and on so that it wraps when the column is narrow, which is what the hanging indent is for."}},"required":["language","code"]}}},
  {"type":"function","function":{"name":"scratch","description":"Keep notes.","parameters":{"type":"object","properties":{}}}}]}`
 
@@ -70,7 +72,7 @@ func TestTheViewFixtureIsCurrent(t *testing.T) {
 		"call": "now", "calls": []string{"before", "now"}, "model": model,
 		"prompt": now, "text": now.Text(),
 		"previous": "before", "previous_text": before.Text(), "previous_tokens": before.Tokens,
-		"changes": Diff(cut(before.Text(), before.Tokens, len(before.Text())), cut(now.Text(), now.Tokens, now.Generated)),
+		"changes": Compare(before, cut(before.Text(), before.Tokens, len(before.Text())), now, cut(now.Text(), now.Tokens, now.Generated)),
 	}
 	data, err := json.Marshal(fixture, json.Deterministic(true))
 	if err != nil {

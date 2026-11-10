@@ -45,8 +45,8 @@ type Part struct {
 	Generated bool `json:"generated,omitzero"`
 	// Parent is the part this one is inside, or -1.
 	Parent int `json:"parent"`
-	// Name is a parameter's name, for a parameter or its value. Raw says the value was
-	// written as it is rather than as JSON.
+	// Name is a parameter's name, for a parameter or its value, or a tool's, for its schema.
+	// Raw says a value was written as it is rather than as JSON.
 	Name string `json:"name,omitzero"`
 	Raw  bool   `json:"raw,omitzero"`
 }
@@ -137,6 +137,8 @@ func (t *tokenizer) Tokens(text string) []int {
 type Edit struct {
 	Op string `json:"op"` // "same", "deleted" or "inserted"
 	N  int    `json:"n"`
+	// Place is where deleted tokens were, as Places gives it, when that's known.
+	Place string `json:"place,omitzero"`
 }
 
 // Diff finds the fewest tokens to delete and insert to make a into b, deletions first where
@@ -152,7 +154,7 @@ func Diff(a, b []string) []Edit {
 			out[k-1].N += n
 			return
 		}
-		out = append(out, Edit{op, n})
+		out = append(out, Edit{Op: op, N: n})
 	}
 	start := 0
 	for start < len(a) && start < len(b) && a[start] == b[start] {
@@ -201,7 +203,7 @@ func myers(a, b []string) []Edit {
 			}
 		}
 	}
-	return []Edit{{"deleted", n}, {"inserted", m}}
+	return []Edit{{Op: "deleted", N: n}, {Op: "inserted", N: m}}
 }
 
 // maxDiffSteps is how many differences the search looks for before giving up on the fewest.
@@ -243,7 +245,7 @@ func backtrack(trace [][]int, a, b []string, d, max int) []Edit {
 		if k := len(out); k > 0 && out[k-1].Op == steps[i] {
 			out[k-1].N++
 		} else {
-			out = append(out, Edit{steps[i], 1})
+			out = append(out, Edit{Op: steps[i], N: 1})
 		}
 	}
 	return out
@@ -267,10 +269,10 @@ func replacementsDeleteFirst(edits []Edit) []Edit {
 			}
 		}
 		if del > 0 {
-			out = append(out, Edit{"deleted", del})
+			out = append(out, Edit{Op: "deleted", N: del})
 		}
 		if ins > 0 {
-			out = append(out, Edit{"inserted", ins})
+			out = append(out, Edit{Op: "inserted", N: ins})
 		}
 	}
 	return out
@@ -296,6 +298,46 @@ type Prompt struct {
 
 // Text is the whole prompt.
 func (p *Prompt) Text() string { return p.text }
+
+// Places says, for each of a run of tokens from the start of the prompt (given by their
+// lengths in bytes), where its first byte is: the kind of part it's in and of each part around
+// that, outermost first, each with its name if it has one. Which message or call a part is
+// isn't in it, so the same kind of place is the same place wherever it moved to.
+func (p *Prompt) Places(lengths []int) []string {
+	paths := make([]string, len(p.Parts))
+	var path func(k int) string
+	path = func(k int) string {
+		if k < 0 {
+			return ""
+		}
+		if paths[k] == "" {
+			part := p.Parts[k]
+			paths[k] = path(part.Parent) + "/" + part.Kind
+			if part.Name != "" {
+				paths[k] += ":" + part.Name
+			}
+		}
+		return paths[k]
+	}
+	out := make([]string, 0, len(lengths))
+	seg, segEnd, at := 0, 0, 0
+	if len(p.Segments) > 0 {
+		segEnd = len(p.Segments[0].Text)
+	}
+	for _, n := range lengths {
+		for seg < len(p.Segments)-1 && segEnd <= at {
+			seg++
+			segEnd += len(p.Segments[seg].Text)
+		}
+		place := ""
+		if seg < len(p.Segments) {
+			place = path(p.Segments[seg].Part)
+		}
+		out = append(out, place)
+		at += n
+	}
+	return out
+}
 
 // Output is what the model wrote in a call.
 type Output struct {
@@ -357,13 +399,9 @@ func renderDeepSeekV41(body []byte, out *Output) (*Prompt, error) {
 	if err != nil {
 		return nil, err
 	}
-	var tools []string
-	for _, tool := range req.Tools {
-		text, err := pyJSON(tool.Function)
-		if err != nil {
-			return nil, err
-		}
-		tools = append(tools, text)
+	tools, err := dsTools(&req)
+	if err != nil {
+		return nil, err
 	}
 	if len(tools) > 0 && (len(messages) == 0 || messages[0].role != "system") {
 		messages = append([]dsMessage{{role: "system", src: -1}}, messages...)
@@ -416,4 +454,55 @@ func SplitAt(lengths []int, offset int) []int {
 		at += n
 	}
 	return lengths
+}
+
+// Compare is what changed from was to now, token by token, given each one's tokens' text (now's
+// can stop before its end). Tokens are the same only in the same place (see Places), so a change
+// can't run over into a part that didn't change, like the next tool's schema when one is left
+// out. Each run of deleted tokens says where they were.
+func Compare(was *Prompt, wasTokens []string, now *Prompt, nowTokens []string) []Edit {
+	wasPlaces := was.Places(lengths(wasTokens))
+	return placeDeletions(Diff(placed(wasTokens, wasPlaces), placed(nowTokens, now.Places(lengths(nowTokens)))), wasPlaces)
+}
+
+func lengths(pieces []string) []int {
+	out := make([]int, len(pieces))
+	for i, p := range pieces {
+		out[i] = len(p)
+	}
+	return out
+}
+
+// placed is each token's text after where it is, for comparing them.
+func placed(pieces []string, places []string) []string {
+	out := make([]string, len(pieces))
+	for i := range pieces {
+		out[i] = places[i] + "\x00" + pieces[i]
+	}
+	return out
+}
+
+// placeDeletions splits each run of deleted tokens by where they were, and says where, so the
+// page can show what was in a part that's gone apart from the part that comes after it.
+func placeDeletions(changes []Edit, places []string) []Edit {
+	var out []Edit
+	at := 0
+	for _, e := range changes {
+		if e.Op != "deleted" {
+			out = append(out, e)
+			if e.Op == "same" {
+				at += e.N
+			}
+			continue
+		}
+		for i := at; i < at+e.N; i++ {
+			if n := len(out); i > at && out[n-1].Place == places[i] {
+				out[n-1].N++
+			} else {
+				out = append(out, Edit{Op: "deleted", N: 1, Place: places[i]})
+			}
+		}
+		at += e.N
+	}
+	return out
 }

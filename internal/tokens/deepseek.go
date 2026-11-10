@@ -434,7 +434,7 @@ func dsParameterTag(w *dsWriter, key string, isString bool, value string, messag
 }
 
 // dsPrompt renders the whole prompt. Effort is only shown when thinking.
-func dsPrompt(messages []dsMessage, tools []string, thinking bool, effort int) string {
+func dsPrompt(messages []dsMessage, tools []dsTool, thinking bool, effort int) string {
 	var w dsWriter
 	dsWrite(&w, messages, tools, thinking, effort)
 	return w.String()
@@ -442,7 +442,7 @@ func dsPrompt(messages []dsMessage, tools []string, thinking bool, effort int) s
 
 // dsWrite renders the prompt as segments, each the format's own text or a request field's,
 // and each in a part of the request.
-func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, effort int) {
+func dsWrite(w *dsWriter, messages []dsMessage, tools []dsTool, thinking bool, effort int) {
 	w.part(Part{Kind: PartStart, Message: -1})
 	w.template(dsBOS)
 	// With tools, reasoning is kept all the way back. Without them, only since the last user.
@@ -489,8 +489,8 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []string, thinking bool, e
 					if j > 0 {
 						w.template("\n")
 					}
-					w.enter(Part{Kind: PartTool, Message: -1, Call: j})
-					w.field(tool)
+					w.enter(Part{Kind: PartTool, Message: -1, Call: j, Name: tool.name})
+					w.field(tool.text)
 					w.leave()
 				}
 				w.enter(Part{Kind: PartStatic, Message: -1, Call: 1})
@@ -591,19 +591,34 @@ func dsRender(body []byte, thinking bool, effort int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var tools []string
-	for _, tool := range req.Tools {
-		text, err := pyJSON(tool.Function)
-		if err != nil {
-			return "", err
-		}
-		tools = append(tools, text)
+	tools, err := dsTools(&req)
+	if err != nil {
+		return "", err
 	}
 	if len(tools) > 0 && (len(messages) == 0 || messages[0].role != "system") {
 		// The tools go in a system message, so one has to be there to carry them.
 		messages = append([]dsMessage{{role: "system", src: -1}}, messages...)
 	}
 	return dsPrompt(messages, tools, thinking, effort), nil
+}
+
+// dsTool is a tool's schema as the format writes it, and its name.
+type dsTool struct{ text, name string }
+
+func dsTools(req *dsRequest) ([]dsTool, error) {
+	var tools []dsTool
+	for _, tool := range req.Tools {
+		text, err := pyJSON(tool.Function)
+		if err != nil {
+			return nil, err
+		}
+		var head struct {
+			Name string `json:"name"`
+		}
+		json.Unmarshal(tool.Function, &head)
+		tools = append(tools, dsTool{text: text, name: head.Name})
+	}
+	return tools, nil
 }
 
 // DeepSeek reasons by default, at a default effort of "high", which is 75.

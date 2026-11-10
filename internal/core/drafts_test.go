@@ -137,3 +137,24 @@ func TestABlankDraftStartsFromWhatItsGiven(t *testing.T) {
 		t.Errorf("drafts = %+v, %v", list, err)
 	}
 }
+
+func TestLeavingOutAToolChangesOnlyThatTool(t *testing.T) {
+	tool := func(name, description string) string {
+		return `{"type":"function","function":{"name":"` + name + `","description":"` + description + `","parameters":{"type":"object","properties":{}}}}`
+	}
+	request := func(tools ...string) jsontext.Value {
+		return jsontext.Value(`{"model":"deepseek/deepseek-v4.1-flash-1017","messages":[{"role":"system","content":"Be brief."},{"role":"user","content":"Hi."}],"tools":[` + strings.Join(tools, ",") + `]}`)
+	}
+	before := CallRequest{Model: "deepseek/deepseek-v4.1-flash-1017", Request: request(tool("first", "The first tool."), tool("second", "The second tool."))}
+	p, err := Preview(before.Model, request(tool("second", "The second tool.")), &before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The second tool's schema is all still there, so nothing's inserted: the first's is
+	// deleted, and what's left of it doesn't match the start of the second.
+	for _, e := range p.Changes {
+		if e.Op == "inserted" {
+			t.Errorf("changes = %+v", p.Changes)
+		}
+	}
+}
