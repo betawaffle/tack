@@ -134,49 +134,66 @@ func (c *Core) draftPrompt(d *store.Draft) (CallPrompt, error) {
 		}
 		before = &b
 	}
-	request, shown, err := effective(d)
+	request, shown, shownTools, err := effective(d)
 	if err != nil {
 		return CallPrompt{}, err
 	}
 	p, err := Preview(d.Model, request, before)
-	p.Shown = shown
+	p.Shown, p.ShownTools = shown, shownTools
 	return p, err
 }
 
-// effective is the request a draft sends: its own without the messages that are turned off,
-// and where each message it does send is in its own.
-func effective(d *store.Draft) (jsontext.Value, []int, error) {
+// effective is the request a draft sends: its own without the messages and tools that are
+// turned off, and where each message and tool it does send is in its own.
+func effective(d *store.Draft) (jsontext.Value, []int, []int, error) {
 	var request map[string]jsontext.Value
 	if err := json.Unmarshal(d.Request, &request); err != nil {
-		return nil, nil, fmt.Errorf("%w: reading the request: %v", ErrBadRequest, err)
+		return nil, nil, nil, fmt.Errorf("%w: reading the request: %v", ErrBadRequest, err)
 	}
-	var messages []jsontext.Value
-	if raw, ok := request["messages"]; ok {
-		if err := json.Unmarshal(raw, &messages); err != nil {
-			return nil, nil, fmt.Errorf("%w: reading the messages: %v", ErrBadRequest, err)
+	// keep leaves out what's off in one of the request's lists, and says where the rest were.
+	keep := func(key string, off []int) ([]int, error) {
+		var all []jsontext.Value
+		if raw, ok := request[key]; ok {
+			if err := json.Unmarshal(raw, &all); err != nil {
+				return nil, fmt.Errorf("%w: reading the %s: %v", ErrBadRequest, key, err)
+			}
 		}
-	}
-	shown := []int{}
-	if len(d.Off) == 0 {
-		for i := range messages {
-			shown = append(shown, i)
+		shown := []int{}
+		kept := []jsontext.Value{}
+		for i, v := range all {
+			if !slices.Contains(off, i) {
+				kept = append(kept, v)
+				shown = append(shown, i)
+			}
 		}
-		return d.Request, shown, nil
-	}
-	kept := []jsontext.Value{}
-	for i, m := range messages {
-		if !slices.Contains(d.Off, i) {
-			kept = append(kept, m)
-			shown = append(shown, i)
+		if len(kept) == len(all) {
+			return shown, nil
 		}
+		if len(kept) == 0 && key == "tools" {
+			// No tools at all is no list of them, which is how a request without any is written.
+			delete(request, key)
+			return shown, nil
+		}
+		raw, err := json.Marshal(kept)
+		if err != nil {
+			return nil, err
+		}
+		request[key] = raw
+		return shown, nil
 	}
-	raw, err := json.Marshal(kept)
+	shown, err := keep("messages", d.Off)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	request["messages"] = raw
+	shownTools, err := keep("tools", d.OffTools)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(d.Off) == 0 && len(d.OffTools) == 0 {
+		return d.Request, shown, shownTools, nil
+	}
 	out, err := json.Marshal(request, json.Deterministic(true))
-	return out, shown, err
+	return out, shown, shownTools, err
 }
 
 // pairedOff is off with what goes with each message added: a model's message with tool calls
@@ -253,9 +270,9 @@ func (c *Core) SetDraftAgent(id, agent string) error {
 	return c.cfg.Store.SaveDraft(d)
 }
 
-// SaveDraft replaces a draft's request, and shows it as Draft does. off, if it isn't nil,
-// replaces which of its messages are turned off.
-func (c *Core) SaveDraft(id string, request jsontext.Value, off []int) (CallPrompt, error) {
+// SaveDraft replaces a draft's request, and shows it as Draft does. off and offTools, where
+// they aren't nil, replace which of its messages and tools are turned off.
+func (c *Core) SaveDraft(id string, request jsontext.Value, off, offTools []int) (CallPrompt, error) {
 	var check map[string]jsontext.Value
 	if err := json.Unmarshal(request, &check); err != nil {
 		return CallPrompt{}, fmt.Errorf("%w: the request isn't a JSON object: %v", ErrBadRequest, err)
@@ -270,6 +287,9 @@ func (c *Core) SaveDraft(id string, request jsontext.Value, off []int) (CallProm
 	d.Request = request
 	if off != nil {
 		d.Off = off
+	}
+	if offTools != nil {
+		d.OffTools = offTools
 	}
 	d.Off = pairedOff(request, d.Off)
 	// Its model is the one the request names.
@@ -299,7 +319,7 @@ func (c *Core) SendDraft(id string) (string, <-chan Update, error) {
 			return "", nil, err
 		}
 	}
-	request, _, err := effective(d)
+	request, _, _, err := effective(d)
 	if err != nil {
 		return "", nil, err
 	}

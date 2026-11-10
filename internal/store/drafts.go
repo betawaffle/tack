@@ -29,6 +29,8 @@ type Draft struct {
 	// Off the messages in it that are turned off, by index: they're kept, but not sent.
 	Request jsontext.Value `json:"request"`
 	Off     []int          `json:"off,omitzero"`
+	// OffTools are the tools in the request that are turned off, by index, kept the same way.
+	OffTools []int `json:"off_tools,omitzero"`
 	// Sent is the manual call it became, once it's sent.
 	Sent string `json:"sent,omitzero"`
 }

@@ -34,7 +34,7 @@ export async function loadDraft(id, { eager = false } = {}) {
   }
   const { draft: d, prompt: data, problem } = await res.json();
   if (d.sent) return go(`manual/${d.sent}`, { replace: true });
-  draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], shown: [] };
+  draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], offTools: d.off_tools || [], shown: [], shownTools: [] };
   $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
   $("edit").hidden = false;
   await showSendBar();
@@ -59,9 +59,9 @@ export function closeDraft() {
 let saving = Promise.resolve();
 function save() {
   const request = structuredClone(draft.request);
-  const { id, off } = draft;
+  const { id, off, offTools } = draft;
   const result = saving.then(async () => {
-    const res = await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request, off }) });
+    const res = await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request, off, off_tools: offTools }) });
     if (!res.ok) throw new Error((await res.text()) || res.statusText);
     return res.json();
   });
@@ -100,6 +100,7 @@ function show(data, { eager = false, problem = "" } = {}) {
   hideError();
   data.before_draft = true;
   draft.shown = data.shown || [];
+  draft.shownTools = data.shown_tools || [];
   render(data, {
     eager,
     done: () => {
@@ -143,13 +144,72 @@ function onlyUpTo(i) {
   preview();
 }
 
-function checkbox(i, on) {
+function checkbox(i, on, kind = "message") {
   const box = el("input", "msg-on");
   box.type = "checkbox";
   box.checked = on;
-  box.dataset.message = i;
+  box.dataset[kind] = i;
   box.title = on ? "Sent. Untick to leave it out." : "Left out. Tick to send it again.";
   return box;
+}
+
+// Tools go on and off the same way, each by its schema.
+function setToolOff(i, off) {
+  const now = new Set(draft.offTools);
+  off ? now.add(i) : now.delete(i);
+  draft.offTools = [...now].sort((a, b) => a - b);
+  preview();
+}
+
+// A row for something that's turned off, labelled, with its checkbox unticked.
+function offRow(label, text, box) {
+  const row = el("div", "pl off-row");
+  const gutter = el("div", "pl-gutter");
+  const name = el("div", "pl-part", label);
+  name.prepend(box);
+  // Empty bars, so its text lines up with the rest.
+  const bars = el("div", "pl-bars");
+  bars.innerHTML = "<i></i>".repeat(DEPTHS);
+  gutter.append(name, bars, el("div", "pl-num"));
+  row.append(gutter, el("div", "pl-text", text));
+  return row;
+}
+
+function addToolControls(parts, firstRow) {
+  const tools = draft.request.tools || [];
+  const rows = new Map();
+  let lastRow = null;
+  parts.forEach((part, k) => {
+    if (part.kind !== "tool") return;
+    const i = draft.shownTools[part.call || 0] ?? (part.call || 0);
+    const row = firstRow(k);
+    if (!row) return;
+    rows.set(i, row);
+    row.querySelector(".pl-part").prepend(checkbox(i, true, "tool"));
+    lastRow = $("prompt").querySelectorAll(`.pl .pl-bars [data-p="${k}"]`);
+    lastRow = lastRow[lastRow.length - 1]?.closest(".pl") || row;
+  });
+  let after = lastRow;
+  for (const i of draft.offTools) {
+    const fn = tools[i]?.function;
+    if (!fn) continue;
+    const description = (fn.description || "").trim().split("\n")[0];
+    const row = offRow("Tool", `${fn.name}${description ? `: ${description}` : ""}`, checkbox(i, false, "tool"));
+    const next = [...rows.keys()].sort((a, b) => a - b).find((j) => j > i);
+    if (next !== undefined) rows.get(next).before(row);
+    else if (after) {
+      after.after(row);
+      after = row;
+    } else {
+      // With every tool off there are no tool rows; they go after the system prompt's.
+      const system = parts.findIndex((p) => p.kind === "prompt");
+      const rowsOf = system >= 0 ? $("prompt").querySelectorAll(`.pl .pl-bars [data-p="${system}"]`) : [];
+      const anchor = rowsOf[rowsOf.length - 1]?.closest(".pl");
+      if (anchor) anchor.after(row);
+      else $("prompt").querySelector(".prompt-rows .pblock")?.prepend(row);
+      after = row;
+    }
+  }
 }
 
 // What a turned-off message is, in a line.
@@ -189,25 +249,20 @@ function addMessageControls() {
   for (const i of draft.off) {
     const m = draft.request.messages[i];
     if (!m) continue;
-    const row = el("div", "pl off-row");
-    const gutter = el("div", "pl-gutter");
-    const label = el("div", "pl-part", ROLE_LABELS[m.role] || m.role);
-    label.prepend(checkbox(i, false));
-    // Empty bars, so its text lines up with the rest.
-    const bars = el("div", "pl-bars");
-    bars.innerHTML = "<i></i>".repeat(DEPTHS);
-    gutter.append(label, bars, el("div", "pl-num"));
-    row.append(gutter, el("div", "pl-text", summary(m)));
+    const row = offRow(ROLE_LABELS[m.role] || m.role, summary(m), checkbox(i, false));
     const next = [...rows.keys()].sort((a, b) => a - b).find((j) => j > i);
     const before = next === undefined ? null : rows.get(next);
     if (before) before.before(row);
     else end?.append(row);
   }
+  addToolControls(parts, firstRow);
 }
 
 $("prompt").addEventListener("change", (event) => {
   const box = event.target.closest(".msg-on");
-  if (box && draft) setOff([Number(box.dataset.message)], !box.checked);
+  if (!box || !draft) return;
+  if (box.dataset.tool !== undefined) setToolOff(Number(box.dataset.tool), !box.checked);
+  else setOff([Number(box.dataset.message)], !box.checked);
 });
 $("prompt").addEventListener("click", (event) => {
   const up = event.target.closest(".up-to-here");

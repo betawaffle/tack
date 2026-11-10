@@ -492,15 +492,16 @@ func (s *server) getDraft(w http.ResponseWriter, r *http.Request) {
 func (s *server) saveDraft(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Request jsontext.Value `json:"request"`
-		// Off, if it's there, is which messages are turned off.
-		Off []int `json:"off"`
+		// Off and OffTools, where they're there, are which messages and tools are turned off.
+		Off      []int `json:"off"`
+		OffTools []int `json:"off_tools"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxPreviewBytes)
 	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	p, err := s.core.SaveDraft(r.PathValue("id"), body.Request, body.Off)
+	p, err := s.core.SaveDraft(r.PathValue("id"), body.Request, body.Off, body.OffTools)
 	writeDraft(w, nil, p, err)
 }
 

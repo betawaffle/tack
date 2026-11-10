@@ -403,7 +403,8 @@ exactly what the model would see in the result, to edit or send. One run at a ti
 in a draft has a checkbox where it starts: one that's unticked isn't sent, and stays as a dim row
 to tick again until the draft is sent (a model's message with tool calls and their results go
 together). **Only Up To Here**, on the row being pointed at, leaves out everything after a
-message, which is how to start again from an earlier one. **Send** sends it as a
+message, which is how to start again from an earlier one. Each tool's schema has a checkbox
+too, to leave the tool out the same way. **Send** sends it as a
 custom request that remembers where it came from, so the page shows it against that call, and
 a draft can be made from it in turn. The reply is drawn as it comes in, as text, and as tokens
 once it's done. `/prompt` on its own lists the drafts that haven't been sent and the calls

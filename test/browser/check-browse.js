@@ -381,6 +381,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 
+  // A tool is turned off by its schema's checkbox: it isn't offered, but stays to turn back on.
+  const toolRows = await p.locator(".pl.k-tool:has(.msg-on)").count();
+  if (toolRows > 0) {
+    await p.locator(".pl.k-tool .msg-on").first().uncheck();
+    await p.waitForFunction((n) => document.querySelectorAll(".pl.k-tool:has(.msg-on)").length === n - 1 && document.querySelector(".off-row"), toolRows);
+    ok((await p.locator(".off-row", { hasText: "Tool" }).count()) === 1, "a tool can be turned off, and stays as a row");
+    await p.reload();
+    await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".msg-on"));
+    ok((await p.locator(".off-row", { hasText: "Tool" }).count()) === 1, "and it's kept with the draft");
+    await p.locator(".off-row .msg-on[data-tool]").check();
+    await p.waitForFunction((n) => document.querySelectorAll(".pl.k-tool:has(.msg-on)").length === n, toolRows);
+    ok(true, "and turned back on");
+  }
+
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.
   await p.goto(B + "/prompt#" + promptAt);
