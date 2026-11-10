@@ -131,7 +131,7 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
-	mux.Handle("GET /static/", http.FileServerFS(static))
+	mux.Handle("GET /static/", withETags(static, http.FileServerFS(static)))
 	mux.HandleFunc("GET /api/conversations", s.list)
 	mux.HandleFunc("POST /api/conversations", s.create)
 	mux.HandleFunc("GET /api/conversations/{id}", s.get)
@@ -206,7 +206,7 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/reload", s.reloadConfig)
 	// Other websites open in the same browser shouldn't be able to post here.
-	return knownHost(hosts, security(http.NewCrossOriginProtection().Handler(currentPage(mux))))
+	return knownHost(hosts, compress(security(http.NewCrossOriginProtection().Handler(currentPage(mux)))))
 }
 
 // currentPage refuses changes from a page that would get them wrong. Anything that
