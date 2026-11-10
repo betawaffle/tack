@@ -258,9 +258,17 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForFunction(() => document.getElementById("send-agent").selectedOptions[0]?.textContent === "renamed");
   ok(await p.locator("#agent-naming").isHidden(), "and renamed");
   await p.locator("#send-bar").screenshot({ path: "shots/send-bar.png" });
+  // The settings are in More's panel, which opens over the page and doesn't wrap.
+  await p.click("#send-more");
+  await p.waitForSelector("#send-panel:not([hidden])");
   await p.fill("#send-max", "50");
   await p.locator("#send-max").dispatchEvent("change");
-  await p.waitForFunction(() => /at most/.test(document.getElementById("send-estimate").textContent));
+  await p.locator("#send-panel").screenshot({ path: "shots/send-panel.png" });
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("#send-panel", { state: "hidden" });
+  const bar = await p.evaluate(() => { const b = document.getElementById("send-bar"); return b.scrollHeight <= 48 && b.scrollWidth <= b.clientWidth; });
+  ok(bar, "the call controls are one row, with the rest in More");
+  await p.waitForFunction(() => /at most/.test(document.getElementById("send-estimate").title));
   ok(true, "with what it could cost");
   // A reply that comes in slowly, so it can be seen arriving.
   await p.locator(".pl.k-user_turn").last().click();
@@ -343,8 +351,10 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // The model the tests left as the default has no known format, so it can't be drawn until
   // it's changed to one that has.
   if (!(await p.locator(".pl").count())) ok((await p.innerText("#error")).includes("can't be shown"), "a draft for a model tack can't draw says so");
+  await p.click("#send-more");
   await p.fill("#send-model", "deepseek/deepseek-v4.1-flash-1017");
   await p.locator("#send-model").dispatchEvent("change");
+  await p.keyboard.press("Escape");
   await p.waitForFunction(() => document.querySelector(".pl.k-system") && document.getElementById("error").hidden);
   ok(true, "and it's drawn once its model is one tack knows");
   await p.locator(".pl.k-user_turn").last().click();

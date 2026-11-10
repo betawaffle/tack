@@ -713,7 +713,9 @@ async function estimate() {
     if (e.least_known) parts.push(`at least ${tackMoney.format(e.least_pico)}`);
     if (e.likely_known) parts.push(`likely ${tackMoney.format(e.likely_pico)}`);
     if (e.most_known) parts.push(`at most ${tackMoney.format(e.most_pico)}`);
-    box.textContent = parts.length ? parts.join(", ") : "No estimate";
+    // The bar shows the likeliest; all of it is in the title.
+    box.textContent = e.likely_known ? `likely ${tackMoney.format(e.likely_pico)}` : parts[0] || "No estimate";
+    box.title = parts.length ? `This call could cost ${parts.join(", ")}.` : "";
   } catch {
     if (mine === estimating) box.textContent = "No estimate";
   }
@@ -767,4 +769,28 @@ $("send").addEventListener("click", async () => {
   }
   endStream();
   if (id) go(`manual/${id}`, { hold: true, sent: true });
+});
+
+// More opens the panel of call settings, above the bar or below it, whichever has room. Escape,
+// or a click anywhere else, closes it.
+function setPanel(open) {
+  const panel = $("send-panel");
+  panel.hidden = !open;
+  $("send-more").setAttribute("aria-expanded", String(open));
+  if (open) {
+    const bar = $("send-bar").getBoundingClientRect();
+    const above = bar.top > innerHeight - bar.bottom;
+    panel.classList.toggle("above", above);
+    panel.classList.toggle("below", !above);
+  }
+}
+$("send-more").addEventListener("click", () => setPanel($("send-panel").hidden));
+document.addEventListener("pointerdown", (event) => {
+  if (!$("send-panel").hidden && !event.target.closest(".send-more")) setPanel(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("send-panel").hidden) {
+    setPanel(false);
+    $("send-more").focus();
+  }
 });
