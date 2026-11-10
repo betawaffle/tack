@@ -25,10 +25,11 @@ export function keepPlace(k, draw) {
 }
 
 // How a drawing's tokens line up with those of the call a draft came from: a draft's through
-// what changed, and so a sent draft's just after it's sent (against_base), a call's one for
-// one. Each way gives null for a token the other doesn't have.
+// what changed, a call's one for one. A draft that's just been sent (is_base) is the call it
+// became, so its own line up one for one with the next draft's base. Each way gives null for a
+// token the other doesn't have.
 function lineUp(data) {
-  if (!data.before_draft && !data.against_base) return { toBase: (t) => t, fromBase: (b) => b };
+  if (!data.before_draft || data.is_base) return { toBase: (t) => t, fromBase: (b) => b };
   const runs = [];
   let i = 0, j = 0;
   for (const e of data.changes || []) {

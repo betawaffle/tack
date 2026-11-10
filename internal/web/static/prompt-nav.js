@@ -1,7 +1,6 @@
 // Moving between the page's addresses (#conversation/call, #manual/call, #draft/id,
-// #synthetic/size). Going somewhere with hold keeps what's on the screen in place; sent says
-// it's the call a draft just became, whose tokens line up with the draft's through the call
-// they both came from.
+// #agent/id, #synthetic/size). Going somewhere with hold keeps what's on the screen in place;
+// sent says it's to a call a draft just became.
 import { drawn } from "./prompt-draw.js";
 import { keepView } from "./prompt-hold.js";
 
@@ -26,10 +25,9 @@ function arrive() {
   const options = pending || {};
   pending = null;
   if (!options.hold) return loader(options);
-  return keepView(() => loader({ ...options, eager: true })).finally(() => {
-    // From here on it's a call like any other.
-    if (drawn()) delete drawn().against_base;
-  });
+  // A draft that's just been sent is the call it became, which the next one is compared with.
+  if (options.sent && drawn()) drawn().is_base = true;
+  return keepView(() => loader({ ...options, eager: true }));
 }
 
 window.addEventListener("hashchange", arrive);

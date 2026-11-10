@@ -5,7 +5,7 @@ import { $, el, showError, hideError } from "./prompt-dom.js";
 import { render, drawn, clear, applySwitches, isCollapsed, setCollapsed, collapseAll } from "./prompt-draw.js";
 import { keepPlace } from "./prompt-hold.js";
 import { go, onAddress, start } from "./prompt-nav.js";
-import { drafting, startDraft, loadDraft, stopDraft, closeDraft } from "./prompt-edit.js";
+import { loadDraftFor, loadDraft, closeDraft } from "./prompt-edit.js";
 import { loadList } from "./prompt-list.js";
 import { loadAgent } from "./prompt-agent.js";
 
@@ -97,9 +97,8 @@ async function loadCall(conv, call, { eager }) {
   render(data, { eager });
 }
 
-// A sent draft: shown like any call, with the chain of drafts it came from to move along. Just
-// after it's sent, its tokens line up with the draft's through the call they came from.
-async function loadManual(id, { eager, sent }) {
+// A sent draft: shown like any call, with the chain of drafts it came from to move along.
+async function loadManual(id, { eager }) {
   const res = await fetch(`/api/manual-calls/${id}/prompt`);
   if (!res.ok) {
     showError((await res.text()) || res.statusText);
@@ -107,7 +106,6 @@ async function loadManual(id, { eager, sent }) {
     return;
   }
   const data = await res.json();
-  if (sent) data.against_base = true;
   const root = data.calls.find((c) => !c.startsWith("manual/"));
   $("back").href = root ? `/#${root.split("/")[0]}` : "/";
   $("edit").hidden = false;
@@ -119,18 +117,35 @@ async function loadManual(id, { eager, sent }) {
   render(data, { eager });
 }
 
-onAddress((options) => {
+// A call's address shows the draft of the call after it, which is where editing happens. As
+// Sent shows the call itself instead, as it was sent, compared with the call before it.
+let asSent = false;
+
+// The call a conversation's address names, or its last.
+async function callOf(conv, call) {
+  if (call) return call;
+  const res = await fetch(`/api/conversations/${conv}`);
+  const data = res.ok ? await res.json() : { items: [] };
+  return data.items.filter((i) => i.call).at(-1)?.call || "";
+}
+
+onAddress(async (options) => {
   const [conv = "", call = ""] = location.hash.slice(1).split("/");
   where = { conv, call };
   hideError();
   document.body.classList.remove("listing");
-  if (conv !== "draft") closeDraft();
+  $("edit").setAttribute("aria-pressed", String(asSent));
   if (conv === "draft") return loadDraft(call, options);
+  closeDraft();
   if (conv === "synthetic") return loadSynthetic(call);
-  if (conv === "manual") return loadManual(call, options);
   if (!conv) return loadList();
   if (conv === "agent") return loadAgent(call, location.hash.slice(1).split("/")[2]);
-  return loadCall(conv, call, options);
+  if (asSent) return conv === "manual" ? loadManual(call, options) : loadCall(conv, call, options);
+  if (conv === "manual") return loadDraftFor(`manual/${call}`, options);
+  const id = await callOf(conv, call);
+  if (!id) return showError("This conversation hasn't called the model yet.");
+  where.call = id;
+  return loadDraftFor(`${conv}/${id}`, options);
 });
 
 // Moving along the calls: a sent draft's chain names each call in full; a conversation's are
@@ -145,12 +160,10 @@ function step(by) {
 $("prev").addEventListener("click", () => step(-1));
 $("next").addEventListener("click", () => step(1));
 
-// Edit opens a draft of the call after the one shown; in a draft, Stop Editing goes back.
+// As Sent switches between a call's next draft and the call itself.
 $("edit").addEventListener("click", () => {
-  if (drafting()) return stopDraft();
-  const data = drawn();
-  if (!data) return;
-  startDraft(where.conv === "manual" ? data.call : `${where.conv}/${data.call}`);
+  asSent = !asSent;
+  go(location.hash.slice(1), { hold: true });
 });
 
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it,

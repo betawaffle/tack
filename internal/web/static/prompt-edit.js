@@ -1,6 +1,6 @@
-// Editing a draft of the next call, and sending it. A draft is the call being looked at, its
-// reply, and an empty result for each tool call in it, kept by tack as it's changed, at
-// #draft/<id>. Clicking a part's text opens it in a text box over it; when the box loses focus,
+// Editing a draft of the next call, and sending it. A draft is a call, its reply, and an empty
+// result for each tool call in it, kept by tack once something in it changes; it's what a
+// call's address shows. One that doesn't follow a call is at #draft/<id>. Clicking a part's text opens it in a text box over it; when the box loses focus,
 // the draft is saved and drawn again, compared with the call it came from. This module owns the
 // draft that's open.
 import { $, el, showError, hideError } from "./prompt-dom.js";
@@ -15,17 +15,34 @@ let draft = null;
 // drafting says whether a draft is open.
 export const drafting = () => draft !== null;
 
-// startDraft opens a draft of the call after from (conversation/call or manual/call): the one
-// already started, or a new one.
-export async function startDraft(from) {
-  const res = await fetch("/api/drafts", { method: "POST", body: JSON.stringify({ from }) });
-  if (!res.ok) return showError((await res.text()) || res.statusText);
-  go(`draft/${(await res.json()).id}`, { hold: true });
+// open makes d the draft that's open.
+async function open(d) {
+  draft = {
+    id: d.id || "", from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], offTools: d.off_tools || [],
+    shown: [], shownTools: [], call: "", calls: [],
+  };
+  $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/prompt";
+  await showSendBar();
 }
 
-// loadDraft shows a draft. A sent one is the call it became.
+// loadDraftFor shows the draft of the call after from (conversation/call or manual/call): the
+// one already started, or else one that isn't saved until something in it changes. That's what
+// a call's address shows.
+export async function loadDraftFor(from, { eager = false } = {}) {
+  const res = await fetch(`/api/draft-for?from=${encodeURIComponent(from)}`);
+  if (!res.ok) {
+    showError((await res.text()) || res.statusText);
+    clear();
+    return;
+  }
+  const { draft: d, prompt: data, problem } = await res.json();
+  await open(d);
+  show(data, { eager, problem });
+}
+
+// loadDraft shows a draft by its ID, at #draft/<id>: one that follows on from a call is shown
+// at that call's address, and a sent one is the call it became.
 export async function loadDraft(id, { eager = false } = {}) {
-  hideError();
   const res = await fetch(`/api/drafts/${id}`);
   if (!res.ok) {
     showError((await res.text()) || res.statusText);
@@ -34,16 +51,9 @@ export async function loadDraft(id, { eager = false } = {}) {
   }
   const { draft: d, prompt: data, problem } = await res.json();
   if (d.sent) return go(`manual/${d.sent}`, { replace: true });
-  draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], offTools: d.off_tools || [], shown: [], shownTools: [] };
-  $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
-  $("edit").hidden = false;
-  await showSendBar();
+  if (d.from) return go(d.from, { replace: true });
+  await open(d);
   show(data, { eager, problem });
-}
-
-// stopDraft goes back to the call the draft came from. The draft stays, to come back to.
-export function stopDraft() {
-  go(draft.from, { hold: true });
 }
 
 // closeDraft puts the draft away, when the page goes to something else.
@@ -52,21 +62,30 @@ export function closeDraft() {
   draft = null;
   $("send-bar").hidden = true;
   document.body.classList.remove("drafting");
-  $("edit").textContent = "Edit";
 }
 
-// Saves the draft, one save at a time so they land in order, and gives back its prompt.
+// Saves the draft, one save at a time so they land in order, and gives back its prompt. A
+// draft that isn't saved yet is made first.
 let saving = Promise.resolve();
 function save() {
   const request = structuredClone(draft.request);
-  const { id, off, offTools } = draft;
+  const { off, offTools } = draft;
   const result = saving.then(async () => {
-    const res = await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request, off, off_tools: offTools }) });
+    await saved();
+    const res = await fetch(`/api/drafts/${draft.id}`, { method: "PUT", body: JSON.stringify({ request, off, off_tools: offTools }) });
     if (!res.ok) throw new Error((await res.text()) || res.statusText);
     return res.json();
   });
   saving = result.catch(() => {});
   return result;
+}
+
+// saved makes sure the draft is saved, so it has an ID.
+async function saved() {
+  if (draft.id) return;
+  const res = await fetch("/api/drafts", { method: "POST", body: JSON.stringify({ from: draft.from }) });
+  if (!res.ok) throw new Error((await res.text()) || res.statusText);
+  draft.id = (await res.json()).id;
 }
 
 // Saves the draft and draws it again, keeping part anchor, or else what's on the screen, in
@@ -87,9 +106,13 @@ async function preview(anchor) {
 
 // show draws the draft's prompt, or, when there's none to draw, says why.
 function show(data, { eager = false, problem = "" } = {}) {
-  $("which").textContent = draft.from ? "Draft of the next call" : "Draft";
-  $("prev").disabled = $("next").disabled = true;
-  $("edit").textContent = "Stop Editing";
+  // A draft after a call is among the calls it follows, which the arrows move along.
+  if (data?.calls?.length) [draft.call, draft.calls] = [data.call, data.calls];
+  const n = draft.calls.indexOf(draft.call);
+  $("which").textContent = n >= 0 ? `After call ${n + 1} of ${draft.calls.length}` : "Draft";
+  $("prev").disabled = n <= 0;
+  $("next").disabled = n < 0 || n >= draft.calls.length - 1;
+  $("edit").hidden = !draft.from;
   document.body.classList.add("drafting");
   document.title = "Draft · tack";
   if (!data) {
@@ -328,14 +351,14 @@ function addRunButtons() {
       button.title = "Pick an agent for the draft first: its tools run as that agent.";
       return;
     }
-    showFlags(id, button, flags);
+    showFlags(found.call, button, flags);
   });
 }
 
-async function showFlags(id, button, box) {
+async function showFlags(call, button, box) {
   button.disabled = true;
   try {
-    const res = await fetch(`/api/drafts/${draft.id}/calls/${encodeURIComponent(id)}/flags`);
+    const res = await fetch("/api/tool-flags", { method: "POST", body: JSON.stringify({ name: call.function?.name || "", arguments: call.function?.arguments || "" }) });
     if (!res.ok) {
       button.title = (await res.text()) || res.statusText;
       return;
@@ -651,6 +674,12 @@ async function showSendBar() {
 
 // setAgent sets the agent the draft's tools run as, and says whether it did.
 async function setAgent(agent) {
+  try {
+    await saved();
+  } catch (err) {
+    showError(err.message);
+    return false;
+  }
   const res = await fetch(`/api/drafts/${draft.id}/agent`, { method: "PUT", body: JSON.stringify({ agent }) });
   if (!res.ok) {
     showError((await res.text()) || res.statusText);

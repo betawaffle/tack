@@ -479,6 +479,36 @@ func (s *server) drafts(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, list)
 }
 
+// toolFlags are what the approval card would point out about a call, by its tool and arguments.
+func (s *server) toolFlags(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	flags, err := s.core.ToolFlags(body.Name, body.Arguments)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if flags == nil {
+		flags = []string{}
+	}
+	writeJSON(w, map[string][]string{"flags": flags})
+}
+
+// draftFor is the draft of the call after another, which isn't saved until it's changed.
+func (s *server) draftFor(w http.ResponseWriter, r *http.Request) {
+	d, p, err := s.core.DraftFor(r.URL.Query().Get("from"))
+	if d == nil {
+		fail(w, err)
+		return
+	}
+	writeDraft(w, d, p, err)
+}
+
 func (s *server) getDraft(w http.ResponseWriter, r *http.Request) {
 	d, p, err := s.core.Draft(r.PathValue("id"))
 	if d == nil {

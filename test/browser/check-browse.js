@@ -147,7 +147,12 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   }
   ok(promptAt, "there's a call to look at");
   await p.goto(B + "/prompt#" + promptAt);
-  await p.waitForSelector(".pl");
+  // A call's address shows the draft of the call after it; As Sent shows the call itself.
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
+  ok(/^After call/.test(await p.innerText("#which")), "a call's address shows the draft of the call after it");
+  await p.click("#edit");
+  await p.waitForFunction(() => /^Call /.test(document.getElementById("which").textContent) && !document.body.classList.contains("drafting"));
+  ok((await p.getAttribute("#edit", "aria-pressed")) === "true", "and As Sent shows the call as it was sent");
   ok((await p.locator(".pl-text .t").count()) > 0 && (await p.locator(".pl-text .g").count()) > 0, "the format's own text and the model's reply are both marked");
   ok((await p.locator(".pl-part", { hasText: "user" }).count()) > 0, "the parts are named");
   ok(await p.locator(".ws").first().isVisible(), "whitespace shows, in token boxes");
@@ -180,12 +185,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // The cache: the fake host reports what it cached, so the tokens after it are marked.
   ok((await p.locator(".count-label", { hasText: "Not cached" }).count()) === 1 && (await p.locator(".tok.nc").count()) > 0, "what the next call can't get from the cache is shown");
 
-  // Editing: a draft of the next call, with a message changed in place.
+  // Editing: a draft of the next call, with a message changed in place. The address is the
+  // same, so the page is loaded again to start from a call's draft.
   await p.goto(B + "/prompt#" + promptAt);
-  await p.waitForSelector(".pl");
-  await p.click("#edit");
-  await p.waitForFunction(() => document.body.classList.contains("drafting"));
-  ok((await p.innerText("#which")) === "Draft of the next call", "a draft starts from the call");
+  await p.reload();
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
+  ok(/^After call/.test(await p.innerText("#which")), "a draft starts from the call");
+  const draftCount = async () => (await p.evaluate(async () => (await (await fetch("/api/drafts")).json()).length));
+  const draftsBefore = await draftCount();
   // Clicking a parameter's row opens its value, not some other part nearby.
   const paramRow = p.locator(".pl.k-parameter").first();
   if (await paramRow.count()) {
@@ -217,18 +224,19 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.locator("#which").click();
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
   ok((await p.locator(".tok.ins").count()) > 0, "the edit shows as a change from the call");
+  ok((await draftCount()) === draftsBefore + 1, "and the draft is kept once something in it changes, not before");
   ok((await p.locator(".tok.nc").count()) > 0, "and what's after it can't come from the cache");
-  // The draft is kept by tack: it's there after a reload, and Edit on the call opens it again.
-  ok(/#draft\/[0-9a-f]+$/.test(p.url()), "a draft has an address of its own");
-  const draftURL = p.url();
+  // The draft is kept by tack, at the call's address: it's there after a reload, and after
+  // looking at the call as it was sent.
+  ok(p.url().endsWith("#" + promptAt), "the address stays the call's");
   await p.reload();
   await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector("#prompt").textContent.includes("Edited"));
   ok(true, "and it's still there after a reload");
   await p.click("#edit");
   await p.waitForFunction(() => !document.body.classList.contains("drafting") && /^Call /.test(document.getElementById("which").textContent));
   await p.click("#edit");
-  await p.waitForFunction(() => document.body.classList.contains("drafting"));
-  ok(p.url() === draftURL && (await p.locator("#prompt").textContent()).includes("Edited"), "Edit on the call opens the same draft again");
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector("#prompt").textContent.includes("Edited"));
+  ok(true, "As Sent and back again comes back to the same draft");
   // Copying gives the text itself, with its spaces, not the marks drawn for them.
   const copied = await p.evaluate(() => {
     const rows = [...document.querySelectorAll(".pl.k-user")];
@@ -293,9 +301,13 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const wrapped = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.getBoundingClientRect().height > 30));
   ok(overflow === 0 && wrapped, `and wraps like the rest (${overflow} rows run off the side)`);
   await p.setViewportSize(wide);
-  await p.waitForFunction(() => location.hash.startsWith("#manual/") && /Sent draft, 2 of 2/.test(document.getElementById("which").textContent), null, { timeout: 15000 });
-  ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0, "the sent call shows, with what changed from the call it came from");
-  ok(!(await p.locator("#send-bar").isVisible()) && !(await p.isDisabled("#prev")), "and steps back to that call");
+  // After sending, it's the draft of the call after the one it became.
+  await p.waitForFunction(() => location.hash.startsWith("#manual/") && /^After call 2 of 2/.test(document.getElementById("which").textContent) && !document.querySelector(".streaming"), null, { timeout: 15000 });
+  ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0 && !(await p.isDisabled("#prev")), "after sending, it's the next draft, which steps back to the call before");
+  // As Sent shows the call it became, with its reply.
+  await p.click("#edit");
+  await p.waitForFunction(() => /^Sent draft, 2 of 2/.test(document.getElementById("which").textContent));
+  ok((await p.locator(".tok.ins").count()) > 0, "the sent call shows, with what changed from the call it came from");
   ok((await p.locator(".streaming").count()) === 0 && (await p.locator(".pl.gen .tok").count()) > 0, "and then as tokens, once it's done");
   ok((await p.locator(".pl.gen .tok.ins").count()) === 0, "and nothing in the reply, the start of its turn included, counts as changed");
   const thought = await p.evaluate(() => {
@@ -307,7 +319,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(sentBody && sentBody.max_tokens === 50 && JSON.stringify(sentBody.messages).includes("Edited in the draft"), "what was sent is the draft, with its settings");
   await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting"));
-  ok((await p.innerText("#which")) === "Draft of the next call", "a draft can be made from a sent call too");
+  ok(/^After call/.test(await p.innerText("#which")), "a draft can be made from a sent call too");
   await p.waitForFunction(() => !document.querySelector(".ghost"));
   ok((await p.evaluate(() => document.getElementById("send-agent").selectedOptions[0]?.textContent)) === "renamed", "and it runs as the same agent");
   // Scrolled as far as it goes, the last row is still on the screen.
@@ -331,14 +343,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   });
   const beforeStop = await onScreen();
   await p.click("#edit");
-  await p.waitForFunction(() => !document.body.classList.contains("drafting"));
-  ok((await p.locator(".pl.ghost").count()) > 0, "what the draft added fades out");
+  await p.waitForFunction(() => /^Sent draft/.test(document.getElementById("which").textContent));
+  ok(await p.waitForFunction(() => document.querySelector(".pl.ghost") || null, null, { timeout: 2000 }).then(() => true, () => false), "what the draft added fades out");
   await p.waitForFunction(() => !document.querySelector(".pl.ghost"));
   // At least one row that was on the screen, and is in both, is exactly where it was.
   const now = await onScreen();
   const stayed = beforeStop.filter(([text, top]) => now.some(([t, y]) => t === text && Math.abs(y - top) < 1));
   ok(stayed.length > 0, `and what was on the screen stays where it was (${stayed.length} of ${beforeStop.length} rows)`);
-  ok(p.url().includes("#manual/") && (await p.innerText("#which")).startsWith("Sent draft"), "stopping goes back to the call");
+  ok(p.url().includes("#manual/") && (await p.innerText("#which")).startsWith("Sent draft"), "As Sent goes to the call");
 
   // The page with no address lists drafts and sent calls, and New starts a draft from the
   // defaults: the prompt, tools and model new conversations start with.
@@ -362,9 +374,10 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.fill(".edit-box", "hello from a new draft");
   await p.keyboard.press("Enter");
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("hellofromanewdraft"));
-  await p.click("#edit");
+  ok(await p.isHidden("#edit"), "a draft that follows no call has no As Sent");
+  await p.goto(B + "/prompt");
   await p.waitForSelector(".context-list");
-  ok((await p.locator(".context[href^='#draft/']", { hasText: "hello from a new draft" }).count()) === 1, "and Stop Editing goes to the list, where it's kept");
+  ok((await p.locator(".context[href^='#draft/']", { hasText: "hello from a new draft" }).count()) === 1, "and it's kept in the list");
   await p.screenshot({ path: "shots/contexts.png" });
 
   // A tool call in a draft runs as the draft's agent, and what the model will see goes in its
@@ -487,8 +500,6 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.
   await p.goto(B + "/prompt#" + promptAt);
-  await p.waitForSelector(".pl");
-  await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".msg-on"));
   const firstUser = p.locator(".pl.k-user:has(.msg-on)").first();
   const textOf = (row) => row.evaluate((r) => [...r.querySelectorAll(".pl-text .tok")].map((t) => t.textContent).join(""));

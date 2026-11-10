@@ -175,6 +175,8 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/prompt-preview", s.previewPrompt)
 	mux.HandleFunc("POST /api/drafts", s.newDraft)
 	mux.HandleFunc("GET /api/drafts", s.drafts)
+	mux.HandleFunc("GET /api/draft-for", s.draftFor)
+	mux.HandleFunc("POST /api/tool-flags", s.toolFlags)
 	mux.HandleFunc("GET /api/drafts/{id}", s.getDraft)
 	mux.HandleFunc("PUT /api/drafts/{id}", s.saveDraft)
 	mux.HandleFunc("POST /api/drafts/{id}/send", s.current(s.sendDraft))

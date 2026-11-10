@@ -387,13 +387,15 @@ can't get from the host's cache (it caches a prompt in blocks of 512 tokens, nev
 model wrote); wrapping; line numbers; pretty-printed tool schemas; and a wide column. The
 legend shows tack's token counts against the host's.
 
-**Edit** makes a draft of the next call from the one shown: its request, its reply, and an
-empty result for each tool call. Clicking a part's text edits that field of the request in a
-text box (Enter saves, Shift+Enter is a new line), and the draft is drawn again, compared with
-the call it came from. The controls under it set the effort, the most tokens and some
-sampling settings, and show what the call could cost. A draft is saved as it changes, in its
-own file under the data directory's `drafts/` (not the record, which only says what was sent),
-at `/prompt#draft/<id>`; **Edit** on the same call opens it again. A draft can name an
+A call's address shows the draft of the call after it, ready to edit: the call's request, its
+reply, and an empty result for each tool call. **As Sent** shows the call itself instead, as it
+was sent, compared with the call before it. Clicking a part's text edits that field of the
+request in a text box (Enter saves, Shift+Enter is a new line), and the draft is drawn again,
+compared with the call it came from. The controls under it have the agent, what the call is
+likely to cost, and Send; **More** has the model, effort, most tokens and sampling settings.
+A draft is only saved once something in it changes, in its own file under the data
+directory's `drafts/` (not the record, which only says what was sent); a draft that follows no
+call is at `/prompt#draft/<id>`. After Send, the page goes on to the draft after the new call. A draft can name an
 agent, which is its tools' persistent state (its /work and scratch store), picked or made in
 the controls, with a slug that's only for you; the call a draft becomes, and the draft after
 it, run as the same agent. Each agent has a page, linked from `/prompt`: the files in its /work

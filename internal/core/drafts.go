@@ -56,6 +56,69 @@ func (c *Core) NewDraft(from string) (*store.Draft, error) {
 	return d, c.cfg.Store.SaveDraft(d)
 }
 
+// DraftFor is the draft of the call after from: the one already started, or else one made
+// for the purpose and not saved, so looking at a call doesn't leave a draft behind. Its ID is
+// empty until it's saved, which NewDraft does. Its prompt says which calls are around from,
+// to move along them.
+func (c *Core) DraftFor(from string) (*store.Draft, CallPrompt, error) {
+	drafts, err := c.cfg.Store.Drafts()
+	if err != nil {
+		return nil, CallPrompt{}, err
+	}
+	var d *store.Draft
+	for _, existing := range drafts {
+		if existing.From == from && existing.Sent == "" {
+			d = existing
+			break
+		}
+	}
+	if d == nil {
+		before, err := c.requestOf(from)
+		if err != nil {
+			return nil, CallPrompt{}, err
+		}
+		request, err := nextRequest(before)
+		if err != nil {
+			return nil, CallPrompt{}, err
+		}
+		d = &store.Draft{From: from, Model: before.Model, Request: request, Agent: c.agentOf(from)}
+	}
+	p, err := c.draftPrompt(d)
+	return d, p, err
+}
+
+// chainOf is a call as its prompt names it, and the calls it's among: a conversation's, or
+// the chain of drafts a manual call came from, oldest first.
+func (c *Core) chainOf(ref string) (string, []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	where, id, _ := strings.Cut(ref, "/")
+	if where != "manual" {
+		conv := c.convs[where]
+		if conv == nil {
+			return id, []string{}
+		}
+		calls := []string{}
+		for _, it := range conv.items {
+			if it.callID != "" && it.request != "" {
+				calls = append(calls, it.callID)
+			}
+		}
+		return id, calls
+	}
+	chain := []string{ref}
+	_, from := c.sourceOf(ref)
+	for n := 0; from != "" && n < 1000; n++ {
+		src, next := c.sourceOf(from)
+		if src == nil {
+			break
+		}
+		chain = append([]string{from}, chain...)
+		from = next
+	}
+	return ref, chain
+}
+
 // nextRequest is the request after before: it with the reply and what answers it added.
 func nextRequest(before CallRequest) (jsontext.Value, error) {
 	var request map[string]jsontext.Value
@@ -141,6 +204,9 @@ func (c *Core) draftPrompt(d *store.Draft) (CallPrompt, error) {
 	}
 	p, err := Preview(d.Model, request, before)
 	p.Shown, p.ShownTools = shown, shownTools
+	if d.From != "" {
+		p.Call, p.Calls = c.chainOf(d.From)
+	}
 	return p, err
 }
 

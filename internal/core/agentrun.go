@@ -106,11 +106,17 @@ func (c *Core) DraftCallFlags(draftID, callID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tool := c.findTool(dc.name)
+	return c.ToolFlags(dc.name, dc.arguments)
+}
+
+// ToolFlags are what the approval card would point out about a call to a tool, by its name and
+// arguments.
+func (c *Core) ToolFlags(name, arguments string) ([]string, error) {
+	tool := c.findTool(name)
 	if tool == nil {
-		return nil, fmt.Errorf("%w: tack has no tool called %q to run", ErrBadRequest, dc.name)
+		return nil, fmt.Errorf("%w: tack has no tool called %q to run", ErrBadRequest, name)
 	}
-	args, err := parseArguments([]byte(dc.arguments))
+	args, err := parseArguments([]byte(arguments))
 	if err != nil {
 		return nil, fmt.Errorf("%w: the arguments can't be used: %v", ErrBadRequest, err)
 	}
