@@ -278,6 +278,8 @@ func (c *Core) ManualPrompt(id string) (CallPrompt, error) {
 	}
 	c.mu.Unlock()
 	out := CallPrompt{Call: this.id, Model: this.model, Host: this.host, Calls: chain, CacheBlock: CacheBlockTokens}
+	// The chain goes on to the calls sent from this one.
+	_, out.Calls = c.chainOf(this.id)
 	if this.stats != nil {
 		out.ReportedPrompt, out.ReportedOutput = this.stats.PromptTokens, this.stats.CompletionTokens
 	}

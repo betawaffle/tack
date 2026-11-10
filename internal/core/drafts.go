@@ -116,6 +116,20 @@ func (c *Core) chainOf(ref string) (string, []string) {
 		chain = append([]string{from}, chain...)
 		from = next
 	}
+	// And on from it: the call sent last from each, to the latest.
+	for last, n := ref, 0; n < 1000; n++ {
+		next := ""
+		for _, m := range c.manual {
+			if m.started.From == last {
+				next = "manual/" + m.started.Call
+			}
+		}
+		if next == "" || slices.Contains(chain, next) {
+			break
+		}
+		chain = append(chain, next)
+		last = next
+	}
 	return ref, chain
 }
 
