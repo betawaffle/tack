@@ -235,3 +235,11 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .off-row .pl-text { color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-to-here { visibility: hidden; margin-left: 12px; vertical-align: middle; text-indent: 0; user-select: none; }
 .pl:hover > .pl-text > .up-to-here, .up-to-here:focus-visible { visibility: visible; }
+
+/* A tool's schema, opened as a form of its descriptions and allowed values. */
+.schema-form { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; padding-bottom: 6px; white-space: normal; font: 12.5px/1.5 var(--ui); }
+.schema-name { font: 600 13px var(--mono); }
+.schema-row { display: flex; flex-direction: column; gap: 2px; }
+.schema-label { color: var(--muted); font: 11.5px var(--mono); }
+.schema-field { font: 13px/1.6 var(--mono); }
+.schema-buttons { display: flex; gap: 8px; }

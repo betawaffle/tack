@@ -483,6 +483,101 @@ function openEditor(k) {
   });
 }
 
+// Clicking a tool's schema opens a form for what can be written in it as text: the tool's
+// description, and each parameter's description and allowed values, one to a line, however
+// deeply the parameters are nested. The rest of the schema stays as it is.
+function schemaFields(schema, path, out) {
+  for (const [name, prop] of Object.entries(schema?.properties || {})) {
+    const here = path ? `${path}.${name}` : name;
+    out.push({ path: here, prop });
+    schemaFields(prop, here, out);
+    if (prop.items) {
+      out.push({ path: `${here}[]`, prop: prop.items });
+      schemaFields(prop.items, `${here}[]`, out);
+    }
+  }
+  return out;
+}
+
+function grown(value, label) {
+  const area = el("textarea", "edit-box schema-field");
+  area.value = value;
+  area.rows = Math.max(1, value.split("\n").length);
+  area.spellcheck = false;
+  area.setAttribute("aria-label", label);
+  const grow = () => {
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+  };
+  area.addEventListener("input", grow);
+  requestAnimationFrame(grow);
+  return area;
+}
+
+function openToolEditor(k) {
+  const parts = drawn().prompt.parts;
+  const i = draft.shownTools[parts[k].call || 0] ?? (parts[k].call || 0);
+  const tool = draft.request.tools?.[i]?.function;
+  if (!tool || $("prompt").querySelector(".pl.editing")) return;
+  const rows = [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`.pl-bars [data-p="${k}"]`));
+  if (!rows.length) return;
+  const editing = el("div", "pl editing schema-editing");
+  const gutter = rows[0].querySelector(".pl-gutter").cloneNode(true);
+  for (const node of gutter.querySelectorAll("[data-p]")) delete node.dataset.p;
+  for (const box of gutter.querySelectorAll(".msg-on")) box.remove();
+  const form = el("div", "pl-text schema-form");
+  form.append(el("div", "schema-name", tool.name));
+  // Each field writes into a copy of the tool, which replaces it on Save.
+  const edited = structuredClone(tool);
+  const field = (label, value, set) => {
+    const box = el("label", "schema-row");
+    box.append(el("span", "schema-label", label));
+    const area = grown(value, label);
+    area.addEventListener("input", () => set(area.value));
+    box.append(area);
+    form.append(box);
+  };
+  field("Description", edited.description || "", (v) => {
+    if (v) edited.description = v;
+    else delete edited.description;
+  });
+  for (const { path, prop } of schemaFields(edited.parameters, "", [])) {
+    field(`${path}`, prop.description || "", (v) => {
+      if (v) prop.description = v;
+      else delete prop.description;
+    });
+    // Allowed values that are all text can be changed, one to a line; others are left be.
+    if (Array.isArray(prop.enum) && prop.enum.every((x) => typeof x === "string")) {
+      field(`${path}, allowed values`, prop.enum.join("\n"), (v) => {
+        prop.enum = v.split("\n").filter((x) => x !== "");
+      });
+    }
+  }
+  const buttons = el("div", "schema-buttons");
+  const saveButton = el("button", "mini", "Save");
+  const cancel = el("button", "mini", "Cancel");
+  saveButton.type = cancel.type = "button";
+  buttons.append(saveButton, cancel);
+  form.append(buttons);
+  editing.append(gutter, form);
+  rows[0].before(editing);
+  for (const row of rows) row.hidden = true;
+  form.querySelector("textarea").focus();
+  const close = () => {
+    editing.remove();
+    for (const row of rows) row.hidden = false;
+  };
+  cancel.addEventListener("click", close);
+  saveButton.addEventListener("click", () => {
+    if (JSON.stringify(edited) === JSON.stringify(tool)) return close();
+    draft.request.tools[i].function = edited;
+    preview(k);
+  });
+  form.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+}
+
 // In a draft, clicking a part's text edits it: the field under the pointer, or else the
 // innermost part of the row that can be edited.
 $("prompt").addEventListener("click", (event) => {
@@ -497,6 +592,7 @@ $("prompt").addEventListener("click", (event) => {
   // The row's own part is its innermost bar, the first one drawn.
   const own = Number(row.querySelector(".pl-bars [data-p]")?.dataset.p);
   if (Number.isNaN(own)) return;
+  if (parts[own].kind === "tool") return openToolEditor(own);
   if (fieldOf(parts, own)) return openEditor(own);
   // A row with nothing to edit of its own, like a parameter's or <｜User｜>, opens a part
   // inside it: one that's still empty, or else its only one.

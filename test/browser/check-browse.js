@@ -420,6 +420,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     await p.locator(".off-row .msg-on[data-tool]").check();
     await p.waitForFunction((n) => document.querySelectorAll(".pl.k-tool:has(.msg-on)").length === n, toolRows);
     ok(true, "and turned back on");
+
+    // A tool's schema opens as a form of its descriptions and allowed values.
+    await p.locator(".pl.k-tool .pl-text").first().click();
+    await p.waitForSelector(".schema-form");
+    const name = await p.innerText(".schema-name");
+    await p.locator(".schema-field").first().fill("Changed by hand.");
+    const values = p.locator(".schema-row", { hasText: "allowed values" }).locator("textarea");
+    const hasValues = (await values.count()) > 0;
+    if (hasValues) await values.first().fill((await values.first().inputValue()) + "\nrust");
+    await p.locator(".schema-editing").screenshot({ path: "shots/schema-form.png" });
+    await p.click(".schema-buttons button:has-text('Save')");
+    await p.waitForFunction(() => !document.querySelector(".schema-form") && document.querySelector("#prompt").textContent.includes("Changedbyhand."));
+    const toolText = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
+    ok(!hasValues || toolText.includes('"rust"'), `a tool's description and allowed values can be changed without JSON (${name})`);
   }
 
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
