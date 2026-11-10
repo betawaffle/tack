@@ -209,6 +209,12 @@ function addToolControls(parts, firstRow) {
     lastRow = $("prompt").querySelectorAll(`.pl .pl-bars [data-p="${k}"]`);
     lastRow = lastRow[lastRow.length - 1]?.closest(".pl") || row;
   });
+  // Add a Tool goes on the last tool's row, or with none, on the system message's.
+  const add = el("button", "mini up-to-here add-tool", "Add a Tool");
+  add.type = "button";
+  add.title = "A tool of your own, whose calls you answer";
+  const systemRow = $("prompt").querySelector(`.pl .pl-bars [data-p="${parts.findIndex((p) => p.kind === "system" && p.parent === -1)}"].top`)?.closest(".pl");
+  (lastRow || systemRow)?.querySelector(".pl-text").append(add);
   let after = lastRow;
   for (const i of draft.offTools) {
     const fn = tools[i]?.function;
@@ -297,7 +303,8 @@ $("prompt").addEventListener("change", (event) => {
 $("prompt").addEventListener("click", (event) => {
   const up = event.target.closest(".up-to-here");
   if (!up || !draft) return;
-  if (up.classList.contains("add-message")) addMessage(Number(up.dataset.message));
+  if (up.classList.contains("add-tool")) addTool();
+  else if (up.classList.contains("add-message")) addMessage(Number(up.dataset.message));
   else onlyUpTo(Number(up.dataset.message));
 });
 
@@ -339,6 +346,11 @@ function addRunButtons() {
     const found = id && callFor(indexOf(part));
     const row = found && $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"]`)?.closest(".pl");
     if (!row) return;
+    // A tool tack doesn't have is the person's to answer, by writing its result.
+    if (!builtinTools.has(found.call.function?.name)) {
+      row.querySelector(".pl-text").append(el("span", "run-yours", "Yours to answer: click to write the result"));
+      return;
+    }
     const box = el("span", "run-call");
     const button = el("button", "mini", "Run");
     button.type = "button";
@@ -510,21 +522,11 @@ function openEditor(k) {
   });
 }
 
-// Clicking a tool's schema opens a form for what can be written in it as text: the tool's
-// description, and each parameter's description and allowed values, one to a line, however
-// deeply the parameters are nested. The rest of the schema stays as it is.
-function schemaFields(schema, path, out) {
-  for (const [name, prop] of Object.entries(schema?.properties || {})) {
-    const here = path ? `${path}.${name}` : name;
-    out.push({ path: here, prop });
-    schemaFields(prop, here, out);
-    if (prop.items) {
-      out.push({ path: `${here}[]`, prop: prop.items });
-      schemaFields(prop.items, `${here}[]`, out);
-    }
-  }
-  return out;
-}
+// Clicking a tool's schema opens a form of it: its name and description, and each parameter's
+// name, type, whether it's required, description and allowed values, however deeply they're
+// nested, with parameters to add and take away. Tack runs its own tools only while their calls
+// fit what it expects, so changing one's shape is for trying out what a model does with it.
+const TYPES = ["string", "number", "integer", "boolean", "array", "object"];
 
 function grown(value, label) {
   const area = el("textarea", "edit-box schema-field");
@@ -541,6 +543,124 @@ function grown(value, label) {
   return area;
 }
 
+function input(value, label, set) {
+  const box = el("input", "edit-box schema-input");
+  box.type = "text";
+  box.value = value;
+  box.spellcheck = false;
+  box.setAttribute("aria-label", label);
+  box.addEventListener("input", () => set(box.value));
+  return box;
+}
+
+// A row of the form: a label and what goes with it.
+function formRow(label, ...things) {
+  const row = el("label", "schema-row");
+  row.append(el("span", "schema-label", label), ...things);
+  return row;
+}
+
+// The editor of one parameter, name, in the object schema parent. redraw draws the whole form
+// again, after its shape changes.
+function paramEditor(parent, name, path, redraw) {
+  const prop = parent.properties[name];
+  const box = el("div", "schema-param");
+  const head = el("div", "schema-param-head");
+  // Renaming keeps its place among the others, and whether it's required.
+  const rename = input(name, `${path} name`, () => {});
+  rename.classList.add("schema-param-name");
+  rename.addEventListener("change", () => {
+    const to = rename.value.trim();
+    if (!to || to === name || to in parent.properties) {
+      rename.value = name;
+      return;
+    }
+    parent.properties = Object.fromEntries(Object.entries(parent.properties).map(([k, v]) => [k === name ? to : k, v]));
+    if (parent.required) parent.required = parent.required.map((r) => (r === name ? to : r));
+    redraw();
+  });
+  const type = el("select", "schema-type");
+  type.setAttribute("aria-label", `${path} type`);
+  const types = TYPES.includes(prop.type) || prop.type === undefined ? TYPES : [prop.type, ...TYPES];
+  for (const t of ["", ...types]) {
+    const option = el("option", "", t || "any");
+    option.value = t;
+    type.append(option);
+  }
+  type.value = typeof prop.type === "string" ? prop.type : "";
+  type.addEventListener("change", () => {
+    if (type.value) prop.type = type.value;
+    else delete prop.type;
+    if (type.value === "object") prop.properties ??= {};
+    if (type.value === "array") prop.items ??= { type: "string" };
+    if (type.value !== "string") delete prop.enum;
+    redraw();
+  });
+  const required = el("input");
+  required.type = "checkbox";
+  required.checked = (parent.required || []).includes(name);
+  required.addEventListener("change", () => {
+    const now = new Set(parent.required || []);
+    required.checked ? now.add(name) : now.delete(name);
+    parent.required = Object.keys(parent.properties).filter((k) => now.has(k));
+    if (!parent.required.length) delete parent.required;
+  });
+  const requiredLabel = el("label", "schema-required");
+  requiredLabel.append(required, "Required");
+  const remove = el("button", "mini", "Remove");
+  remove.type = "button";
+  remove.addEventListener("click", () => {
+    delete parent.properties[name];
+    if (parent.required) parent.required = parent.required.filter((r) => r !== name);
+    if (parent.required && !parent.required.length) delete parent.required;
+    redraw();
+  });
+  head.append(rename, type, requiredLabel, remove);
+  box.append(head);
+  box.append(formRow("Description", grown(prop.description || "", `${path} description`)));
+  box.lastChild.querySelector("textarea").addEventListener("input", (event) => {
+    if (event.target.value) prop.description = event.target.value;
+    else delete prop.description;
+  });
+  if (prop.type === "string" || (Array.isArray(prop.enum) && prop.enum.every((x) => typeof x === "string"))) {
+    const values = grown((prop.enum || []).join("\n"), `${path} allowed values`);
+    values.addEventListener("input", () => {
+      const list = values.value.split("\n").filter((x) => x !== "");
+      if (list.length) prop.enum = list;
+      else delete prop.enum;
+    });
+    box.append(formRow("Allowed values, one to a line (none is any)", values));
+  }
+  if (prop.type === "object") box.append(paramsEditor(prop, path, redraw));
+  if (prop.type === "array" && prop.items) {
+    // What's in a list is one parameter's worth of schema, under the name items.
+    const holder = { properties: { items: prop.items } };
+    const items = paramEditor(holder, "items", `${path}[]`, redraw);
+    items.querySelector(".schema-param-name").disabled = true;
+    items.querySelector(".schema-required").remove();
+    items.querySelector(".schema-param-head .mini").remove();
+    box.append(items);
+  }
+  return box;
+}
+
+// The parameters of an object schema, with Add a Parameter.
+function paramsEditor(schema, path, redraw) {
+  schema.properties ??= {};
+  const box = el("div", "schema-params");
+  for (const name of Object.keys(schema.properties)) box.append(paramEditor(schema, name, path ? `${path}.${name}` : name, redraw));
+  const add = el("button", "mini", path ? `Add a Parameter to ${path}` : "Add a Parameter");
+  add.type = "button";
+  add.addEventListener("click", () => {
+    let name = "parameter";
+    for (let n = 2; name in schema.properties; n++) name = `parameter_${n}`;
+    schema.properties[name] = { type: "string" };
+    redraw();
+  });
+  box.append(add);
+  return box;
+}
+
 function openToolEditor(k) {
   const parts = drawn().prompt.parts;
   const i = draft.shownTools[parts[k].call || 0] ?? (parts[k].call || 0);
@@ -553,57 +673,60 @@ function openToolEditor(k) {
   for (const node of gutter.querySelectorAll("[data-p]")) delete node.dataset.p;
   for (const box of gutter.querySelectorAll(".msg-on")) box.remove();
   const form = el("div", "pl-text schema-form");
-  form.append(el("div", "schema-name", tool.name));
   // Each field writes into a copy of the tool, which replaces it on Save.
   const edited = structuredClone(tool);
-  const field = (label, value, set) => {
-    const box = el("label", "schema-row");
-    box.append(el("span", "schema-label", label));
-    const area = grown(value, label);
-    area.addEventListener("input", () => set(area.value));
-    box.append(area);
-    form.append(box);
-  };
-  field("Description", edited.description || "", (v) => {
-    if (v) edited.description = v;
-    else delete edited.description;
-  });
-  for (const { path, prop } of schemaFields(edited.parameters, "", [])) {
-    field(`${path}`, prop.description || "", (v) => {
-      if (v) prop.description = v;
-      else delete prop.description;
+  edited.parameters ??= { type: "object", properties: {} };
+  const draw = () => {
+    form.replaceChildren(el("div", "schema-name", edited.name || "Tool"));
+    form.append(formRow("Name", input(edited.name || "", "Name", (v) => (edited.name = v.trim()))));
+    const description = grown(edited.description || "", "Description");
+    description.addEventListener("input", () => {
+      if (description.value) edited.description = description.value;
+      else delete edited.description;
     });
-    // Allowed values that are all text can be changed, one to a line; others are left be.
-    if (Array.isArray(prop.enum) && prop.enum.every((x) => typeof x === "string")) {
-      field(`${path}, allowed values`, prop.enum.join("\n"), (v) => {
-        prop.enum = v.split("\n").filter((x) => x !== "");
-      });
-    }
-  }
-  const buttons = el("div", "schema-buttons");
-  const saveButton = el("button", "mini", "Save");
-  const cancel = el("button", "mini", "Cancel");
-  saveButton.type = cancel.type = "button";
-  buttons.append(saveButton, cancel);
-  form.append(buttons);
-  editing.append(gutter, form);
-  rows[0].before(editing);
-  for (const row of rows) row.hidden = true;
-  form.querySelector("textarea").focus();
+    form.append(formRow("Description", description));
+    form.append(el("div", "schema-label", "Parameters"), paramsEditor(edited.parameters, "", draw));
+    const buttons = el("div", "schema-buttons");
+    const saveButton = el("button", "mini", "Save");
+    const cancel = el("button", "mini", "Cancel");
+    saveButton.type = cancel.type = "button";
+    cancel.addEventListener("click", close);
+    saveButton.addEventListener("click", () => {
+      if (!edited.name) return showError("A tool needs a name.");
+      if (JSON.stringify(edited) === JSON.stringify(tool)) return close();
+      draft.request.tools[i].function = edited;
+      preview(k);
+    });
+    buttons.append(saveButton, cancel);
+    form.append(buttons);
+  };
   const close = () =>
     keepPlace(k, () => {
       editing.remove();
       for (const row of rows) row.hidden = false;
     });
-  cancel.addEventListener("click", close);
-  saveButton.addEventListener("click", () => {
-    if (JSON.stringify(edited) === JSON.stringify(tool)) return close();
-    draft.request.tools[i].function = edited;
-    preview(k);
-  });
+  draw();
+  editing.append(gutter, form);
+  rows[0].before(editing);
+  for (const row of rows) row.hidden = true;
+  form.querySelector("textarea").focus();
   form.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });
+}
+
+// addTool puts a tool of the person's own in the draft, and opens it.
+async function addTool() {
+  const tools = (draft.request.tools ??= []);
+  const names = new Set(tools.map((t) => t.function?.name));
+  let name = "new_tool";
+  for (let n = 2; names.has(name); n++) name = `new_tool_${n}`;
+  tools.push({ type: "function", function: { name, description: "", parameters: { type: "object", properties: {} } } });
+  await preview();
+  const at = tools.length - 1;
+  const parts = drawn()?.prompt.parts || [];
+  const k = parts.findIndex((p) => p.kind === "tool" && (draft.shownTools[p.call || 0] ?? (p.call || 0)) === at);
+  if (k >= 0) openToolEditor(k);
 }
 
 // In a draft, clicking a part's text edits it: the field under the pointer, or else the
@@ -635,6 +758,8 @@ $("prompt").addEventListener("click", (event) => {
 const PAGE_REQUIRED = document.querySelector('meta[name="tack-page"]')?.dataset.required || "";
 let efforts = null;
 let defaultModel = "";
+// The tools tack has, which Run can run.
+let builtinTools = new Set();
 let estimating = 0;
 
 async function showSendBar() {
@@ -643,6 +768,7 @@ async function showSendBar() {
       const defaults = await (await fetch("/api/defaults")).json();
       efforts = defaults.efforts || [];
       defaultModel = defaults.settings?.model || "";
+      builtinTools = new Set((defaults.tools || []).map((t) => t.name));
     } catch {
       efforts = [];
     }

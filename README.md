@@ -409,9 +409,11 @@ in a draft has a checkbox where it starts: one that's unticked isn't sent, and s
 to tick again until the draft is sent (a model's message with tool calls and their results go
 together). **Only Up To Here**, on the row being pointed at, leaves out everything after a
 message, which is how to start again from an earlier one. Each tool's schema has a checkbox
-too, to leave the tool out the same way. Clicking a tool's schema opens a form of its descriptions and
-allowed values (one to a line), however deeply its parameters are nested, so they can be
-changed without writing JSON. **Add a Message**, on the last result of a batch, puts a
+too, to leave the tool out the same way. Clicking a tool's schema opens a form of it, so nothing's written as
+JSON: its name and description, and each parameter's name, type, whether it's required,
+description and allowed values (one to a line), however deeply nested, with parameters to add
+and remove. **Add a Tool**, on the last tool's row, adds a tool of your own; a call to a tool
+tack doesn't have is yours to answer, by writing its result, and has no Run. **Add a Message**, on the last result of a batch, puts a
 message from you after the results, in the same turn. Changes are compared token by token, but
 only within the same kind of part (and the same tool, by name), so leaving out a tool or
 rewriting a prompt shows as deleted there, on a row of its own if the part is gone, rather than

@@ -263,3 +263,11 @@ input.agent-key { width: 20em; padding: 2px 4px; border: 1px solid var(--line); 
 .agent-text { font: 12.5px/1.5 var(--mono); overflow: auto; resize: vertical; }
 .agent-past { color: var(--wait); }
 .context.current { background: var(--hover); }
+.schema-input { font: 13px/1.6 var(--mono); }
+.schema-params { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.schema-param { align-self: stretch; display: flex; flex-direction: column; gap: 4px; padding: 6px 0 6px 10px; border-left: 2px solid var(--line); }
+.schema-param-head { display: flex; align-items: center; gap: 8px; }
+.schema-param-head .schema-param-name { width: 16em; }
+.schema-type { font: 12.5px var(--ui); padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); }
+.schema-required { display: inline-flex; align-items: center; gap: 4px; }
+.run-yours { margin-left: 12px; color: var(--muted); font: italic 12px var(--ui); user-select: none; text-indent: 0; }

@@ -469,6 +469,34 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     await p.waitForFunction(() => !document.querySelector(".schema-form") && document.querySelector("#prompt").textContent.includes("Changedbyhand."));
     const toolText = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
     ok(!hasValues || toolText.includes('"rust"'), `a tool's description and allowed values can be changed without JSON (${name})`);
+
+    // A tool of your own: added, named, given a parameter, and saved.
+    await p.locator(".add-tool").first().click({ force: true });
+    await p.waitForSelector(".schema-form");
+    await p.locator(".schema-input").first().fill("lookup");
+    await p.locator(".schema-field").first().fill("Look something up.");
+    await p.click(".schema-params > button:has-text('Add a Parameter')");
+    await p.waitForSelector(".schema-param");
+    await p.locator(".schema-param-name").first().fill("query");
+    await p.locator(".schema-param-name").first().dispatchEvent("change");
+    await p.locator(".schema-required input").first().check();
+    await p.locator(".schema-editing").screenshot({ path: "shots/custom-tool.png" });
+    await p.click(".schema-buttons button:has-text('Save')");
+    await p.waitForFunction(() => !document.querySelector(".schema-form") && document.querySelector("#prompt").textContent.includes("Looksomethingup."));
+    const custom = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
+    ok(custom.includes('"name":"lookup"') && custom.includes('"query":{"type":"string"}') && custom.includes('"required":["query"]'), "a tool of your own can be added and given parameters");
+    // A call to it is yours to answer.
+    await p.evaluate(async (id) => {
+      const { draft } = await (await fetch(`/api/drafts/${id}`)).json();
+      draft.request.messages.push(
+        { role: "assistant", content: "", tool_calls: [{ id: "mine", type: "function", function: { name: "lookup", arguments: JSON.stringify({ query: "tack" }) } }] },
+        { role: "tool", tool_call_id: "mine", content: "" },
+      );
+      await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: draft.request }) });
+    }, runDraft);
+    await p.reload();
+    await p.waitForSelector(".run-yours");
+    ok((await p.locator(".run-yours").count()) === 1, "and a call to it says it's yours to answer, without a Run button");
   }
 
   // An agent's page shows what's in its /work and scratch store, and every state it's had,
