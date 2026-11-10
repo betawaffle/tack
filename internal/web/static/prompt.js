@@ -401,6 +401,26 @@ function rowsOnScreen() {
   return out;
 }
 
+// A token split across rows has a piece in each, in rows next to each other. pieceOf says which
+// piece of its token an element is, and pieceAt finds that piece from the first.
+function pieceOf(node) {
+  const t = node.dataset.t;
+  let n = 0;
+  for (let row = node.closest(".pl").previousElementSibling; row && row.querySelector(`.tok[data-t="${t}"]`); row = row.previousElementSibling) n++;
+  return n;
+}
+function pieceAt(first, n) {
+  const t = first.dataset.t;
+  let node = first;
+  for (let row = first.closest(".pl"); n > 0; n--) {
+    row = row.nextElementSibling;
+    const next = row?.querySelector(`.tok[data-t="${t}"]`);
+    if (!next) break;
+    node = next;
+  }
+  return node;
+}
+
 const motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // keepView draws again with something that's on the screen and in both drawings where it was:
@@ -413,15 +433,18 @@ function keepView(draw) {
   // the first of those is, and whether it has any tokens at all.
   const rows = !was ? [] : rowsOnScreen().map((row) => {
     const tokens = [];
-    let top = null;
+    let top = null, first = 0;
     const all = row.querySelectorAll(".tok[data-t]");
     for (const t of all) {
       const b = was.toBase(Number(t.dataset.t));
       if (b === null) continue;
-      if (top === null) top = t.getBoundingClientRect().top;
+      if (top === null) {
+        top = t.getBoundingClientRect().top;
+        first = pieceOf(t);
+      }
       tokens.push(b);
     }
-    return { row, tokens, top, any: all.length > 0 };
+    return { row, tokens, top, first, any: all.length > 0 };
   });
   const result = draw();
   const settle = () => {
@@ -435,6 +458,7 @@ function keepView(draw) {
     for (const r of rows) {
       anchor = r.tokens.length ? tokenAt(r.tokens[0]) : null;
       if (anchor) {
+        anchor = pieceAt(anchor, r.first);
         top = r.top;
         break;
       }
