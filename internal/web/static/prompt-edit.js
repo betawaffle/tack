@@ -263,13 +263,13 @@ function addMessageControls() {
     if (!row || rows.has(i)) return;
     rows.set(i, row);
     row.querySelector(".pl-part").prepend(checkbox(i, true));
-    // The last result of a batch can have a message from the person after it.
-    const messages = draft.request.messages;
-    if (part.kind === "tool_result" && messages[i + 1]?.role !== "tool") {
-      const add = el("button", "mini up-to-here add-message", messages[i + 1]?.role === "user" ? "Write a Message" : "Add a Message");
+    // Something new can go after a message, or after the results of its calls: a system
+    // message, a message from you, or a turn of the model's that you write yourself.
+    if (Math.max(...groupOf(i)) === i) {
+      const add = el("button", "mini up-to-here add-after", "Add After");
       add.type = "button";
       add.dataset.message = i;
-      add.title = "A message from you, after these results, in the same turn";
+      add.title = "Add a system message, a message from you, or a made-up turn of the model's after this";
       row.querySelector(".pl-text").append(add);
     }
     if (i < last) {
@@ -301,25 +301,55 @@ $("prompt").addEventListener("change", (event) => {
   else setOff([Number(box.dataset.message)], !box.checked);
 });
 $("prompt").addEventListener("click", (event) => {
+  const choice = event.target.closest(".add-choice");
+  if (choice && draft) return addAfter(Number(choice.dataset.message), choice.dataset.role);
   const up = event.target.closest(".up-to-here");
   if (!up || !draft) return;
   if (up.classList.contains("add-tool")) addTool();
-  else if (up.classList.contains("add-message")) addMessage(Number(up.dataset.message));
+  else if (up.classList.contains("add-after")) showChoices(up);
   else onlyUpTo(Number(up.dataset.message));
 });
 
-// addMessage puts an empty message from the person after the result at i, unless there's one
-// there already, and opens it to write in.
-async function addMessage(i) {
+// Add After opens into the kinds of message it can add.
+const ADDABLE = [["system", "System Message"], ["user", "User Message"], ["assistant", "Assistant Turn"]];
+function showChoices(button) {
+  const choices = el("span", "add-choices");
+  for (const [role, label] of ADDABLE) {
+    const choice = el("button", "mini add-choice", label);
+    choice.type = "button";
+    choice.dataset.message = button.dataset.message;
+    choice.dataset.role = role;
+    choices.append(choice);
+  }
+  button.replaceWith(choices);
+  choices.firstChild.focus();
+  // Clicking anywhere else, or Escape, closes it again.
+  const close = (event) => {
+    if (event.type === "keydown" ? event.key !== "Escape" : choices.contains(event.target)) return;
+    choices.replaceWith(button);
+    document.removeEventListener("pointerdown", close, true);
+    document.removeEventListener("keydown", close, true);
+  };
+  document.addEventListener("pointerdown", close, true);
+  document.addEventListener("keydown", close, true);
+}
+
+// The part that's a new message's text, which its box opens on.
+const TEXT_KINDS = { system: "prompt", user: "user", assistant: "content" };
+
+// addAfter puts an empty message with the role after message i, and opens it to write in. A
+// turn of the model's at the end gets an empty message from you after it, as a call's reply
+// does, so the model has a turn to take.
+async function addAfter(i, role) {
   const messages = draft.request.messages;
   const at = i + 1;
-  if (messages[at]?.role !== "user") {
-    messages.splice(at, 0, { role: "user", content: "" });
-    draft.off = draft.off.map((j) => (j >= at ? j + 1 : j));
-    await preview();
-  }
+  const added = [role === "assistant" ? { role, content: "", reasoning: "" } : { role, content: "" }];
+  if (role === "assistant" && at === messages.length) added.push({ role: "user", content: "" });
+  messages.splice(at, 0, ...added);
+  draft.off = draft.off.map((j) => (j >= at ? j + added.length : j));
+  await preview();
   const parts = drawn()?.prompt.parts || [];
-  const k = parts.findIndex((p) => p.kind === "user" && indexOf(p) === at);
+  const k = parts.findIndex((p) => p.kind === TEXT_KINDS[role] && indexOf(p) === at);
   if (k >= 0) openEditor(k);
 }
 
@@ -733,7 +763,7 @@ async function addTool() {
 // innermost part of the row that can be edited.
 $("prompt").addEventListener("click", (event) => {
   // A click that ends selecting text, there or in a box that's open, isn't one to edit with.
-  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing, .run-call, .up-to-here, .off-row")) return;
+  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing, .run-call, .up-to-here, .add-choices, .off-row")) return;
   if (!getSelection().isCollapsed) return;
   const parts = drawn().prompt.parts;
   const span = event.target.closest("[data-f]");

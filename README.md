@@ -413,8 +413,10 @@ too, to leave the tool out the same way. Clicking a tool's schema opens a form o
 JSON: its name and description, and each parameter's name, type, whether it's required,
 description and allowed values (one to a line), however deeply nested, with parameters to add
 and remove. **Add a Tool**, on the last tool's row, adds a tool of your own; a call to a tool
-tack doesn't have is yours to answer, by writing its result, and has no Run. **Add a Message**, on the last result of a batch, puts a
-message from you after the results, in the same turn. Changes are compared token by token, but
+tack doesn't have is yours to answer, by writing its result, and has no Run. **Add After**, on a
+message (or the last result of a batch), adds a system message, a message from you, or a turn
+of the model's that you write yourself; a made-up turn at the end gets an empty message from
+you after it, so the model has a turn to take. Changes are compared token by token, but
 only within the same kind of part (and the same tool, by name), so leaving out a tool or
 rewriting a prompt shows as deleted there, on a row of its own if the part is gone, rather than
 running into what comes after it. **Send** sends it as a

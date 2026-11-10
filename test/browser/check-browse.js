@@ -433,13 +433,37 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       ok(text.includes("keptbytheagent↵"), `run_code runs as the agent, with /work kept between runs (${await p.innerText("#error")})`);
 
       // A message from the person can go after a batch of results, in the same turn.
-      await p.locator(".add-message").last().click({ force: true });
+      await p.locator(".add-after").last().click({ force: true });
+      await p.click(".add-choice[data-role=user]");
       await p.waitForSelector(".edit-box");
       await p.fill(".edit-box", "And one more thing.");
       await p.keyboard.press("Enter");
       await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Andonemorething."));
       const order = await p.evaluate(() => [...document.querySelectorAll(".pl.k-tool_result, .pl.k-user")].map((r) => r.className.includes("k-user") ? "user" : "result").join(","));
       ok(/result,user$/.test(order), `a message can be added after the results (${order})`);
+
+      // A turn of the model's can be made up, and a system message put anywhere.
+      const roles = () => p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.map((m) => m.role).join(","), runDraft);
+      await p.locator(".add-after").last().click({ force: true });
+      await p.click(".add-choice[data-role=assistant]");
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "A reply I made up.");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.replace(/[·\s]/g, "").includes("AreplyImadeup."));
+      ok(/tool,user,assistant,user$/.test(await roles()), `a made-up turn of the model's gets a message from you after it (${await roles()})`);
+      const made = (await roles()).split(",").lastIndexOf("assistant");
+      await p.locator(`.add-after[data-message="${made}"]`).click({ force: true });
+      await p.click(".add-choice[data-role=system]");
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "Keep it short.");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.replace(/[·\s]/g, "").includes("Keepitshort."));
+      const text2 = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
+      ok(/tool,user,assistant,system,user$/.test(await roles()) && (() => { const a = text2.indexOf("AreplyImadeup."), b = text2.indexOf("<｜System｜>", a), c = text2.indexOf("Keepitshort."); return a >= 0 && a < b && b < c; })(), `a system message goes where it's put (${await roles()})`);
+      // Escape closes the choices without adding anything.
+      await p.locator(".add-after").last().click({ force: true });
+      await p.keyboard.press("Escape");
+      ok((await p.locator(".add-choices").count()) === 0 && /system,user$/.test(await roles()), "Escape closes the choices");
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 
@@ -533,7 +557,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const textOf = (row) => row.evaluate((r) => [...r.querySelectorAll(".pl-text .tok")].map((t) => t.textContent).join(""));
   const kept = await textOf(firstUser);
   await firstUser.hover();
-  await firstUser.locator(".up-to-here").click();
+  await firstUser.locator(".up-to-here:not(.add-after)").click();
   await p.waitForFunction(() => document.querySelectorAll(".off-row").length >= 2 && !document.querySelector(".ghost"));
   const upTo = await p.evaluate(() => ({
     off: document.querySelectorAll(".off-row .msg-on:not(:checked)").length,
