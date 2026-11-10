@@ -354,6 +354,31 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     ok(true, "Run runs it as the agent and puts what the model sees in the result");
     const agent = await p.evaluate(async () => (await (await fetch("/api/agents")).json()).find((a) => a.slug === "renamed"));
     ok(agent.state.scratch && agent.states === 1, "and the agent keeps what it changed");
+
+    // Code it runs keeps /work from one run to the next.
+    if (offered.includes("run_code")) {
+      await p.evaluate(async (id) => {
+        const { draft } = await (await fetch(`/api/drafts/${id}`)).json();
+        const code = (c) => JSON.stringify({ language: "python", code: c });
+        draft.request.messages.push(
+          { role: "assistant", content: "", tool_calls: [
+            { id: "c2", type: "function", function: { name: "run_code", arguments: code("open('/work/kept.txt', 'w').write('kept by the agent')") } },
+            { id: "c3", type: "function", function: { name: "run_code", arguments: code("print(open('/work/kept.txt').read())") } },
+          ] },
+          { role: "tool", tool_call_id: "c2", content: "" },
+          { role: "tool", tool_call_id: "c3", content: "" },
+        );
+        await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: draft.request }) });
+      }, runDraft);
+      await p.reload();
+      await p.waitForFunction(() => [...document.querySelectorAll(".run-call button")].filter((b) => !b.disabled).length === 3);
+      await p.click(".run-call button[data-call=c2]");
+      await p.waitForFunction(() => document.querySelector(".run-call button[data-call=c3]") && !document.querySelector(".run-call button[data-call=c3]").disabled && /Run/.test(document.querySelector(".run-call button[data-call=c3]").textContent));
+      await p.click(".run-call button[data-call=c3]");
+      await p.waitForFunction(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, "").includes("keptbytheagent↵") || document.getElementById("error").hidden === false, null, { timeout: 60000 });
+      const text = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
+      ok(text.includes("keptbytheagent↵"), `run_code runs as the agent, with /work kept between runs (${await p.innerText("#error")})`);
+    }
   } else ok(true, "the defaults offer no scratch tool to run");
 
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
