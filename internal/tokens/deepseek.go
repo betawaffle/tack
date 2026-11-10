@@ -530,7 +530,10 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []dsTool, thinking bool, e
 				if header {
 					w.template(dsThink)
 				}
+				// The text is a part of its own, so the tags around it stay apart from it.
+				w.enter(Part{Kind: PartThought, Message: m.src})
 				w.field(m.reasoning)
+				w.leave()
 				w.template(dsThinkEnd)
 				w.leave()
 			} else if header {
@@ -571,10 +574,14 @@ func dsWrite(w *dsWriter, messages []dsMessage, tools []dsTool, thinking bool, e
 				header = true
 				continue
 			}
-			w.part(Part{Kind: PartNext, Message: -1})
+			// The start of the model's turn, in the parts its reply will be in, though no message
+			// is there yet.
+			w.part(Part{Kind: PartAssistant, Message: -1})
 			w.template(dsAssistant)
 			if thinking && (!drop || i >= last) {
+				w.enter(Part{Kind: PartReasoning, Message: -1})
 				w.template(dsThink)
+				w.leave()
 			} else {
 				w.template(dsThinkEnd)
 			}

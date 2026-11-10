@@ -124,10 +124,7 @@ const MESSAGE_KINDS = new Set(["system", "user", "tool_result", "assistant"]);
 // The messages that go with message i: all of them that a model's message with tool calls is in.
 function groupOf(i) {
   const messages = draft.request.messages;
-  const maker = (j) => {
-    const id = messages[j]?.tool_call_id;
-    return id ? messages.findIndex((m) => m.tool_calls?.some((c) => c.id === id)) : -1;
-  };
+  const maker = (j) => callFor(j)?.at ?? -1;
   const head = maker(i) >= 0 ? maker(i) : i;
   return messages.map((_, j) => j).filter((j) => j === head || maker(j) === head);
 }
@@ -230,7 +227,8 @@ function addMessageControls() {
   // The first row of each message that's sent, by its index in the request.
   const rows = new Map();
   parts.forEach((part, k) => {
-    if (!MESSAGE_KINDS.has(part.kind) || (part.kind === "system" && part.parent !== -1)) return;
+    // The start of the model's turn, before there's a message, has none to turn off.
+    if (!MESSAGE_KINDS.has(part.kind) || part.message < 0 || (part.kind === "system" && part.parent !== -1)) return;
     const i = indexOf(part);
     const row = firstRow(k);
     if (!row || rows.has(i)) return;
@@ -298,12 +296,15 @@ async function addMessage(i) {
 // Each tool call in a draft gets a Run button by its result, which runs the call as the draft's
 // agent and puts what the model will see in the result. Beside it is what the approval card
 // would point out, since clicking it is the approval.
-function callName(id) {
-  for (const m of draft.request.messages) {
-    const call = m.tool_calls?.find((c) => c.id === id);
-    if (call) return call.function?.name || "";
+// The call message i answers: the nearest one before it with that ID, since an older draft's
+// IDs can repeat.
+function callFor(i) {
+  const id = draft.request.messages[i]?.tool_call_id;
+  for (let j = i - 1; id && j >= 0; j--) {
+    const call = draft.request.messages[j].tool_calls?.find((c) => c.id === id);
+    if (call) return { call, at: j };
   }
-  return "";
+  return null;
 }
 
 function addRunButtons() {
@@ -312,11 +313,11 @@ function addRunButtons() {
   parts.forEach((part, k) => {
     if (part.kind !== "tool_result") return;
     const id = messageOf(part)?.tool_call_id;
-    const name = id && callName(id);
-    const row = name && $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"]`)?.closest(".pl");
+    const found = id && callFor(indexOf(part));
+    const row = found && $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"]`)?.closest(".pl");
     if (!row) return;
     const box = el("span", "run-call");
-    const button = el("button", "mini", `Run ${name}`);
+    const button = el("button", "mini", "Run");
     button.type = "button";
     button.dataset.call = id;
     const flags = el("span", "run-flags");
@@ -392,7 +393,7 @@ function fieldOf(parts, k) {
     case "tool_result":
     case "content":
       return { get: () => textOf(m.content), set: (t) => { m.content = t; } };
-    case "reasoning": {
+    case "thought": {
       const key = "reasoning_content" in m && !("reasoning" in m) ? "reasoning_content" : "reasoning";
       return { get: () => m[key] || "", set: (t) => { m[key] = t; } };
     }
@@ -469,8 +470,11 @@ function openEditor(k) {
       preview(k);
       return;
     }
-    editing.remove();
-    for (const row of rows) row.hidden = false;
+    // The box can be taller than what it covered, so the part's rows are kept where it was.
+    keepPlace(k, () => {
+      editing.remove();
+      for (const row of rows) row.hidden = false;
+    });
   };
   area.addEventListener("blur", () => close(true));
   // Enter saves, and Shift+Enter is a new line.
@@ -563,10 +567,11 @@ function openToolEditor(k) {
   rows[0].before(editing);
   for (const row of rows) row.hidden = true;
   form.querySelector("textarea").focus();
-  const close = () => {
-    editing.remove();
-    for (const row of rows) row.hidden = false;
-  };
+  const close = () =>
+    keepPlace(k, () => {
+      editing.remove();
+      for (const row of rows) row.hidden = false;
+    });
   cancel.addEventListener("click", close);
   saveButton.addEventListener("click", () => {
     if (JSON.stringify(edited) === JSON.stringify(tool)) return close();

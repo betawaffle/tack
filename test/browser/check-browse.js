@@ -268,6 +268,12 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.fill(".edit-box", "paced reply");
   await p.keyboard.press("Enter");
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("paced"));
+  // The start of the model's turn is already in its parts, coloured as the model's.
+  const pending = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".prompt-rows .pl")];
+    return { next: document.querySelectorAll(".pl.k-next").length, last: rows.slice(-2).map((r) => r.className.match(/k-\w+/)[0]).join(",") };
+  });
+  ok(pending.next === 0 && pending.last === "k-assistant,k-reasoning", `the start of the model's turn is in its parts (${pending.last})`);
   // Narrow, so the reply's lines have to wrap as they come in.
   const wide = p.viewportSize();
   await p.setViewportSize({ width: 430, height: wide.height });
@@ -283,6 +289,12 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0, "the sent call shows, with what changed from the call it came from");
   ok(!(await p.locator("#send-bar").isVisible()) && !(await p.isDisabled("#prev")), "and steps back to that call");
   ok((await p.locator(".streaming").count()) === 0 && (await p.locator(".pl.gen .tok").count()) > 0, "and then as tokens, once it's done");
+  ok((await p.locator(".pl.gen .tok.ins").count()) === 0, "and nothing in the reply, the start of its turn included, counts as changed");
+  const thought = await p.evaluate(() => {
+    const row = document.querySelector(".pl.gen.k-thought");
+    return { own: !!row && !row.textContent.includes("<think>"), tag: [...document.querySelectorAll(".pl.gen.k-reasoning")].some((r) => r.textContent.includes("<think>")) };
+  });
+  ok(thought.own && thought.tag, "the reasoning's text has rows of its own, apart from its tags");
   const sentBody = (await bodies()).at(-1);
   ok(sentBody && sentBody.max_tokens === 50 && JSON.stringify(sentBody.messages).includes("Edited in the draft"), "what was sent is the draft, with its settings");
   await p.click("#edit");

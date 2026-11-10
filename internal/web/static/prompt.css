@@ -75,7 +75,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 /* Tools are in the system message, and tool results come back in a user turn. */
 .k-system, .k-prompt, .k-effort, .k-tools, .k-tool { --k: var(--k-system); }
 .k-user, .k-user_turn, .k-tool_result { --k: var(--k-user); }
-.k-assistant, .k-reasoning, .k-content, .k-calls, .k-tool_call, .k-parameter, .k-value { --k: var(--k-model); }
+.k-assistant, .k-reasoning, .k-thought, .k-content, .k-calls, .k-tool_call, .k-parameter, .k-value { --k: var(--k-model); }
 .k-start, .k-next, .k-stop, .k-static { --k: var(--k-format); }
 
 .pl { display: flex; }

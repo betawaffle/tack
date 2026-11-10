@@ -12,7 +12,7 @@ const layout = tackPromptLayout;
 export const LABELS = {
   start: "Preamble", effort: "Effort", system: "System", prompt: "Prompt", tools: "Tools", tool: "Tool", user_turn: "User",
   user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
-  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", static: "Static", next: "",
+  calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", static: "Static", thought: "",
 };
 export const DEPTHS = 5;
 

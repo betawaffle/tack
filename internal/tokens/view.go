@@ -19,10 +19,10 @@ const (
 	PartTools      = "tools"       // the tools offered, which the format writes into the first system message
 	PartUser       = "user"        // a user message, inside a user turn
 	PartToolResult = "tool_result" // a tool's result
-	PartReasoning  = "reasoning"   // an assistant's reasoning
+	PartReasoning  = "reasoning"   // an assistant's reasoning, with the tags around it
+	PartThought    = "thought"     // the reasoning's text
 	PartContent    = "content"     // an assistant's reply
 	PartToolCall   = "tool_call"   // one of an assistant's tool calls
-	PartNext       = "next"        // what the format puts before the model's turn
 	PartAssistant  = "assistant"   // an assistant's whole message, around its reasoning, reply and calls
 	PartCalls      = "calls"       // the block an assistant's tool calls are in
 	PartParameter  = "parameter"   // one argument of a tool call

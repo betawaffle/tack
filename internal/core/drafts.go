@@ -88,7 +88,8 @@ func nextRequest(before CallRequest) (jsontext.Value, error) {
 	if out := before.Output; out != nil {
 		reply.Content, reply.Reasoning = out.Content, out.Reasoning
 		for i, call := range out.Calls {
-			reply.ToolCalls = append(reply.ToolCalls, toolCall{ID: fmt.Sprintf("draft-%d", i), Type: "function", Function: function{Name: call.Name, Arguments: call.Arguments}})
+			// Each ID is new, so a call never shares one with an earlier call in the same request.
+			reply.ToolCalls = append(reply.ToolCalls, toolCall{ID: fmt.Sprintf("call-%s-%d", store.NewID(), i), Type: "function", Function: function{Name: call.Name, Arguments: call.Arguments}})
 		}
 	}
 	added := []message{reply}
@@ -209,20 +210,20 @@ func pairedOff(request jsontext.Value, off []int) []int {
 		} `json:"messages"`
 	}
 	json.Unmarshal(request, &req)
-	maker := map[string]int{} // a call's ID to the message that made it
+	// The message that made the call each message answers, or the message itself: the nearest
+	// one before it with a call of that ID, since an older draft's IDs can repeat.
+	groups := make([]int, len(req.Messages))
+	maker := map[string]int{}
 	for i, m := range req.Messages {
+		groups[i] = i
+		if at, ok := maker[m.ToolCallID]; ok && m.ToolCallID != "" {
+			groups[i] = at
+		}
 		for _, call := range m.ToolCalls {
 			maker[call.ID] = i
 		}
 	}
-	group := func(i int) int { // the message that made the calls i answers, or i
-		if id := req.Messages[i].ToolCallID; id != "" {
-			if at, ok := maker[id]; ok {
-				return at
-			}
-		}
-		return i
-	}
+	group := func(i int) int { return groups[i] }
 	turnedOff := map[int]bool{}
 	for _, i := range off {
 		if i >= 0 && i < len(req.Messages) {

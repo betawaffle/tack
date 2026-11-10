@@ -53,6 +53,8 @@ func findDraftCall(d *store.Draft, id string) (*draftCall, error) {
 			Arguments string `json:"arguments"`
 		} `json:"function"`
 	}
+	// An older draft's IDs can repeat, so the call is the last one with that ID that something
+	// answers, and its result the first answer after it.
 	for i, m := range out.messages {
 		var calls []call
 		if raw, ok := m["tool_calls"]; ok && json.Unmarshal(raw, &calls) == nil {
@@ -60,11 +62,12 @@ func findDraftCall(d *store.Draft, id string) (*draftCall, error) {
 				if c.ID == id {
 					out.reply, _ = json.Marshal(m, json.Deterministic(true))
 					out.name, out.arguments = c.Function.Name, c.Function.Arguments
+					out.result = -1
 				}
 			}
 		}
 		var answers string
-		if raw, ok := m["tool_call_id"]; ok && json.Unmarshal(raw, &answers) == nil && answers == id && out.name != "" {
+		if raw, ok := m["tool_call_id"]; ok && json.Unmarshal(raw, &answers) == nil && answers == id && out.name != "" && out.result < 0 {
 			out.result = i
 		}
 	}

@@ -158,3 +158,20 @@ func TestLeavingOutAToolChangesOnlyThatTool(t *testing.T) {
 		}
 	}
 }
+
+func TestRepeatedCallIDsPairWithTheNearestCall(t *testing.T) {
+	// An older draft named every reply's calls draft-0, draft-1, and so on.
+	request := jsontext.Value(`{"messages":[
+{"role":"user","content":"a"},
+{"role":"assistant","content":"","tool_calls":[{"id":"draft-0","type":"function","function":{"name":"scratch","arguments":"{}"}}]},
+{"role":"tool","tool_call_id":"draft-0","content":"one"},
+{"role":"assistant","content":"","tool_calls":[{"id":"draft-0","type":"function","function":{"name":"run_code","arguments":"{}"}}]},
+{"role":"tool","tool_call_id":"draft-0","content":""}]}`)
+	if off := pairedOff(request, []int{4}); len(off) != 2 || off[0] != 3 || off[1] != 4 {
+		t.Errorf("off = %v", off)
+	}
+	dc, err := findDraftCall(&store.Draft{Request: request}, "draft-0")
+	if err != nil || dc.name != "run_code" || dc.result != 4 {
+		t.Errorf("call = %+v, %v", dc, err)
+	}
+}

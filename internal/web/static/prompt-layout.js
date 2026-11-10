@@ -5,7 +5,6 @@
 // The rules:
 // - Every part of the request starts a row of its own. A row that starts partway along a line
 //   of the text has no line number.
-// - What the format puts before the model's turn goes with what follows it.
 // - A value stays in its parameter's row if it's one line of at most inlineMax characters
 //   (60 unless the options say otherwise); otherwise it gets rows of its own.
 // - A newline of an outer part's ends the row it's on rather than opening one of its own.
@@ -127,7 +126,6 @@ const tackPromptLayout = (() => {
     };
     const rowPart = (i) => {
       let k = i;
-      while (parts[k].kind === "next" && k + 1 < parts.length) k++;
       if (parts[k].kind === "value" && !partText[k].includes("\n") && [...partText[k]].length <= inlineMax) k = parts[k].parent;
       return k;
     };
@@ -237,7 +235,9 @@ const tackPromptLayout = (() => {
             item = null;
           }
           if (!item) {
-            item = { token: ti, inserted: inserted.has(ti), spans: [] };
+            // What the model wrote isn't compared, and nor is the start of its turn in front of
+            // it, which is the same fixed text every time.
+            item = { token: ti, inserted: inserted.has(ti) && !parts[s.part].generated, spans: [] };
             row.items.push(item);
           }
           item.spans.push({ text: line, field: s.field, part: s.part, generated: a >= generated, newline: !last });
