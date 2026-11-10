@@ -22,11 +22,11 @@ type CallPrompt struct {
 	PreviousText   string `json:"previous_text,omitzero"`
 	PreviousTokens []int  `json:"previous_tokens,omitzero"`
 	// PreviousPrompt is how many of the previous tokens are its prompt, before its reply.
-	PreviousPrompt int           `json:"previous_prompt,omitzero"`
+	PreviousPrompt int `json:"previous_prompt,omitzero"`
 	// Shown is, for a draft, where each message of the prompt is in the draft's request, which
 	// also has the messages that are turned off.
-	Shown []int `json:"shown,omitzero"`
-	Changes        []tokens.Edit `json:"changes,omitzero"`
+	Shown   []int         `json:"shown,omitzero"`
+	Changes []tokens.Edit `json:"changes,omitzero"`
 	// Calls lists every call in the conversation, in order, to move between them.
 	Calls []string `json:"calls"`
 	// What the host said the prompt and the reply came to, in tokens, to check the counting
