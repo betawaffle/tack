@@ -162,7 +162,6 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/manual-calls/{id}", s.manualCall)
 	mux.HandleFunc("POST /api/manual-calls/{id}/cancel", s.cancelManual)
 	mux.HandleFunc("GET /api/manual-calls/{id}/prompt", s.manualPrompt)
-	mux.HandleFunc("GET /api/manual-calls/{id}/request", s.manualRequest)
 	mux.HandleFunc("POST /api/estimate", s.estimate)
 	mux.HandleFunc("GET /api/recorded-calls", s.recordedCalls)
 	mux.HandleFunc("GET /api/recorded-calls/{call}", s.recordedRequest)
@@ -174,7 +173,10 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("GET /prompt", s.promptPage)
 	mux.HandleFunc("GET /api/conversations/{id}/calls/{call}/prompt", s.callPrompt)
 	mux.HandleFunc("POST /api/prompt-preview", s.previewPrompt)
-	mux.HandleFunc("GET /api/conversations/{id}/calls/{call}/request", s.callRequest)
+	mux.HandleFunc("POST /api/drafts", s.newDraft)
+	mux.HandleFunc("GET /api/drafts/{id}", s.getDraft)
+	mux.HandleFunc("PUT /api/drafts/{id}", s.saveDraft)
+	mux.HandleFunc("POST /api/drafts/{id}/send", s.current(s.sendDraft))
 	mux.HandleFunc("GET /code", s.codePage)
 	mux.HandleFunc("GET /docs", s.docsPage)
 	mux.HandleFunc("GET /api/source", s.sourceList)
@@ -800,9 +802,10 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func fail(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
+	case errors.Is(err, core.ErrNotFound), errors.Is(err, store.ErrNoDraft), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning):
+	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning),
+		errors.Is(err, core.ErrDraftSent):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork), errors.Is(err, core.ErrBadMessage),
 		errors.Is(err, core.ErrBadRequest):

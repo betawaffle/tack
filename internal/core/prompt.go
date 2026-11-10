@@ -150,29 +150,7 @@ type CallRequest struct {
 
 // Request is a call's request and reply.
 func (c *Core) Request(convID, callID string) (CallRequest, error) {
-	c.mu.Lock()
-	conv := c.convs[convID]
-	if conv == nil {
-		c.mu.Unlock()
-		return CallRequest{}, ErrNotFound
-	}
-	var src *callSource
-	for _, it := range conv.items {
-		if it.callID == callID && it.request != "" {
-			s := c.callSource(it)
-			src = &s
-			break
-		}
-	}
-	c.mu.Unlock()
-	if src == nil {
-		return CallRequest{}, ErrNotFound
-	}
-	body, err := c.cfg.Store.Get(src.request)
-	if err != nil {
-		return CallRequest{}, err
-	}
-	return CallRequest{Model: src.model, Request: body, Output: src.out}, nil
+	return c.requestOf(convID + "/" + callID)
 }
 
 // Preview shows a request as the model would read it, without sending it. With before, it's
@@ -267,17 +245,7 @@ func (c *Core) sourceOf(ref string) (*callSource, string) {
 
 // ManualRequest is a manual call's request and reply, to start a draft from.
 func (c *Core) ManualRequest(id string) (CallRequest, error) {
-	c.mu.Lock()
-	src, _ := c.sourceOf("manual/" + id)
-	c.mu.Unlock()
-	if src == nil {
-		return CallRequest{}, ErrNotFound
-	}
-	body, err := c.cfg.Store.Get(src.request)
-	if err != nil {
-		return CallRequest{}, err
-	}
-	return CallRequest{Model: src.model, Request: body, Output: src.out}, nil
+	return c.requestOf("manual/" + id)
 }
 
 // ManualPrompt shows a manual call as the model saw it, set against the call its draft was

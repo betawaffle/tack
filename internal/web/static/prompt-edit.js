@@ -3,67 +3,89 @@
 "use strict";
 
 // Editing. A draft is the next call: the call being looked at, its reply, and an empty
-// result for each tool call in it. Clicking a part's text opens it in a text box over it;
-// when the box loses focus, the draft is drawn again, compared with the call it came from.
+// result for each tool call in it. It's kept by tack as it's changed, so it's there to come
+// back to, at #draft/<id>. Clicking a part's text opens it in a text box over it; when the box
+// loses focus, the draft is saved and drawn again, compared with the call it came from.
 let draft = null;
 
+// Edit opens a draft of the call after this one: the one already started, or a new one.
 async function startDraft() {
   const { conv, data } = current;
   const from = conv === "manual" ? data.call : `${conv}/${data.call}`;
-  const res = await fetch(conv === "manual" ? `/api/manual-calls/${data.call.split("/")[1]}/request` : `/api/conversations/${conv}/calls/${data.call}/request`);
-  if (!res.ok) {
-    $("error").textContent = (await res.text()) || res.statusText;
-    $("error").hidden = false;
-    return;
-  }
-  const before = await res.json();
-  const request = structuredClone(before.request);
-  const out = before.output || {};
-  const reply = { role: "assistant", content: out.content || "" };
-  if (out.reasoning) reply.reasoning = out.reasoning;
-  if (out.calls?.length) {
-    reply.tool_calls = out.calls.map((c, i) => ({ id: `draft-${i}`, type: "function", function: { name: c.name, arguments: c.arguments } }));
-  }
-  request.messages.push(reply);
-  // The next call answers the tool calls, or else carries a new user message.
-  for (const call of reply.tool_calls || []) request.messages.push({ role: "tool", tool_call_id: call.id, content: "" });
-  if (!reply.tool_calls) request.messages.push({ role: "user", content: "" });
-  draft = { conv, call: data.call, from, before, request };
-  await showSendBar();
-  await previewDraft();
+  const res = await fetch("/api/drafts", { method: "POST", body: JSON.stringify({ from }) });
+  if (!res.ok) return showError((await res.text()) || res.statusText);
+  holdNext = true;
+  location.hash = `draft/${(await res.json()).id}`;
 }
 
-async function previewDraft(anchor) {
-  const res = await fetch("/api/prompt-preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: draft.before.model, request: draft.request, before: draft.before }),
-  });
+function showError(text) {
+  $("error").textContent = text;
+  $("error").hidden = false;
+}
+
+// A draft, at #draft/<id>.
+async function loadDraft(id) {
+  $("error").hidden = true;
+  const res = await fetch(`/api/drafts/${id}`);
   if (!res.ok) {
-    $("error").textContent = (await res.text()) || res.statusText;
-    $("error").hidden = false;
+    showError((await res.text()) || res.statusText);
+    $("prompt").replaceChildren();
     return;
   }
-  const data = await res.json();
+  const { draft: d, prompt: data } = await res.json();
+  // A sent draft is the call it became.
+  if (d.sent) return location.replace(`#manual/${d.sent}`);
+  draft = { id: d.id, from: d.from || "", request: d.request };
+  $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
+  $("edit").hidden = false;
+  await showSendBar();
+  // Drawn as it is: going to it holds the view, if anything does.
+  showDraft(data, null);
+}
+
+// Saves the draft, one save at a time so they land in order, and gives back its prompt.
+let saving = Promise.resolve();
+function saveDraft() {
+  const request = structuredClone(draft.request);
+  const id = draft.id;
+  const result = saving.then(async () => {
+    const res = await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request }) });
+    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    return res.json();
+  });
+  saving = result.catch(() => {});
+  return result;
+}
+
+// Saves the draft and draws it again, keeping part anchor, or else what's on the screen, in
+// place.
+async function previewDraft(anchor) {
+  let data;
+  try {
+    data = await saveDraft();
+  } catch (err) {
+    return showError(`Saving the draft failed: ${err.message}`);
+  }
+  showDraft(data, anchor);
+}
+
+function showDraft(data, anchor) {
   data.before_draft = true;
-  current = { conv: draft.conv, data, draft: true };
+  current = { conv: "draft", data, draft: true };
   $("which").textContent = "Draft of the next call";
   $("prev").disabled = $("next").disabled = true;
   $("edit").textContent = "Stop Editing";
   document.body.classList.add("drafting");
-  if (anchor === undefined) keepView(() => render(data, null, true));
+  document.title = "Draft · tack";
+  if (anchor === null) render(data, null, drawAllNext);
+  else if (anchor === undefined) keepView(() => render(data, null, true));
   else keepPlace(anchor, () => render(data, null, true));
 }
 
-async function stopDraft() {
-  draft = null;
-  $("edit").textContent = "Edit";
-  await keepView(async () => {
-    $("send-bar").hidden = true;
-    drawAllNext = true;
-    await load();
-    document.body.classList.remove("drafting");
-  });
+// Stop Editing goes back to the call the draft came from. The draft stays, to come back to.
+function stopDraft() {
+  holdNext = true;
+  location.hash = draft.from || "";
 }
 
 $("edit").addEventListener("click", () => (draft ? stopDraft() : startDraft()));
@@ -233,6 +255,7 @@ const numberIn = (input) => (input.value.trim() === "" ? undefined : Number(inpu
 function setParam(key, value) {
   if (value === undefined || Number.isNaN(value)) delete draft.request[key];
   else draft.request[key] = value;
+  saveDraft().catch((err) => showError(`Saving the draft failed: ${err.message}`));
 }
 
 $("send-effort").addEventListener("change", () => {
@@ -318,7 +341,10 @@ function streamText(kind, text) {
   fitRoom();
 }
 
-// After sending, the sent call is drawn with what was on the screen held in place.
+// Going to another address draws it with what's on the screen held in place when holdNext is
+// set. afterSend says it's to the call a draft just became, whose tokens line up with the
+// draft's through the same call they both came from.
+let holdNext = false;
 let afterSend = false;
 
 $("send").addEventListener("click", async () => {
@@ -328,10 +354,11 @@ $("send").addEventListener("click", async () => {
   $("error").hidden = true;
   let id = null;
   try {
-    const res = await fetch(`/api/manual-calls?from=${encodeURIComponent(draft.from)}`, {
+    // Whatever was changed last is saved before it's sent.
+    await saveDraft();
+    const res = await fetch(`/api/drafts/${draft.id}/send`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Tack-Page-Required": PAGE_REQUIRED },
-      body: JSON.stringify(draft.request),
+      headers: { "X-Tack-Page-Required": PAGE_REQUIRED },
     });
     if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
     const reader = res.body.getReader();
@@ -365,7 +392,7 @@ $("send").addEventListener("click", async () => {
   }
   stream = null;
   if (id) {
-    afterSend = true;
+    afterSend = holdNext = true;
     location.hash = `manual/${id}`;
   }
 });

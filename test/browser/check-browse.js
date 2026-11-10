@@ -218,6 +218,17 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
   ok((await p.locator(".tok.ins").count()) > 0, "the edit shows as a change from the call");
   ok((await p.locator(".tok.nc").count()) > 0, "and what's after it can't come from the cache");
+  // The draft is kept by tack: it's there after a reload, and Edit on the call opens it again.
+  ok(/#draft\/[0-9a-f]+$/.test(p.url()), "a draft has an address of its own");
+  const draftURL = p.url();
+  await p.reload();
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector("#prompt").textContent.includes("Edited"));
+  ok(true, "and it's still there after a reload");
+  await p.click("#edit");
+  await p.waitForFunction(() => !document.body.classList.contains("drafting") && /^Call /.test(document.getElementById("which").textContent));
+  await p.click("#edit");
+  await p.waitForFunction(() => document.body.classList.contains("drafting"));
+  ok(p.url() === draftURL && (await p.locator("#prompt").textContent()).includes("Edited"), "Edit on the call opens the same draft again");
   // Copying gives the text itself, with its spaces, not the marks drawn for them.
   const copied = await p.evaluate(() => {
     const rows = [...document.querySelectorAll(".pl.k-user")];

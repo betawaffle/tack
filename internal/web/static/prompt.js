@@ -71,6 +71,7 @@ async function load() {
     document.body.classList.remove("drafting");
     $("edit").textContent = "Edit";
   }
+  if (conv === "draft") return loadDraft(call);
   if (conv === "synthetic") return loadSynthetic(call);
   if (conv === "manual") return loadManual(call);
   $("back").href = conv ? `/#${conv}` : "/";
@@ -145,7 +146,8 @@ function go(step) {
 $("prev").addEventListener("click", () => go(-1));
 $("next").addEventListener("click", () => go(1));
 window.addEventListener("hashchange", () => {
-  if (!afterSend) return load();
+  if (!holdNext) return load();
+  holdNext = false;
   drawAllNext = true;
   keepView(load).finally(() => {
     afterSend = false;

@@ -316,17 +316,6 @@ func (s *server) previewPrompt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p)
 }
 
-// callRequest is a call's request body and the model's reply, to start a draft from. Only the
-// body, never the headers.
-func (s *server) callRequest(w http.ResponseWriter, r *http.Request) {
-	req, err := s.core.Request(r.PathValue("id"), r.PathValue("call"))
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, req)
-}
-
 func (s *server) manualPrompt(w http.ResponseWriter, r *http.Request) {
 	p, err := s.core.ManualPrompt(r.PathValue("id"))
 	if errors.Is(err, tokens.ErrNoRenderer) {
@@ -338,15 +327,6 @@ func (s *server) manualPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, p)
-}
-
-func (s *server) manualRequest(w http.ResponseWriter, r *http.Request) {
-	req, err := s.core.ManualRequest(r.PathValue("id"))
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, req)
 }
 
 // estimate is what a request body would cost to send.
@@ -362,4 +342,74 @@ func (s *server) estimate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, e)
+}
+
+// draftResponse is a draft and its prompt as the model would read it.
+type draftResponse struct {
+	Draft  *store.Draft     `json:"draft"`
+	Prompt *core.CallPrompt `json:"prompt"`
+}
+
+// failDraft is fail, with a model whose format isn't known being a draft that can't be shown.
+func failDraft(w http.ResponseWriter, err error) {
+	if errors.Is(err, tokens.ErrNoRenderer) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	fail(w, err)
+}
+
+// newDraft starts a draft of the call after another, or opens the one that's already started.
+func (s *server) newDraft(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		From string `json:"from"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	d, err := s.core.NewDraft(body.From)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, d)
+}
+
+func (s *server) getDraft(w http.ResponseWriter, r *http.Request) {
+	d, p, err := s.core.Draft(r.PathValue("id"))
+	if err != nil {
+		failDraft(w, err)
+		return
+	}
+	writeJSON(w, draftResponse{Draft: d, Prompt: &p})
+}
+
+// saveDraft replaces a draft's request, and answers with its prompt.
+func (s *server) saveDraft(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Request jsontext.Value `json:"request"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPreviewBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	p, err := s.core.SaveDraft(r.PathValue("id"), body.Request)
+	if err != nil {
+		failDraft(w, err)
+		return
+	}
+	writeJSON(w, p)
+}
+
+// sendDraft sends a draft as a manual call. The first update names the call.
+func (s *server) sendDraft(w http.ResponseWriter, r *http.Request) {
+	_, updates, err := s.core.SendDraft(r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	stream(w, r, updates)
 }

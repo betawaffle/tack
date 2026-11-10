@@ -391,9 +391,12 @@ legend shows tack's token counts against the host's.
 empty result for each tool call. Clicking a part's text edits that field of the request in a
 text box (Enter saves, Shift+Enter is a new line), and the draft is drawn again, compared with
 the call it came from. The controls under it set the effort, the most tokens and some
-sampling settings, and show what the call could cost. **Send** sends it as a custom request
-that remembers where it came from, so the page shows it against that call, and a draft can be
-made from it in turn. `/prompt#synthetic/250000` draws a made-up prompt that size, to see how
+sampling settings, and show what the call could cost. A draft is saved as it changes, in its
+own file under the data directory's `drafts/` (not the record, which only says what was sent),
+at `/prompt#draft/<id>`; **Edit** on the same call opens it again. **Send** sends it as a
+custom request that remembers where it came from, so the page shows it against that call, and
+a draft can be made from it in turn. The reply is drawn as it comes in, as text, and as tokens
+once it's done. `/prompt#synthetic/250000` draws a made-up prompt that size, to see how
 the page copes.
 
 ## Reading the record
