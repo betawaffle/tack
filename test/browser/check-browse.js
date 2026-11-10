@@ -302,6 +302,31 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(Math.abs(top - held.top) < 1, `and what was on the screen stays where it was (${held.top} then ${top})`);
   ok(p.url().includes("#manual/") && (await p.innerText("#which")).startsWith("Sent draft"), "stopping goes back to the call");
 
+  // The page with no address lists drafts and sent calls, and New starts a draft from the
+  // defaults: the prompt, tools and model new conversations start with.
+  await p.goto(B + "/prompt");
+  await p.waitForSelector(".context-list");
+  ok((await p.innerText("#which")) === "Contexts" && (await p.locator(".context[href^='#manual/']").count()) > 0, "the page with no address lists what drafts became");
+  await p.click("#new-draft");
+  await p.waitForFunction(() => document.body.classList.contains("drafting"));
+  ok(/#draft\/[0-9a-f]+$/.test(p.url()) && (await p.inputValue("#send-model")) !== "", "New starts a draft from the defaults, with a model");
+  // The model the tests left as the default has no known format, so it can't be drawn until
+  // it's changed to one that has.
+  if (!(await p.locator(".pl").count())) ok((await p.innerText("#error")).includes("can't be shown"), "a draft for a model tack can't draw says so");
+  await p.fill("#send-model", "deepseek/deepseek-v4.1-flash-1017");
+  await p.locator("#send-model").dispatchEvent("change");
+  await p.waitForFunction(() => document.querySelector(".pl.k-system") && document.getElementById("error").hidden);
+  ok(true, "and it's drawn once its model is one tack knows");
+  await p.locator(".pl.k-user_turn").last().click();
+  await p.waitForSelector(".edit-box");
+  await p.fill(".edit-box", "hello from a new draft");
+  await p.keyboard.press("Enter");
+  await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("hellofromanewdraft"));
+  await p.click("#edit");
+  await p.waitForSelector(".context-list");
+  ok((await p.locator(".context[href^='#draft/']", { hasText: "hello from a new draft" }).count()) === 1, "and Stop Editing goes to the list, where it's kept");
+  await p.screenshot({ path: "shots/contexts.png" });
+
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");
   await p.waitForSelector(".pl.k-tool");

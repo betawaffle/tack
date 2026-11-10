@@ -344,19 +344,25 @@ func (s *server) estimate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, e)
 }
 
-// draftResponse is a draft and its prompt as the model would read it.
+// draftResponse is a draft and its prompt as the model would read it. A draft for a model whose
+// format tack doesn't know has no prompt, and Problem says so, so the model can be changed.
 type draftResponse struct {
-	Draft  *store.Draft     `json:"draft"`
-	Prompt *core.CallPrompt `json:"prompt"`
+	Draft   *store.Draft     `json:"draft,omitzero"`
+	Prompt  *core.CallPrompt `json:"prompt"`
+	Problem string           `json:"problem,omitzero"`
 }
 
-// failDraft is fail, with a model whose format isn't known being a draft that can't be shown.
-func failDraft(w http.ResponseWriter, err error) {
+// writeDraft writes a draft and its prompt, or why there's no prompt.
+func writeDraft(w http.ResponseWriter, d *store.Draft, p core.CallPrompt, err error) {
 	if errors.Is(err, tokens.ErrNoRenderer) {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeJSON(w, draftResponse{Draft: d, Problem: err.Error()})
 		return
 	}
-	fail(w, err)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, draftResponse{Draft: d, Prompt: &p})
 }
 
 // newDraft starts a draft of the call after another, or opens the one that's already started.
@@ -369,7 +375,13 @@ func (s *server) newDraft(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := s.core.NewDraft(body.From)
+	var d *store.Draft
+	var err error
+	if body.From != "" {
+		d, err = s.core.NewDraft(body.From)
+	} else {
+		d, err = s.blankDraft()
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -377,16 +389,57 @@ func (s *server) newDraft(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, d)
 }
 
-func (s *server) getDraft(w http.ResponseWriter, r *http.Request) {
-	d, p, err := s.core.Draft(r.PathValue("id"))
-	if err != nil {
-		failDraft(w, err)
-		return
-	}
-	writeJSON(w, draftResponse{Draft: d, Prompt: &p})
+// blankDraft starts a draft from what new conversations start with: the saved prompt, with its
+// variables filled, the saved tools, and the default settings.
+func (s *server) blankDraft() (*store.Draft, error) {
+	defaults := s.defaults()
+	settings := s.core.StartSettings(nil)
+	blocks := prompt.Blocks(defaults.Prompt.Sections, s.variables(settings))
+	return s.core.NewBlankDraft(strings.Join(blocks, ""), offersFrom(defaults.Prompt.Tools, defaults.Tools), nil)
 }
 
-// saveDraft replaces a draft's request, and answers with its prompt.
+// offersFrom is the tools saved as defaults, as offers: every built-in one if none were saved,
+// and otherwise the saved ones that are on, leaving out any tack doesn't have any more.
+func offersFrom(saved []prompt.Tool, builtins []core.ToolInfo) []core.Offer {
+	offers := []core.Offer{}
+	if saved == nil {
+		for _, b := range builtins {
+			offers = append(offers, core.Offer{Name: b.Name})
+		}
+		return offers
+	}
+	for _, t := range saved {
+		if t.Off {
+			continue
+		}
+		if !t.Custom && !slices.ContainsFunc(builtins, func(b core.ToolInfo) bool { return b.Name == t.Name }) {
+			continue
+		}
+		offers = append(offers, core.Offer{Name: t.Name, Custom: t.Custom, Definition: t.Definition})
+	}
+	return offers
+}
+
+// drafts lists the drafts that haven't been sent.
+func (s *server) drafts(w http.ResponseWriter, _ *http.Request) {
+	list, err := s.core.Drafts()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, list)
+}
+
+func (s *server) getDraft(w http.ResponseWriter, r *http.Request) {
+	d, p, err := s.core.Draft(r.PathValue("id"))
+	if d == nil {
+		fail(w, err)
+		return
+	}
+	writeDraft(w, d, p, err)
+}
+
+// saveDraft replaces a draft's request, and answers with its prompt, as getDraft does.
 func (s *server) saveDraft(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Request jsontext.Value `json:"request"`
@@ -397,11 +450,7 @@ func (s *server) saveDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := s.core.SaveDraft(r.PathValue("id"), body.Request)
-	if err != nil {
-		failDraft(w, err)
-		return
-	}
-	writeJSON(w, p)
+	writeDraft(w, nil, p, err)
 }
 
 // sendDraft sends a draft as a manual call. The first update names the call.

@@ -189,6 +189,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .send-agent, .agent-naming { display: inline-flex; align-items: center; gap: 6px; }
 .agent-naming[hidden], .send-agent .mini[hidden] { display: none; }
 .send-bar #agent-slug { width: 12em; }
+.send-bar #send-model { width: 20em; }
 .send-more { display: inline-flex; }
 .send-more[open] { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .send-more summary { cursor: pointer; }
@@ -200,3 +201,15 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .prompt-end { height: calc(100vh - 21px); }
 /* A row that's gone, fading out (fadeOut). */
 .pl.ghost { overflow: hidden; pointer-events: none; }
+
+/* The page with no address: drafts and sent calls (prompt-list.js). How a prompt is shown
+   doesn't apply to it. */
+.listing .head-group[aria-label="What to show"], .listing .legend { display: none; }
+.context-list { max-width: 80ch; margin: 0 auto; padding: 8px 16px 40px; font: 13px/1.5 var(--ui); }
+.context-list h2 { margin: 18px 0 6px; font-size: 14px; }
+.context-head { display: flex; align-items: center; gap: 12px; }
+.context-head h2 { flex: 1; }
+.context { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; }
+.context:hover { background: var(--hover); }
+.context-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-notes, .context-none { color: var(--muted); font-size: 12px; }

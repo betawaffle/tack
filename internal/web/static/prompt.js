@@ -6,6 +6,7 @@ import { render, drawn, clear, applySwitches, isCollapsed, setCollapsed, collaps
 import { keepPlace } from "./prompt-hold.js";
 import { go, onAddress, start } from "./prompt-nav.js";
 import { drafting, startDraft, loadDraft, stopDraft, closeDraft } from "./prompt-edit.js";
+import { loadList } from "./prompt-list.js";
 
 // Where the page is: the address's two parts, like conversation and call.
 let where = { conv: "", call: "" };
@@ -71,8 +72,7 @@ async function loadSynthetic(size) {
 
 // A call in a conversation; with no call, its last.
 async function loadCall(conv, call, { eager }) {
-  $("back").href = conv ? `/#${conv}` : "/";
-  if (!conv) return showError("Open this from a reply's Prompt button.");
+  $("back").href = `/#${conv}`;
   let id = call;
   if (!id) {
     const res = await fetch(`/api/conversations/${conv}`);
@@ -122,10 +122,12 @@ onAddress((options) => {
   const [conv = "", call = ""] = location.hash.slice(1).split("/");
   where = { conv, call };
   hideError();
+  document.body.classList.remove("listing");
   if (conv !== "draft") closeDraft();
   if (conv === "draft") return loadDraft(call, options);
   if (conv === "synthetic") return loadSynthetic(call);
   if (conv === "manual") return loadManual(call, options);
+  if (!conv) return loadList();
   return loadCall(conv, call, options);
 });
 

@@ -77,3 +77,54 @@ func TestADraftIsKeptChangedAndSent(t *testing.T) {
 		t.Errorf("a draft that isn't one: %v", err)
 	}
 }
+
+func TestABlankDraftStartsFromWhatItsGiven(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{Model: "deepseek/deepseek-v4.1-flash-1017"}
+	f.tools = []Tool{{Name: "run_code", Definition: jsontext.Value(`{"type":"function","function":{"name":"run_code","description":"Run code.","parameters":{"type":"object"}}}`)}}
+	c := f.open()
+	d, err := c.NewBlankDraft("Be brief.", []Offer{{Name: "run_code"}, {Name: "note"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req struct {
+		Model     string `json:"model"`
+		SessionID string `json:"session_id"`
+		Messages  []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		Tools []struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(d.Request, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Model != f.settings.Model || d.Model != req.Model || req.SessionID != d.ID || d.From != "" {
+		t.Errorf("draft = %+v, request = %+v", d, req)
+	}
+	if len(req.Messages) != 2 || req.Messages[0].Role != "system" || req.Messages[0].Content != "Be brief." || req.Messages[1].Role != "user" || req.Messages[1].Content != "" {
+		t.Errorf("messages = %+v", req.Messages)
+	}
+	// The note tool isn't offered to a draft: it belongs to conversations.
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "run_code" {
+		t.Errorf("tools = %+v", req.Tools)
+	}
+	if _, p, err := c.Draft(d.ID); err != nil || !strings.Contains(p.Prompt.Text(), "Be brief.") {
+		t.Errorf("shown = %v", err)
+	}
+	// Its model is the one its request names.
+	changed := strings.Replace(string(d.Request), `"model":"deepseek/deepseek-v4.1-flash-1017"`, `"model":"deepseek/deepseek-v4.1-flash"`, 1)
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(changed)); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _, _ := c.Draft(d.ID); kept.Model != "deepseek/deepseek-v4.1-flash" {
+		t.Errorf("model = %q", kept.Model)
+	}
+	if list, err := c.Drafts(); err != nil || len(list) != 1 || list[0].ID != d.ID {
+		t.Errorf("drafts = %+v, %v", list, err)
+	}
+}

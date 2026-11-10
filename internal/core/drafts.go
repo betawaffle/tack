@@ -5,8 +5,11 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
+	"github.com/betawaffle/tack/internal/openrouter"
 	"github.com/betawaffle/tack/internal/store"
 )
 
@@ -180,6 +183,13 @@ func (c *Core) SaveDraft(id string, request jsontext.Value) (CallPrompt, error) 
 		return CallPrompt{}, ErrDraftSent
 	}
 	d.Request = request
+	// Its model is the one the request names.
+	var head struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(request, &head) == nil && head.Model != "" {
+		d.Model = head.Model
+	}
 	if err := c.cfg.Store.SaveDraft(d); err != nil {
 		return CallPrompt{}, err
 	}
@@ -210,4 +220,109 @@ func (c *Core) SendDraft(id string) (string, <-chan Update, error) {
 		return call, updates, nil
 	}
 	return call, updates, nil
+}
+
+// NewBlankDraft starts a draft that follows on from nothing: a system prompt, the tools it's
+// offered and the settings it's given, and an empty user message to write. The note tool isn't
+// offered: it belongs to conversations. A built-in tool whose saved definition no longer fits
+// tack's own is offered as tack defines it.
+func (c *Core) NewBlankDraft(system string, offers []Offer, given *store.Settings) (*store.Draft, error) {
+	settings := c.StartSettings(given)
+	if given != nil {
+		if err := settings.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrBadSettings, err)
+		}
+	}
+	var kept []Offer
+	for _, o := range offers {
+		if !o.Custom && o.Name == "note" {
+			continue
+		}
+		if tool := c.findTool(o.Name); !o.Custom && tool != nil && o.Definition != nil && !sameExceptDescriptions(tool.define(settings), o.Definition) {
+			o.Definition = nil
+		}
+		kept = append(kept, o)
+	}
+	tools, _, err := c.offered(settings, kept)
+	if err != nil {
+		return nil, err
+	}
+	definitions, err := c.definitions(tools)
+	if err != nil {
+		return nil, err
+	}
+	var messages []openrouter.Message
+	if strings.TrimSpace(system) != "" {
+		messages = append(messages, openrouter.Message{Role: "system", Content: system})
+	}
+	messages = append(messages, openrouter.Message{Role: "user"})
+	id := store.NewID()
+	// The session ID keeps the calls that follow on from this one with the host that has their
+	// start cached, and each draft after it keeps it, being a copy of the request.
+	body, err := openrouter.Render(openrouter.Request{
+		Model: settings.Model, Routing: routingFor(settings.Host), Messages: messages, SessionID: id,
+		Tools: definitions, Effort: settings.ReasoningEffort,
+	})
+	if err != nil {
+		return nil, err
+	}
+	d := &store.Draft{ID: id, Model: settings.Model, Request: body}
+	return d, c.cfg.Store.SaveDraft(d)
+}
+
+// DraftSummary is what's listed of a draft: the last user message in it that has text, or else
+// the last message that has, cut short.
+type DraftSummary struct {
+	ID      string    `json:"id"`
+	Updated time.Time `json:"updated"`
+	From    string    `json:"from,omitzero"`
+	Agent   string    `json:"agent,omitzero"`
+	Model   string    `json:"model"`
+	Last    string    `json:"last,omitzero"`
+}
+
+// Drafts lists the drafts that haven't been sent, the one changed last first.
+func (c *Core) Drafts() ([]DraftSummary, error) {
+	all, err := c.cfg.Store.Drafts()
+	if err != nil {
+		return nil, err
+	}
+	out := []DraftSummary{}
+	for _, d := range all {
+		if d.Sent != "" {
+			continue
+		}
+		s := DraftSummary{ID: d.ID, Updated: d.Updated, From: d.From, Agent: d.Agent, Model: d.Model}
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"messages"`
+		}
+		if json.Unmarshal(d.Request, &req) == nil {
+			// What the person wrote last, or else whatever has text.
+			for _, role := range []string{"user", ""} {
+				for _, m := range slices.Backward(req.Messages) {
+					if text, ok := m.Content.(string); ok && strings.TrimSpace(text) != "" && (role == "" || m.Role == role) {
+						s.Last = cut(strings.TrimSpace(text), 120)
+						break
+					}
+				}
+				if s.Last != "" {
+					break
+				}
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// cut shortens text to at most n characters, marking that it was.
+func cut(text string, n int) string {
+	runes := []rune(text)
+	if len(runes) <= n {
+		return text
+	}
+	return string(runes[:n-1]) + "…"
 }

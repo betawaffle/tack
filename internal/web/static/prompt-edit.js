@@ -32,13 +32,13 @@ export async function loadDraft(id, { eager = false } = {}) {
     clear();
     return;
   }
-  const { draft: d, prompt: data } = await res.json();
+  const { draft: d, prompt: data, problem } = await res.json();
   if (d.sent) return go(`manual/${d.sent}`, { replace: true });
   draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "" };
   $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
   $("edit").hidden = false;
   await showSendBar();
-  show(data, { eager });
+  show(data, { eager, problem });
 }
 
 // stopDraft goes back to the call the draft came from. The draft stays, to come back to.
@@ -72,24 +72,34 @@ function save() {
 // Saves the draft and draws it again, keeping part anchor, or else what's on the screen, in
 // place.
 async function preview(anchor) {
-  let data;
+  let saved;
   try {
-    data = await save();
+    saved = await save();
   } catch (err) {
     return showError(`Saving the draft failed: ${err.message}`);
   }
+  const { prompt: data, problem } = saved;
+  if (!data || !drawn()) return show(data, { problem });
+  hideError();
   if (anchor === undefined) keepView(() => show(data, { eager: true }));
   else keepPlace(anchor, () => show(data, { eager: true }));
 }
 
-function show(data, options) {
-  data.before_draft = true;
-  $("which").textContent = "Draft of the next call";
+// show draws the draft's prompt, or, when there's none to draw, says why.
+function show(data, { eager = false, problem = "" } = {}) {
+  $("which").textContent = draft.from ? "Draft of the next call" : "Draft";
   $("prev").disabled = $("next").disabled = true;
   $("edit").textContent = "Stop Editing";
   document.body.classList.add("drafting");
   document.title = "Draft · tack";
-  render(data, options);
+  if (!data) {
+    clear();
+    showError(`This draft can't be shown: ${problem}. Its model can be changed below.`);
+    return;
+  }
+  hideError();
+  data.before_draft = true;
+  render(data, { eager });
 }
 
 // A message's text, which can be a string or a list of parts.
@@ -225,17 +235,28 @@ $("prompt").addEventListener("click", (event) => {
 // under More, with what the call could cost, and Send. What's set here goes in the draft.
 const PAGE_REQUIRED = document.querySelector('meta[name="tack-page"]')?.dataset.required || "";
 let efforts = null;
+let defaultModel = "";
 let estimating = 0;
 
 async function showSendBar() {
   if (!efforts) {
     try {
-      efforts = (await (await fetch("/api/defaults")).json()).efforts || [];
+      const defaults = await (await fetch("/api/defaults")).json();
+      efforts = defaults.efforts || [];
+      defaultModel = defaults.settings?.model || "";
     } catch {
       efforts = [];
     }
   }
   const req = draft.request;
+  $("send-model").value = req.model || "";
+  const models = $("send-models");
+  models.replaceChildren();
+  for (const name of new Set([req.model, defaultModel].filter(Boolean))) {
+    const option = el("option");
+    option.value = name;
+    models.append(option);
+  }
   const effort = $("send-effort");
   effort.replaceChildren(el("option", "", "Host's default"));
   effort.firstChild.value = "";
@@ -280,6 +301,17 @@ $("send-effort").addEventListener("change", () => {
     if (!Object.keys(draft.request.reasoning).length) delete draft.request.reasoning;
   }
   // The effort is written into the prompt, so it's drawn again.
+  preview();
+  estimate();
+});
+// The model decides how the prompt is written out, so it's drawn again.
+$("send-model").addEventListener("change", () => {
+  const value = $("send-model").value.trim();
+  if (!value) {
+    $("send-model").value = draft.request.model || "";
+    return;
+  }
+  draft.request.model = value;
   preview();
   estimate();
 });

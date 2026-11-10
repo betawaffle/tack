@@ -41,6 +41,9 @@ type ManualSummary struct {
 	Error        string    `json:"error,omitzero"`
 	CostUSD      float64   `json:"cost_usd,omitzero"`
 	Tokens       int       `json:"tokens,omitzero"` // counted here, before sending
+	// From is the call its draft followed on from, and Agent the agent it ran as, if any.
+	From  string `json:"from,omitzero"`
+	Agent string `json:"agent,omitzero"`
 }
 
 // ManualDetail is everything about one, as recorded.
@@ -115,6 +118,7 @@ func (c *Core) manualSummary(m *manualCall) ManualSummary {
 		ID: m.started.Call, Time: m.started.Time, Model: m.started.Model,
 		Host: manualHost(m.started.Routing), RequestBytes: m.started.RequestBytes,
 		Running: m.cancel != nil && m.finished == nil, Interrupted: m.cancel == nil && m.finished == nil,
+		From: m.started.From, Agent: m.started.Agent,
 	}
 	if f := m.finished; f != nil {
 		s.Status, s.FinishReason, s.Error = f.Status, f.FinishReason, f.Error

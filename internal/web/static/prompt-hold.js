@@ -146,6 +146,8 @@ function holdView(draw) {
   });
   const result = draw();
   const settle = () => {
+    // Something with no prompt, like the list, has nothing to hold.
+    if (!drawn()) return;
     const now = lineUp(drawn());
     const tokenAt = (b) => {
       const t = now.fromBase(b);

@@ -399,8 +399,11 @@ the controls, with a slug that's only for you; the call a draft becomes, and the
 it, run as the same agent. **Send** sends it as a
 custom request that remembers where it came from, so the page shows it against that call, and
 a draft can be made from it in turn. The reply is drawn as it comes in, as text, and as tokens
-once it's done. `/prompt#synthetic/250000` draws a made-up prompt that size, to see how
-the page copes.
+once it's done. `/prompt` on its own lists the drafts that haven't been sent and the calls
+drafts became. **New** there starts a draft from what new conversations start with (the saved
+prompt, the saved tools without the note tool, which belongs to conversations, and the default
+model), with an empty message to write; the controls under a draft also choose its model.
+`/prompt#synthetic/250000` draws a made-up prompt that size, to see how the page copes.
 
 ## Reading the record
 
