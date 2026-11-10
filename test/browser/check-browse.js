@@ -327,6 +327,35 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok((await p.locator(".context[href^='#draft/']", { hasText: "hello from a new draft" }).count()) === 1, "and Stop Editing goes to the list, where it's kept");
   await p.screenshot({ path: "shots/contexts.png" });
 
+  // A tool call in a draft runs as the draft's agent, and what the model will see goes in its
+  // result. The draft's request is written here as the model would have answered.
+  await p.locator(".context[href^='#draft/']", { hasText: "hello from a new draft" }).click();
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
+  const runDraft = p.url().split("#draft/")[1];
+  const offered = await p.evaluate(async (id) => {
+    const { draft } = await (await fetch(`/api/drafts/${id}`)).json();
+    const request = draft.request;
+    request.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "scratch", arguments: JSON.stringify({ op: "write", key: "name", text: "Wren" }) } }] },
+      { role: "tool", tool_call_id: "c1", content: "" },
+    );
+    await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request }) });
+    return (request.tools || []).map((t) => t.function.name);
+  }, runDraft);
+  if (offered.includes("scratch")) {
+    await p.reload();
+    await p.waitForSelector(".run-call button");
+    ok(await p.isDisabled(".run-call button"), "a call can't run until the draft has an agent");
+    await p.selectOption("#send-agent", { label: "renamed" });
+    await p.waitForFunction(() => { const b = document.querySelector(".run-call button"); return b && !b.disabled; });
+    await p.locator(".pl:has(.run-call)").screenshot({ path: "shots/run-call.png" });
+    await p.click(".run-call button");
+    await p.waitForFunction(() => /result>ok/.test(document.querySelector("#prompt").textContent.replace(/[·\s]/g, "")));
+    ok(true, "Run runs it as the agent and puts what the model sees in the result");
+    const agent = await p.evaluate(async () => (await (await fetch("/api/agents")).json()).find((a) => a.slug === "renamed"));
+    ok(agent.state.scratch && agent.states === 1, "and the agent keeps what it changed");
+  } else ok(true, "the defaults offer no scratch tool to run");
+
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");
   await p.waitForSelector(".pl.k-tool");

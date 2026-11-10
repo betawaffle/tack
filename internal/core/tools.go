@@ -850,7 +850,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 	}
 	scratch := func(op, key, text string) (string, error) { return c.scratchOperation(conv, op, key, text) }
 	callContext := func() ([]byte, error) { return c.callContext(conv, call) }
-	output, failure := c.execute(ctx, conv, call, Call{Settings: settings, Execution: execution, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch, Context: callContext}, func(name string, data []byte) error {
+	output, failure := c.execute(ctx, runScope{conv: conv}, call, Call{Settings: settings, Execution: execution, AddNote: addNote, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratch, Context: callContext}, func(name string, data []byte) error {
 		block, err := c.cfg.Store.Put(data)
 		if err != nil {
 			return err
@@ -889,7 +889,7 @@ func (c *Core) runTool(conv *conversation, call *toolCall, send func(Update)) er
 // the tool reaching its own limit. The conversation pauses, even if it runs code by itself.
 var ErrMachineShort = errors.New("the machine ran short of memory, so the kernel stopped this run, and the conversation is paused until the user continues it")
 
-func (c *Core) execute(parent context.Context, conv *conversation, call *toolCall, run Call, keep func(string, []byte) error, send func(Update)) ([]byte, error) {
+func (c *Core) execute(parent context.Context, scope runScope, call *toolCall, run Call, keep func(string, []byte) error, send func(Update)) ([]byte, error) {
 	tool := c.findTool(call.Name)
 	if tool == nil {
 		return nil, fmt.Errorf("there is no tool named %q", call.Name)
@@ -922,7 +922,7 @@ func (c *Core) execute(parent context.Context, conv *conversation, call *toolCal
 	run.Keep = keep
 	served := run
 	run.Serve = func(ctx context.Context, conn io.ReadWriter) error {
-		return c.serveChannel(ctx, conn, conv, call, served, limit.hold, send)
+		return c.serveChannel(ctx, conn, scope, call, served, limit.hold, send)
 	}
 	return tool.Run(ctx, run)
 }

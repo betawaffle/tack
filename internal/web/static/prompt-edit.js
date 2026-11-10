@@ -99,8 +99,90 @@ function show(data, { eager = false, problem = "" } = {}) {
   }
   hideError();
   data.before_draft = true;
-  render(data, { eager });
+  render(data, { eager, done: addRunButtons });
 }
+
+// Each tool call in a draft gets a Run button by its result, which runs the call as the draft's
+// agent and puts what the model will see in the result. Beside it is what the approval card
+// would point out, since clicking it is the approval.
+function callName(id) {
+  for (const m of draft.request.messages) {
+    const call = m.tool_calls?.find((c) => c.id === id);
+    if (call) return call.function?.name || "";
+  }
+  return "";
+}
+
+function addRunButtons() {
+  const parts = drawn()?.prompt.parts;
+  if (!draft || !parts) return;
+  parts.forEach((part, k) => {
+    if (part.kind !== "tool_result") return;
+    const id = draft.request.messages[part.message]?.tool_call_id;
+    const name = id && callName(id);
+    const row = name && $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"]`)?.closest(".pl");
+    if (!row) return;
+    const box = el("span", "run-call");
+    const button = el("button", "mini", `Run ${name}`);
+    button.type = "button";
+    button.dataset.call = id;
+    const flags = el("span", "run-flags");
+    box.append(button, flags);
+    row.querySelector(".pl-text").append(box);
+    if (!draft.agent) {
+      button.disabled = true;
+      button.title = "Pick an agent for the draft first: its tools run as that agent.";
+      return;
+    }
+    showFlags(id, button, flags);
+  });
+}
+
+async function showFlags(id, button, box) {
+  button.disabled = true;
+  try {
+    const res = await fetch(`/api/drafts/${draft.id}/calls/${encodeURIComponent(id)}/flags`);
+    if (!res.ok) {
+      button.title = (await res.text()) || res.statusText;
+      return;
+    }
+    const { flags } = await res.json();
+    button.dataset.flags = JSON.stringify(flags);
+    for (const flag of flags) box.append(el("span", "run-flag", flag));
+    button.title = flags.length ? "Running it approves it, with what's pointed out beside it." : "Running it approves it.";
+    button.disabled = false;
+  } catch (err) {
+    button.title = err.message;
+  }
+}
+
+async function runCall(button) {
+  button.disabled = true;
+  button.textContent = "Running…";
+  hideError();
+  try {
+    await save();
+    const res = await fetch(`/api/drafts/${draft.id}/calls/${encodeURIComponent(button.dataset.call)}/run`, {
+      method: "POST",
+      headers: { "X-Tack-Page-Required": PAGE_REQUIRED },
+      body: JSON.stringify({ flags: JSON.parse(button.dataset.flags || "[]") }),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+    const out = await res.json();
+    draft.request = out.draft.request;
+    if (!out.prompt || !drawn()) return show(out.prompt, { problem: out.problem });
+    keepView(() => show(out.prompt, { eager: true }));
+  } catch (err) {
+    showError(`Running it failed: ${err.message}`);
+    button.disabled = false;
+    button.textContent = "Run again";
+  }
+}
+
+$("prompt").addEventListener("click", (event) => {
+  const button = event.target.closest(".run-call button");
+  if (button && !button.disabled) runCall(button);
+});
 
 // A message's text, which can be a string or a list of parts.
 const textOf = (content) => (typeof content === "string" ? content : (content || []).map((p) => p.text || "").join("\n\n"));
@@ -212,7 +294,7 @@ function openEditor(k) {
 // innermost part of the row that can be edited.
 $("prompt").addEventListener("click", (event) => {
   // A click that ends selecting text, there or in a box that's open, isn't one to edit with.
-  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing")) return;
+  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing, .run-call")) return;
   if (!getSelection().isCollapsed) return;
   const parts = drawn().prompt.parts;
   const span = event.target.closest("[data-f]");
@@ -281,6 +363,9 @@ async function setAgent(agent) {
     return false;
   }
   draft.agent = agent;
+  // What runs as it, and whether anything can, changed.
+  for (const box of $("prompt").querySelectorAll(".run-call")) box.remove();
+  addRunButtons();
   return true;
 }
 

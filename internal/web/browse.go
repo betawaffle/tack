@@ -344,6 +344,55 @@ func (s *server) estimate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, e)
 }
 
+// draftCallFlags are what the approval card would point out about one of a draft's tool calls.
+func (s *server) draftCallFlags(w http.ResponseWriter, r *http.Request) {
+	flags, err := s.core.DraftCallFlags(r.PathValue("id"), r.PathValue("call"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if flags == nil {
+		flags = []string{}
+	}
+	writeJSON(w, map[string][]string{"flags": flags})
+}
+
+// runDraftCall runs one of a draft's tool calls as its agent, with the flags the person saw,
+// and answers with what it did and the draft's prompt now.
+func (s *server) runDraftCall(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Flags []string `json:"flags"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	run, err := s.core.RunDraftCall(r.PathValue("id"), r.PathValue("call"), body.Flags)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	d, p, err := s.core.Draft(r.PathValue("id"))
+	if d == nil {
+		fail(w, err)
+		return
+	}
+	out := struct {
+		draftResponse
+		Run core.DraftRun `json:"run"`
+	}{draftResponse{Draft: d}, run}
+	if errors.Is(err, tokens.ErrNoRenderer) {
+		out.Problem = err.Error()
+	} else if err != nil {
+		fail(w, err)
+		return
+	} else {
+		out.Prompt = &p
+	}
+	writeJSON(w, out)
+}
+
 // draftResponse is a draft and its prompt as the model would read it. A draft for a model whose
 // format tack doesn't know has no prompt, and Problem says so, so the model can be changed.
 type draftResponse struct {

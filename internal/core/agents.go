@@ -17,6 +17,9 @@ type agent struct {
 	created              time.Time
 	// states is every state it's had, oldest first; the last is the one it has.
 	states []AgentState
+	// running says a tool is running as it now. It isn't in the record: nothing survives a
+	// restart to be running.
+	running bool
 }
 
 // AgentState is one state an agent has had.

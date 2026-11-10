@@ -213,3 +213,7 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .context:hover { background: var(--hover); }
 .context-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-notes, .context-none { color: var(--muted); font-size: 12px; }
+
+/* A draft's Run button by a tool call's result, with what the approval card would point out. */
+.run-call { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; vertical-align: middle; font: 12px var(--ui); user-select: none; white-space: nowrap; text-indent: 0; }
+.run-flag { padding: 0 6px; border-radius: 4px; background: var(--hover); color: var(--warn); font-size: 11px; }

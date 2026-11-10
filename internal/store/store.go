@@ -403,9 +403,11 @@ type Event struct {
 	// call_cost_found
 	CostUSD float64 `json:"cost_usd,omitzero"`
 
-	// agent_*, and manual_call_started: the agent it's for. A manual call has one if its
-	// draft did.
-	Agent        string `json:"agent,omitzero"`
+	// agent_*, manual_call_started, and an agent's tool_* and code_*: the agent it's for. A
+	// manual call has one if its draft did.
+	Agent string `json:"agent,omitzero"`
+	// tool_*, code_*: the draft whose call an agent ran, when it wasn't a conversation's.
+	Draft        string `json:"draft,omitzero"`
 	Slug         string `json:"slug,omitzero"`
 	ScratchFiles Ref    `json:"scratch_files,omitzero"`
 

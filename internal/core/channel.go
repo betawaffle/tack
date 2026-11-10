@@ -64,10 +64,43 @@ type channelReply struct {
 	Error  string  `json:"error,omitzero"`
 }
 
+// runScope is what a tool run belongs to: a conversation, or an agent running one of a draft's
+// calls. It says where the run's events go and which tools its code can call back.
+type runScope struct {
+	conv         *conversation // nil for an agent's run
+	agent, draft string
+	// definitions are the tools the model was offered, for an agent's run.
+	definitions []byte
+}
+
+// stamp puts the scope on an event.
+func (s runScope) stamp(ev *store.Event) *store.Event {
+	if s.conv != nil {
+		ev.Conversation = s.conv.id
+	} else {
+		ev.Agent, ev.Draft = s.agent, s.draft
+	}
+	return ev
+}
+
+// tools are the definitions of the tools the model was offered.
+func (s runScope) tools(c *Core) ([]byte, error) {
+	if s.conv == nil {
+		return s.definitions, nil
+	}
+	return c.Definitions(s.conv.id)
+}
+
+func (s runScope) isCustom(c *Core, name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return s.conv.isCustom(name)
+}
+
 // serveChannel answers requests from running code until conn or ctx ends, or the code goes
 // past a limit, which ends the channel but not the code. While a person is being waited on,
 // the run's time limit is held.
-func (c *Core) serveChannel(ctx context.Context, conn io.ReadWriter, conv *conversation, call *toolCall, run Call, hold func() func(), send func(Update)) error {
+func (c *Core) serveChannel(ctx context.Context, conn io.ReadWriter, scope runScope, call *toolCall, run Call, hold func() func(), send func(Update)) error {
 	reader := bufio.NewReaderSize(conn, ChannelLineBytes+1)
 	total := 0
 	for n := 0; ; n++ {
@@ -88,11 +121,11 @@ func (c *Core) serveChannel(ctx context.Context, conn io.ReadWriter, conv *conve
 		}
 		var req channelRequest
 		parseErr := json.Unmarshal(line, &req, json.RejectUnknownMembers(true))
-		if err := c.record(&store.Event{Type: store.CodeRequest, Conversation: conv.id, ToolCall: call.ID, Execution: run.Execution,
-			Channel: id, Request: block, Kind: req.Tool}); err != nil {
+		if err := c.record(scope.stamp(&store.Event{Type: store.CodeRequest, ToolCall: call.ID, Execution: run.Execution,
+			Channel: id, Request: block, Kind: req.Tool})); err != nil {
 			return err
 		}
-		reply, by := c.channelCall(ctx, conv, call, run, id, req, parseErr, hold, send)
+		reply, by := c.channelCall(ctx, scope, call, run, id, req, parseErr, hold, send)
 		data, err := json.Marshal(reply)
 		if err != nil {
 			return err
@@ -101,7 +134,7 @@ func (c *Core) serveChannel(ctx context.Context, conn io.ReadWriter, conv *conve
 		if err != nil {
 			return err
 		}
-		if err := c.record(&store.Event{Type: store.CodeResponse, Conversation: conv.id, ToolCall: call.ID, Channel: id, Response: response, By: by}); err != nil {
+		if err := c.record(scope.stamp(&store.Event{Type: store.CodeResponse, ToolCall: call.ID, Channel: id, Response: response, By: by})); err != nil {
 			return err
 		}
 		if _, err := conn.Write(append(data, '\n')); err != nil {
@@ -124,24 +157,24 @@ func failed(format string, args ...any) channelReply {
 }
 
 // channelCall does one request and says who answered it.
-func (c *Core) channelCall(ctx context.Context, conv *conversation, call *toolCall, run Call, id string, req channelRequest, parseErr error, hold func() func(), send func(Update)) (channelReply, string) {
+func (c *Core) channelCall(ctx context.Context, scope runScope, call *toolCall, run Call, id string, req channelRequest, parseErr error, hold func() func(), send func(Update)) (channelReply, string) {
 	if parseErr != nil {
 		return failed(`a request is one line of {"tool": name, "arguments": object}: %v`, parseErr), "tack"
 	}
-	definitions, err := c.Definitions(conv.id)
+	definitions, err := scope.tools(c)
 	if err != nil {
 		return failed("%v", err), "tack"
 	}
 	offered, _ := definedNames(definitions)
-	c.mu.Lock()
-	custom := conv.isCustom(req.Tool)
-	c.mu.Unlock()
 	tool := c.findTool(req.Tool)
 	switch {
 	case !slices.Contains(offered, req.Tool):
-		return failed("there's no tool named %q in this conversation", req.Tool), "tack"
-	case custom:
-		return c.waitForPerson(ctx, conv, call, id, req, hold, send)
+		return failed("there's no tool named %q here", req.Tool), "tack"
+	case scope.conv == nil && tool == nil:
+		// Only a conversation's page has somewhere for a person to answer, so far.
+		return failed("%s is answered by a person, and there's nowhere to answer it here", req.Tool), "tack"
+	case scope.conv != nil && scope.isCustom(c, req.Tool):
+		return c.waitForPerson(ctx, scope.conv, call, id, req, hold, send)
 	case tool == nil || !tool.NoApproval:
 		return failed("%s can't be called from code", req.Tool), "tack"
 	}

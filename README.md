@@ -396,7 +396,10 @@ own file under the data directory's `drafts/` (not the record, which only says w
 at `/prompt#draft/<id>`; **Edit** on the same call opens it again. A draft can name an
 agent, which is its tools' persistent state (its /work and scratch store), picked or made in
 the controls, with a slug that's only for you; the call a draft becomes, and the draft after
-it, run as the same agent. **Send** sends it as a
+it, run as the same agent. A tool call in a draft has **Run** by its result, with what the
+approval card would point out beside it, since clicking it is the approval: it runs the call as
+the draft's agent, with that agent's /work and scratch store, which it leaves changed, and puts
+exactly what the model would see in the result, to edit or send. One run at a time per agent. **Send** sends it as a
 custom request that remembers where it came from, so the page shows it against that call, and
 a draft can be made from it in turn. The reply is drawn as it comes in, as text, and as tokens
 once it's done. `/prompt` on its own lists the drafts that haven't been sent and the calls
