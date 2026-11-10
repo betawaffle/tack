@@ -464,6 +464,19 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       await p.locator(".add-after").last().click({ force: true });
       await p.keyboard.press("Escape");
       ok((await p.locator(".add-choices").count()) === 0 && /system,user$/.test(await roles()), "Escape closes the choices");
+
+      // Writing a long message near the end keeps what's being written at the bottom of the
+      // screen, rather than pulling it up to the top with nothing under it.
+      await p.locator(".add-after").last().click({ force: true });
+      await p.click(".add-choice[data-role=user]");
+      await p.waitForSelector(".edit-box");
+      for (let i = 0; i < 45; i++) {
+        await p.keyboard.type(`line ${i}`);
+        await p.keyboard.press("Shift+Enter");
+      }
+      const caret = await p.evaluate(() => document.querySelector(".edit-box").getBoundingClientRect().bottom / innerHeight);
+      ok(caret > 0.6, `a long message being written stays at the bottom of the screen (${caret.toFixed(2)})`);
+      await p.keyboard.press("Escape");
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 

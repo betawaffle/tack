@@ -520,9 +520,14 @@ function openEditor(k) {
   else rows[0].before(editing);
   for (const row of rows) row.hidden = true;
   area.focus();
+  // Measuring it shrinks it for a moment, which near the end of the page would make it shorter
+  // and pull the view up, so what's around it keeps its height while it does.
   const grow = () => {
+    const around = area.parentElement;
+    if (around) around.style.minHeight = `${around.offsetHeight}px`;
     area.style.height = "auto";
     area.style.height = `${area.scrollHeight}px`;
+    if (around) around.style.minHeight = "";
   };
   grow();
   area.addEventListener("input", grow);
@@ -564,9 +569,14 @@ function grown(value, label) {
   area.rows = Math.max(1, value.split("\n").length);
   area.spellcheck = false;
   area.setAttribute("aria-label", label);
+  // Measuring it shrinks it for a moment, which near the end of the page would make it shorter
+  // and pull the view up, so what's around it keeps its height while it does.
   const grow = () => {
+    const around = area.parentElement;
+    if (around) around.style.minHeight = `${around.offsetHeight}px`;
     area.style.height = "auto";
     area.style.height = `${area.scrollHeight}px`;
+    if (around) around.style.minHeight = "";
   };
   area.addEventListener("input", grow);
   requestAnimationFrame(grow);
