@@ -436,6 +436,32 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     ok(!hasValues || toolText.includes('"rust"'), `a tool's description and allowed values can be changed without JSON (${name})`);
   }
 
+  // An agent's page shows what's in its /work and scratch store, and every state it's had,
+  // and its state can be changed by hand.
+  await p.goto(B + "/prompt");
+  await p.waitForSelector(".context-list");
+  await p.locator(".context[href^='#agent/']", { hasText: "renamed" }).click();
+  await p.waitForSelector(".agent-page");
+  const agentPage = await p.innerText(".agent-page");
+  ok(agentPage.includes("name") && agentPage.includes("History"), "an agent's page shows its scratch store and history");
+  const keptFile = p.locator(".agent-row button.linkish", { hasText: "kept.txt" });
+  if (await keptFile.count()) {
+    await keptFile.click();
+    await p.waitForSelector(".agent-file:not([hidden])");
+    ok((await p.innerText(".agent-file")) === "kept by the agent", "and what's in a file in its /work");
+  }
+  await p.fill("input.agent-key", "note");
+  await p.locator(".agent-scratch").last().locator("textarea").fill("written by hand");
+  await p.click(".agent-scratch button:has-text('Add')");
+  await p.waitForFunction(() => [...document.querySelectorAll(".agent-key")].some((k) => k.textContent === "note"));
+  ok(true, "a scratch key can be written by hand");
+  const statesBefore = await p.locator(".agent-page .context").count();
+  await p.locator(".agent-page .context").last().click();
+  await p.waitForSelector(".agent-past");
+  await p.click(".agent-past button");
+  await p.waitForFunction((n) => !document.querySelector(".agent-past") && document.querySelectorAll(".agent-page .context").length === n + 1, statesBefore);
+  ok((await p.locator(".agent-row").count()) === 0 && (await p.locator(".agent-key").count()) === 1, "and it can be set back to how it was made, as a state of its own");
+
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.
   await p.goto(B + "/prompt#" + promptAt);

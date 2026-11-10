@@ -40,6 +40,12 @@ export async function loadList() {
     box.append(entry(`draft/${d.id}`, d.last || "Nothing written yet", [when(d.updated), d.model, names.get(d.agent), d.from ? `after ${d.from}` : "new"]));
   }
 
+  box.append(el("h2", "", "Agents"));
+  if (!agents.length) box.append(el("p", "context-none", "No agents yet. A draft's controls make one."));
+  for (const a of agents) {
+    box.append(entry(`agent/${a.id}`, a.slug || a.id, [`${a.states} ${a.states === 1 ? "change" : "changes"}`, `made ${when(a.created)}`]));
+  }
+
   box.append(el("h2", "", "Sent"));
   if (!sent.length) box.append(el("p", "context-none", "Nothing sent from a draft yet."));
   for (const m of sent) {

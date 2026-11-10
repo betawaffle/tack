@@ -396,7 +396,10 @@ own file under the data directory's `drafts/` (not the record, which only says w
 at `/prompt#draft/<id>`; **Edit** on the same call opens it again. A draft can name an
 agent, which is its tools' persistent state (its /work and scratch store), picked or made in
 the controls, with a slug that's only for you; the call a draft becomes, and the draft after
-it, run as the same agent. A tool call in a draft has **Run** by its result, with what the
+it, run as the same agent. Each agent has a page, linked from `/prompt`: the files in its /work
+(to read), its scratch store, and every state it's had, each to look at. Its current state can be
+changed by hand, as a new state, so nothing's lost: set back or forward to another, a scratch
+key written or deleted, a file deleted. A tool call in a draft has **Run** by its result, with what the
 approval card would point out beside it, since clicking it is the approval: it runs the call as
 the draft's agent, with that agent's /work and scratch store, which it leaves changed, and puts
 exactly what the model would see in the result, to edit or send. One run at a time per agent. Each message

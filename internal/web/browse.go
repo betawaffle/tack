@@ -570,3 +570,87 @@ func (s *server) renameAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// at is which of an agent's states a request is about: ?at=n, or its current one.
+func at(r *http.Request) int {
+	n, err := strconv.Atoi(r.URL.Query().Get("at"))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// agentState is an agent with one of its states open.
+func (s *server) agentState(w http.ResponseWriter, r *http.Request) {
+	view, err := s.core.AgentState(r.PathValue("id"), at(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, view)
+}
+
+// agentFile is a file in one of an agent's states. What's in it was written by code the model
+// wrote, so the page only ever shows it as text.
+func (s *server) agentFile(w http.ResponseWriter, r *http.Request) {
+	f, err := s.core.AgentFile(r.PathValue("id"), at(r), r.URL.Query().Get("path"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, f)
+}
+
+// readBody reads a small JSON body into v, or says why it can't.
+func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, v, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func (s *server) setAgentState(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		At int `json:"at"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	if err := s.core.SetAgentState(r.PathValue("id"), body.At); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) setAgentScratch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key    string `json:"key"`
+		Text   string `json:"text"`
+		Delete bool   `json:"delete"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	if err := s.core.SetAgentScratch(r.PathValue("id"), body.Key, body.Text, body.Delete); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) deleteAgentFile(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	if err := s.core.DeleteAgentFile(r.PathValue("id"), body.Path); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

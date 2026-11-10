@@ -29,8 +29,10 @@ type AgentState struct {
 	// Empty is nothing.
 	Workspace store.Ref `json:"workspace,omitzero"`
 	Scratch   store.Ref `json:"scratch,omitzero"`
-	// Execution is the tool run that left it, if one did.
+	// Execution is the tool run that left it, if one did; By is "user" for one someone set by
+	// hand.
 	Execution string `json:"execution,omitzero"`
+	By        string `json:"by,omitzero"`
 }
 
 // Agent is what's shown of an agent.
@@ -67,7 +69,7 @@ func (c *Core) applyAgent(ev *store.Event) {
 	case store.AgentRenamed:
 		a.slug = ev.Slug
 	case store.AgentStateSet:
-		a.states = append(a.states, AgentState{Time: ev.Time, Workspace: ev.WorkspaceFiles, Scratch: ev.ScratchFiles, Execution: ev.Execution})
+		a.states = append(a.states, AgentState{Time: ev.Time, Workspace: ev.WorkspaceFiles, Scratch: ev.ScratchFiles, Execution: ev.Execution, By: ev.By})
 	}
 }
 

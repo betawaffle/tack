@@ -7,6 +7,7 @@ import { keepPlace } from "./prompt-hold.js";
 import { go, onAddress, start } from "./prompt-nav.js";
 import { drafting, startDraft, loadDraft, stopDraft, closeDraft } from "./prompt-edit.js";
 import { loadList } from "./prompt-list.js";
+import { loadAgent } from "./prompt-agent.js";
 
 // Where the page is: the address's two parts, like conversation and call.
 let where = { conv: "", call: "" };
@@ -128,6 +129,7 @@ onAddress((options) => {
   if (conv === "synthetic") return loadSynthetic(call);
   if (conv === "manual") return loadManual(call, options);
   if (!conv) return loadList();
+  if (conv === "agent") return loadAgent(call, location.hash.slice(1).split("/")[2]);
   return loadCall(conv, call, options);
 });
 

@@ -26,7 +26,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt-dom.js static/prompt-room.js static/prompt-draw.js static/prompt-hold.js static/prompt-nav.js static/prompt-stream.js static/prompt-agents.js static/prompt-list.js static/prompt-edit.js static/prompt.js static/prompt.css
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt-dom.js static/prompt-room.js static/prompt-draw.js static/prompt-hold.js static/prompt-nav.js static/prompt-stream.js static/prompt-agents.js static/prompt-list.js static/prompt-agent.js static/prompt-edit.js static/prompt.js static/prompt.css
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -184,6 +184,11 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/agents", s.agents)
 	mux.HandleFunc("POST /api/agents", s.newAgent)
 	mux.HandleFunc("POST /api/agents/{id}/slug", s.renameAgent)
+	mux.HandleFunc("GET /api/agents/{id}/state", s.agentState)
+	mux.HandleFunc("GET /api/agents/{id}/file", s.agentFile)
+	mux.HandleFunc("POST /api/agents/{id}/state", s.setAgentState)
+	mux.HandleFunc("POST /api/agents/{id}/scratch", s.setAgentScratch)
+	mux.HandleFunc("POST /api/agents/{id}/files/delete", s.deleteAgentFile)
 	mux.HandleFunc("GET /code", s.codePage)
 	mux.HandleFunc("GET /docs", s.docsPage)
 	mux.HandleFunc("GET /api/source", s.sourceList)

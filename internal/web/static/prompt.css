@@ -243,3 +243,14 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .schema-label { color: var(--muted); font: 11.5px var(--mono); }
 .schema-field { font: 13px/1.6 var(--mono); }
 .schema-buttons { display: flex; gap: 8px; }
+
+/* An agent's page (prompt-agent.js). */
+.agent-row { display: flex; align-items: baseline; gap: 12px; padding: 2px 10px; }
+.linkish { padding: 0; border: 0; background: none; color: var(--text); font: 12.5px var(--mono); cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); }
+.agent-file { margin: 4px 10px 10px; padding: 8px; max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-scratch { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; }
+.agent-key { font: 600 12.5px var(--mono); }
+input.agent-key { width: 20em; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }
+.agent-text { font: 12.5px/1.5 var(--mono); overflow: auto; resize: vertical; }
+.agent-past { color: var(--wait); }
+.context.current { background: var(--hover); }
