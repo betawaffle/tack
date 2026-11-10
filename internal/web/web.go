@@ -177,6 +177,10 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/drafts/{id}", s.getDraft)
 	mux.HandleFunc("PUT /api/drafts/{id}", s.saveDraft)
 	mux.HandleFunc("POST /api/drafts/{id}/send", s.current(s.sendDraft))
+	mux.HandleFunc("PUT /api/drafts/{id}/agent", s.setDraftAgent)
+	mux.HandleFunc("GET /api/agents", s.agents)
+	mux.HandleFunc("POST /api/agents", s.newAgent)
+	mux.HandleFunc("POST /api/agents/{id}/slug", s.renameAgent)
 	mux.HandleFunc("GET /code", s.codePage)
 	mux.HandleFunc("GET /docs", s.docsPage)
 	mux.HandleFunc("GET /api/source", s.sourceList)
@@ -808,7 +812,7 @@ func fail(w http.ResponseWriter, err error) {
 		errors.Is(err, core.ErrDraftSent):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork), errors.Is(err, core.ErrBadMessage),
-		errors.Is(err, core.ErrBadRequest):
+		errors.Is(err, core.ErrBadRequest), errors.Is(err, core.ErrBadSlug):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, core.ErrStale):
 		w.Header().Set("X-Tack-Stale", "1")

@@ -246,6 +246,18 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // Sending it: the call controls, an estimate, and then the sent call, shown against the
   // one it came from.
   ok(await p.locator("#send-bar").isVisible(), "a draft has the call controls");
+  // An agent for its tools to run as: a new one, named, then renamed.
+  await p.selectOption("#send-agent", "new");
+  await p.fill("#agent-slug", "tester");
+  await p.keyboard.press("Enter");
+  await p.waitForFunction(() => document.getElementById("send-agent").selectedOptions[0]?.textContent === "tester");
+  ok(true, "a new agent can be made for a draft");
+  await p.click("#agent-rename");
+  await p.fill("#agent-slug", "renamed");
+  await p.click("#agent-save");
+  await p.waitForFunction(() => document.getElementById("send-agent").selectedOptions[0]?.textContent === "renamed");
+  ok(await p.locator("#agent-naming").isHidden(), "and renamed");
+  await p.locator("#send-bar").screenshot({ path: "shots/send-bar.png" });
   await p.fill("#send-max", "50");
   await p.locator("#send-max").dispatchEvent("change");
   await p.waitForFunction(() => /at most/.test(document.getElementById("send-estimate").textContent));
@@ -268,6 +280,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting"));
   ok((await p.innerText("#which")) === "Draft of the next call", "a draft can be made from a sent call too");
+  ok((await p.evaluate(() => document.getElementById("send-agent").selectedOptions[0]?.textContent)) === "renamed", "and it runs as the same agent");
   // Scrolled as far as it goes, the last row is still on the screen.
   const held = await p.evaluate(() => {
     const s = getComputedStyle(document.getElementById("prompt")).overflowY === "auto" ? document.getElementById("prompt") : document.querySelector(".prompt-inner");

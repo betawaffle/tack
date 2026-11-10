@@ -45,6 +45,15 @@
 <div id="error" class="prompt-error" hidden></div>
 <main id="prompt" class="prompt-body" aria-label="The prompt"></main>
 <footer id="send-bar" class="send-bar" hidden>
+  <span class="send-agent">
+    <label>Agent <select id="send-agent"></select></label>
+    <button id="agent-rename" class="mini" type="button">Rename</button>
+    <span id="agent-naming" class="agent-naming" hidden>
+      <input id="agent-slug" type="text" maxlength="100" placeholder="Slug (optional)" aria-label="Slug">
+      <button id="agent-save" class="mini" type="button">Save</button>
+      <button id="agent-cancel" class="mini" type="button">Cancel</button>
+    </span>
+  </span>
   <label>Effort <select id="send-effort"></select></label>
   <label>Max Tokens <input id="send-max" type="number" min="1" step="1" placeholder="Unset"></label>
   <details class="send-more">

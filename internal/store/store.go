@@ -146,6 +146,14 @@ const (
 	// out to cost, as CostUSD, asked of OpenRouter afterwards by its generation ID. Response is
 	// OpenRouter's whole answer. It replaces the guess that was counted.
 	CallCostFound = "call_cost_found"
+	// AgentCreated is a new agent, as Agent, with the slug someone gave it as Slug, if they
+	// did. ForkedFrom is the agent it started as a copy of, if any. AgentRenamed changes its
+	// slug. AgentStateSet is the agent's state from then on: its /work as WorkspaceFiles and
+	// its scratch store as ScratchFiles, both manifests of blocks (absent is empty). Execution
+	// is the tool run that left it, if one did.
+	AgentCreated  = "agent_created"
+	AgentRenamed  = "agent_renamed"
+	AgentStateSet = "agent_state_set"
 )
 
 // Feedback is a comment about tack's source, pinned to the revision it was written
@@ -271,7 +279,8 @@ func Known(eventType string) bool {
 		CallStarted, CallFinished, DecisionRequested, DecisionMade, ToolStarted, ToolFinished,
 		ConfigLoaded, SettingsProposed, SettingsApplied, SettingsDiscarded,
 		BudgetAdded, AllowanceStarted, BudgetStopped, PauseRequested, PauseCleared, NoteAdded, ScratchChanged,
-		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse, FeedbackAdded, FeedbackRemoved, FeedbackRead, CallCostFound:
+		ManualCallStarted, ManualCallFinished, CodeRequest, CodeResponse, FeedbackAdded, FeedbackRemoved, FeedbackRead, CallCostFound,
+		AgentCreated, AgentRenamed, AgentStateSet:
 		return true
 	}
 	return false
@@ -318,8 +327,9 @@ type Event struct {
 	// the result of every call to one.
 	CustomTools []string `json:"custom_tools,omitzero"`
 
-	// conversation_forked: where it came from, and how many of that conversation's
-	// items it keeps, counting from the start. Absent means none. It also has settings.
+	// conversation_forked and agent_created: what it came from. conversation_forked also has
+	// how many of that conversation's items it keeps, counting from the start (absent means
+	// none), and settings.
 	ForkedFrom string `json:"forked_from,omitzero"`
 	ForkItems  int    `json:"fork_items,omitzero"`
 
@@ -392,6 +402,12 @@ type Event struct {
 
 	// call_cost_found
 	CostUSD float64 `json:"cost_usd,omitzero"`
+
+	// agent_*, and manual_call_started: the agent it's for. A manual call has one if its
+	// draft did.
+	Agent        string `json:"agent,omitzero"`
+	Slug         string `json:"slug,omitzero"`
+	ScratchFiles Ref    `json:"scratch_files,omitzero"`
 
 	// feedback_*
 	Feedback    *Feedback `json:"feedback,omitzero"`

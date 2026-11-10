@@ -202,6 +202,11 @@ func CountManual(body []byte) int {
 // endpoint with the usual headers and key. It's recorded before anything is sent.
 // The updates are a preview, like a conversation's: the record has everything.
 func (c *Core) SendManual(body []byte, from string) (string, <-chan Update, error) {
+	return c.sendManual(body, from, "")
+}
+
+// sendManual is SendManual for a call whose tools run as agent, if it's given.
+func (c *Core) sendManual(body []byte, from, agent string) (string, <-chan Update, error) {
 	var head struct {
 		Model    string         `json:"model"`
 		Provider jsontext.Value `json:"provider"`
@@ -228,6 +233,7 @@ func (c *Core) SendManual(body []byte, from string) (string, <-chan Update, erro
 		RequestBytes:   len(body),
 		RequestHeaders: openrouter.Headers(),
 		From:           from,
+		Agent:          agent,
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	c.mu.Lock()

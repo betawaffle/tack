@@ -71,6 +71,9 @@ type Core struct {
 	manual []*manualCall
 	// feedback is every comment about tack's source, in order.
 	feedback []*FeedbackItem
+	// agents are by ID, and agentOrder is the order they were made in.
+	agents     map[string]*agent
+	agentOrder []string
 	// codeCalls are calls running code made to custom tools, waiting for a person, by ID.
 	codeCalls map[string]*waitingCodeCall
 	// Prices by model, as last asked, and which are being asked for.
@@ -263,6 +266,9 @@ func (c *Core) apply(ev *store.Event) {
 		return
 	case store.FeedbackAdded, store.FeedbackRemoved, store.FeedbackRead:
 		c.applyFeedback(ev)
+		return
+	case store.AgentCreated, store.AgentRenamed, store.AgentStateSet:
+		c.applyAgent(ev)
 		return
 	}
 	if ev.Type == store.ConversationAdded {

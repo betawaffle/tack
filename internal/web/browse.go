@@ -413,3 +413,59 @@ func (s *server) sendDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	stream(w, r, updates)
 }
+
+// setDraftAgent sets the agent a draft's tools run as.
+func (s *server) setDraftAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Agent string `json:"agent"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.core.SetDraftAgent(r.PathValue("id"), body.Agent); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) agents(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.core.Agents())
+}
+
+// newAgent makes an agent, empty or as a copy of another's state.
+func (s *server) newAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Slug string `json:"slug"`
+		From string `json:"from"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	a, err := s.core.NewAgent(body.Slug, body.From)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, a)
+}
+
+func (s *server) renameAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Slug string `json:"slug"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
+	if err := json.UnmarshalRead(r.Body, &body, json.RejectUnknownMembers(true)); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.core.RenameAgent(r.PathValue("id"), body.Slug); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

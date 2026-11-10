@@ -35,7 +35,7 @@ async function loadDraft(id) {
   const { draft: d, prompt: data } = await res.json();
   // A sent draft is the call it became.
   if (d.sent) return location.replace(`#manual/${d.sent}`);
-  draft = { id: d.id, from: d.from || "", request: d.request };
+  draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "" };
   $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
   $("edit").hidden = false;
   await showSendBar();
@@ -245,9 +245,78 @@ async function showSendBar() {
   effort.value = req.reasoning?.effort || "";
   $("send-max").value = req.max_tokens ?? "";
   for (const input of document.querySelectorAll("[data-param]")) input.value = req[input.dataset.param] ?? "";
+  await showAgents();
   $("send-bar").hidden = false;
   estimate();
 }
+
+// The agent a draft's tools run as: none, one of the agents, or a new one. Agents are shown by
+// their slug, or by their ID if they have none.
+const NEW_AGENT = "new";
+async function showAgents() {
+  let agents = [];
+  try {
+    agents = await (await fetch("/api/agents")).json();
+  } catch {}
+  const select = $("send-agent");
+  select.replaceChildren(el("option", "", "No agent"));
+  select.firstChild.value = "";
+  for (const a of agents) {
+    const option = el("option", "", a.slug || a.id);
+    option.value = a.id;
+    option.title = a.id;
+    select.append(option);
+  }
+  const add = el("option", "", "New agent…");
+  add.value = NEW_AGENT;
+  select.append(add);
+  select.value = draft.agent;
+  $("agent-rename").hidden = !draft.agent;
+  $("agent-naming").hidden = true;
+}
+
+let naming = null; // "new" or "rename" while the slug box is open
+function nameAgent(mode) {
+  naming = mode;
+  const slug = $("agent-slug");
+  slug.value = mode === "rename" ? $("send-agent").selectedOptions[0]?.textContent || "" : "";
+  if (mode === "rename" && slug.value === draft.agent) slug.value = "";
+  $("agent-naming").hidden = false;
+  $("agent-rename").hidden = true;
+  slug.focus();
+}
+
+async function setDraftAgent(agent) {
+  const res = await fetch(`/api/drafts/${draft.id}/agent`, { method: "PUT", body: JSON.stringify({ agent }) });
+  if (!res.ok) return showError((await res.text()) || res.statusText);
+  draft.agent = agent;
+}
+
+$("send-agent").addEventListener("change", async () => {
+  const value = $("send-agent").value;
+  if (value === NEW_AGENT) return nameAgent("new");
+  await setDraftAgent(value);
+  await showAgents();
+});
+$("agent-rename").addEventListener("click", () => nameAgent("rename"));
+$("agent-cancel").addEventListener("click", () => showAgents());
+async function saveAgentName() {
+  const slug = $("agent-slug").value;
+  if (naming === "new") {
+    const res = await fetch("/api/agents", { method: "POST", body: JSON.stringify({ slug }) });
+    if (!res.ok) return showError((await res.text()) || res.statusText);
+    await setDraftAgent((await res.json()).id);
+  } else {
+    const res = await fetch(`/api/agents/${draft.agent}/slug`, { method: "POST", body: JSON.stringify({ slug }) });
+    if (!res.ok) return showError((await res.text()) || res.statusText);
+  }
+  await showAgents();
+}
+$("agent-save").addEventListener("click", saveAgentName);
+$("agent-slug").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") saveAgentName();
+  else if (event.key === "Escape") showAgents();
+});
 
 // A number from a box, or undefined to leave it out.
 const numberIn = (input) => (input.value.trim() === "" ? undefined : Number(input.value));

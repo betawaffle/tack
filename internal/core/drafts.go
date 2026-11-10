@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/betawaffle/tack/internal/store"
 )
@@ -48,7 +49,7 @@ func (c *Core) NewDraft(from string) (*store.Draft, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &store.Draft{ID: store.NewID(), From: from, Model: before.Model, Request: request}
+	d := &store.Draft{ID: store.NewID(), From: from, Model: before.Model, Request: request, Agent: c.agentOf(from)}
 	return d, c.cfg.Store.SaveDraft(d)
 }
 
@@ -133,6 +134,38 @@ func (c *Core) draftPrompt(d *store.Draft) (CallPrompt, error) {
 	return Preview(d.Model, d.Request, before)
 }
 
+// agentOf is the agent a manual call ran as, so the draft after it runs as the same one.
+func (c *Core) agentOf(ref string) string {
+	id, ok := strings.CutPrefix(ref, "manual/")
+	if !ok {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m := c.manualCall(id); m != nil {
+		return m.started.Agent
+	}
+	return ""
+}
+
+// SetDraftAgent sets the agent a draft's tools run as. Empty is none.
+func (c *Core) SetDraftAgent(id, agent string) error {
+	if agent != "" {
+		if _, err := c.Agent(agent); err != nil {
+			return err
+		}
+	}
+	d, err := c.cfg.Store.LoadDraft(id)
+	if err != nil {
+		return err
+	}
+	if d.Sent != "" {
+		return ErrDraftSent
+	}
+	d.Agent = agent
+	return c.cfg.Store.SaveDraft(d)
+}
+
 // SaveDraft replaces a draft's request, and shows it as Draft does.
 func (c *Core) SaveDraft(id string, request jsontext.Value) (CallPrompt, error) {
 	var check map[string]jsontext.Value
@@ -162,7 +195,12 @@ func (c *Core) SendDraft(id string) (string, <-chan Update, error) {
 	if d.Sent != "" {
 		return "", nil, ErrDraftSent
 	}
-	call, updates, err := c.SendManual(d.Request, d.From)
+	if d.Agent != "" {
+		if _, err := c.Agent(d.Agent); err != nil {
+			return "", nil, err
+		}
+	}
+	call, updates, err := c.sendManual(d.Request, d.From, d.Agent)
 	if err != nil {
 		return "", nil, err
 	}
