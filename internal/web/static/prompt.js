@@ -257,10 +257,16 @@ function render(data, done, eager) {
     const until = performance.now() + 12;
     while (at < rows.length && performance.now() < until) block();
     if (at < rows.length) setTimeout(more, 0);
-    else if (done) done();
+    else {
+      fitRoom();
+      if (done) done();
+    }
   };
   if (at < rows.length) setTimeout(more, 0);
-  else if (done) done();
+  else {
+    fitRoom();
+    if (done) done();
+  }
 }
 
 // Whether tack's count of the prompt and the reply is the host's.
@@ -311,6 +317,8 @@ function fitRoom(top) {
   const end = $("prompt").querySelector(".prompt-end");
   const last = end?.previousElementSibling.lastElementChild?.lastElementChild;
   if (!last) return;
+  // A block that isn't laid out has no real place for its rows, so the last is laid out.
+  last.parentElement.classList.add("laid");
   const box = s.getBoundingClientRect();
   // Where a thing is from the top of what scrolls.
   const at = (node) => s.scrollTop + node.getBoundingClientRect().top - box.top;
@@ -325,7 +333,7 @@ $("prompt").addEventListener("scroll", () => fitRoom(), true);
 new ResizeObserver(() => fitRoom()).observe($("prompt"));
 
 // Scrolls so that the page's top is top, with the room for it.
-function scrollTo(top) {
+function scrollPageTo(top) {
   fitRoom(top);
   scroller().scrollTop = top;
 }
@@ -350,7 +358,7 @@ function keepPlace(k, draw) {
   // Blocks off screen have only an estimated height, so the ones down to the part are laid
   // out for real; otherwise the page can be too short to scroll to where it was.
   for (let block = after.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
-  scrollTo(scrolled + after.getBoundingClientRect().top - top);
+  scrollPageTo(scrolled + after.getBoundingClientRect().top - top);
 }
 
 // Collapse All folds every top-level part that has a name; Expand All opens everything.
@@ -468,7 +476,7 @@ function keepView(draw) {
       return;
     }
     for (let block = anchor.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
-    const pin = () => scrollTo(scroller().scrollTop + anchor.getBoundingClientRect().top - top);
+    const pin = () => scrollPageTo(scroller().scrollTop + anchor.getBoundingClientRect().top - top);
     pin();
     if (motion) fadeOut(rows, now, tokenAt, anchor, pin);
   };
