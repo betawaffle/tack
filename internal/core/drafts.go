@@ -134,7 +134,91 @@ func (c *Core) draftPrompt(d *store.Draft) (CallPrompt, error) {
 		}
 		before = &b
 	}
-	return Preview(d.Model, d.Request, before)
+	request, shown, err := effective(d)
+	if err != nil {
+		return CallPrompt{}, err
+	}
+	p, err := Preview(d.Model, request, before)
+	p.Shown = shown
+	return p, err
+}
+
+// effective is the request a draft sends: its own without the messages that are turned off,
+// and where each message it does send is in its own.
+func effective(d *store.Draft) (jsontext.Value, []int, error) {
+	var request map[string]jsontext.Value
+	if err := json.Unmarshal(d.Request, &request); err != nil {
+		return nil, nil, fmt.Errorf("%w: reading the request: %v", ErrBadRequest, err)
+	}
+	var messages []jsontext.Value
+	if raw, ok := request["messages"]; ok {
+		if err := json.Unmarshal(raw, &messages); err != nil {
+			return nil, nil, fmt.Errorf("%w: reading the messages: %v", ErrBadRequest, err)
+		}
+	}
+	shown := []int{}
+	if len(d.Off) == 0 {
+		for i := range messages {
+			shown = append(shown, i)
+		}
+		return d.Request, shown, nil
+	}
+	kept := []jsontext.Value{}
+	for i, m := range messages {
+		if !slices.Contains(d.Off, i) {
+			kept = append(kept, m)
+			shown = append(shown, i)
+		}
+	}
+	raw, err := json.Marshal(kept)
+	if err != nil {
+		return nil, nil, err
+	}
+	request["messages"] = raw
+	out, err := json.Marshal(request, json.Deterministic(true))
+	return out, shown, err
+}
+
+// pairedOff is off with what goes with each message added: a model's message with tool calls
+// and the results of those calls are on or off together, since a call with no result, or a
+// result with no call, can't be sent.
+func pairedOff(request jsontext.Value, off []int) []int {
+	var req struct {
+		Messages []struct {
+			ToolCalls []struct {
+				ID string `json:"id"`
+			} `json:"tool_calls"`
+			ToolCallID string `json:"tool_call_id"`
+		} `json:"messages"`
+	}
+	json.Unmarshal(request, &req)
+	maker := map[string]int{} // a call's ID to the message that made it
+	for i, m := range req.Messages {
+		for _, call := range m.ToolCalls {
+			maker[call.ID] = i
+		}
+	}
+	group := func(i int) int { // the message that made the calls i answers, or i
+		if id := req.Messages[i].ToolCallID; id != "" {
+			if at, ok := maker[id]; ok {
+				return at
+			}
+		}
+		return i
+	}
+	turnedOff := map[int]bool{}
+	for _, i := range off {
+		if i >= 0 && i < len(req.Messages) {
+			turnedOff[group(i)] = true
+		}
+	}
+	out := []int{}
+	for i := range req.Messages {
+		if turnedOff[group(i)] {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // agentOf is the agent a manual call ran as, so the draft after it runs as the same one.
@@ -169,8 +253,9 @@ func (c *Core) SetDraftAgent(id, agent string) error {
 	return c.cfg.Store.SaveDraft(d)
 }
 
-// SaveDraft replaces a draft's request, and shows it as Draft does.
-func (c *Core) SaveDraft(id string, request jsontext.Value) (CallPrompt, error) {
+// SaveDraft replaces a draft's request, and shows it as Draft does. off, if it isn't nil,
+// replaces which of its messages are turned off.
+func (c *Core) SaveDraft(id string, request jsontext.Value, off []int) (CallPrompt, error) {
 	var check map[string]jsontext.Value
 	if err := json.Unmarshal(request, &check); err != nil {
 		return CallPrompt{}, fmt.Errorf("%w: the request isn't a JSON object: %v", ErrBadRequest, err)
@@ -183,6 +268,10 @@ func (c *Core) SaveDraft(id string, request jsontext.Value) (CallPrompt, error) 
 		return CallPrompt{}, ErrDraftSent
 	}
 	d.Request = request
+	if off != nil {
+		d.Off = off
+	}
+	d.Off = pairedOff(request, d.Off)
 	// Its model is the one the request names.
 	var head struct {
 		Model string `json:"model"`
@@ -210,7 +299,11 @@ func (c *Core) SendDraft(id string) (string, <-chan Update, error) {
 			return "", nil, err
 		}
 	}
-	call, updates, err := c.sendManual(d.Request, d.From, d.Agent)
+	request, _, err := effective(d)
+	if err != nil {
+		return "", nil, err
+	}
+	call, updates, err := c.sendManual(request, d.From, d.Agent)
 	if err != nil {
 		return "", nil, err
 	}

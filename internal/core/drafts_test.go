@@ -45,14 +45,14 @@ func TestADraftIsKeptChangedAndSent(t *testing.T) {
 	if changed == string(d.Request) {
 		t.Fatalf("no empty message to fill: %s", d.Request)
 	}
-	p, err := c.SaveDraft(d.ID, jsontext.Value(changed))
+	p, err := c.SaveDraft(d.ID, jsontext.Value(changed), nil)
 	if err != nil || !strings.Contains(p.Prompt.Text(), "two") || len(p.Changes) == 0 || p.Changes[0].Op != "same" {
 		t.Fatalf("saved = %+v, %v", p.Changes, err)
 	}
 	if kept, shown, err := c.Draft(d.ID); err != nil || string(kept.Request) != changed || !strings.Contains(shown.Prompt.Text(), "two") {
 		t.Errorf("kept = %+v, %v", kept, err)
 	}
-	if _, err := c.SaveDraft(d.ID, jsontext.Value(`[1]`)); !errors.Is(err, ErrBadRequest) {
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(`[1]`), nil); !errors.Is(err, ErrBadRequest) {
 		t.Errorf("a request that isn't an object: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestADraftIsKeptChangedAndSent(t *testing.T) {
 	if err != nil || shown.Previous != from || !strings.Contains(shown.Prompt.Text(), "two") {
 		t.Errorf("sent = %+v, %v", shown, err)
 	}
-	if _, err := c.SaveDraft(d.ID, jsontext.Value(changed)); !errors.Is(err, ErrDraftSent) {
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(changed), nil); !errors.Is(err, ErrDraftSent) {
 		t.Errorf("changing a sent draft: %v", err)
 	}
 	if _, _, err := c.SendDraft(d.ID); !errors.Is(err, ErrDraftSent) {
@@ -118,7 +118,7 @@ func TestABlankDraftStartsFromWhatItsGiven(t *testing.T) {
 	}
 	// Its model is the one its request names.
 	changed := strings.Replace(string(d.Request), `"model":"deepseek/deepseek-v4.1-flash-1017"`, `"model":"deepseek/deepseek-v4.1-flash"`, 1)
-	if _, err := c.SaveDraft(d.ID, jsontext.Value(changed)); err != nil {
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(changed), nil); err != nil {
 		t.Fatal(err)
 	}
 	if kept, _, _ := c.Draft(d.ID); kept.Model != "deepseek/deepseek-v4.1-flash" {

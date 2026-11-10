@@ -25,8 +25,10 @@ type Draft struct {
 	From  string `json:"from,omitzero"`
 	Agent string `json:"agent,omitzero"`
 	Model string `json:"model"`
-	// Request is the body it would send, with whatever call options were changed in it.
+	// Request is the body it would send, with whatever call options were changed in it, and
+	// Off the messages in it that are turned off, by index: they're kept, but not sent.
 	Request jsontext.Value `json:"request"`
+	Off     []int          `json:"off,omitzero"`
 	// Sent is the manual call it became, once it's sent.
 	Sent string `json:"sent,omitzero"`
 }

@@ -154,6 +154,8 @@ $("edit").addEventListener("click", () => {
 // Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it,
 // with the row that was clicked kept where it was on the screen.
 $("prompt").addEventListener("click", (event) => {
+  // A message's checkbox is in its name, but isn't for collapsing.
+  if (event.target.closest(".msg-on")) return;
   const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
   const data = drawn();
   if (!target || !data) return;

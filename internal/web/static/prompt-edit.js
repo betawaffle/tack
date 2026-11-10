@@ -4,7 +4,7 @@
 // the draft is saved and drawn again, compared with the call it came from. This module owns the
 // draft that's open.
 import { $, el, showError, hideError } from "./prompt-dom.js";
-import { render, drawn, clear } from "./prompt-draw.js";
+import { render, drawn, clear, DEPTHS } from "./prompt-draw.js";
 import { keepView, keepPlace } from "./prompt-hold.js";
 import { go } from "./prompt-nav.js";
 import { showAgents } from "./prompt-agents.js";
@@ -34,7 +34,7 @@ export async function loadDraft(id, { eager = false } = {}) {
   }
   const { draft: d, prompt: data, problem } = await res.json();
   if (d.sent) return go(`manual/${d.sent}`, { replace: true });
-  draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "" };
+  draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], shown: [] };
   $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
   $("edit").hidden = false;
   await showSendBar();
@@ -59,9 +59,9 @@ export function closeDraft() {
 let saving = Promise.resolve();
 function save() {
   const request = structuredClone(draft.request);
-  const id = draft.id;
+  const { id, off } = draft;
   const result = saving.then(async () => {
-    const res = await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request }) });
+    const res = await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request, off }) });
     if (!res.ok) throw new Error((await res.text()) || res.statusText);
     return res.json();
   });
@@ -99,8 +99,120 @@ function show(data, { eager = false, problem = "" } = {}) {
   }
   hideError();
   data.before_draft = true;
-  render(data, { eager, done: addRunButtons });
+  draft.shown = data.shown || [];
+  render(data, {
+    eager,
+    done: () => {
+      addMessageControls();
+      addRunButtons();
+    },
+  });
 }
+
+// A part's message, in the draft's request. The prompt leaves out the messages that are turned
+// off, so its message numbers are mapped to the request's by shown.
+const indexOf = (part) => draft.shown[part.message] ?? part.message;
+const messageOf = (part) => draft.request.messages[indexOf(part)];
+
+// Turning messages off. Each message has a checkbox where its rows start: one turned off isn't
+// sent, but stays, as a row of its own, to turn back on until the draft is sent. A model's
+// message with tool calls and the results of those calls go on and off together. Only Up To
+// Here turns off everything after a message.
+const MESSAGE_KINDS = new Set(["system", "user", "tool_result", "assistant"]);
+
+// The messages that go with message i: all of them that a model's message with tool calls is in.
+function groupOf(i) {
+  const messages = draft.request.messages;
+  const maker = (j) => {
+    const id = messages[j]?.tool_call_id;
+    return id ? messages.findIndex((m) => m.tool_calls?.some((c) => c.id === id)) : -1;
+  };
+  const head = maker(i) >= 0 ? maker(i) : i;
+  return messages.map((_, j) => j).filter((j) => j === head || maker(j) === head);
+}
+
+function setOff(indices, off) {
+  const now = new Set(draft.off);
+  for (const i of indices) for (const j of groupOf(i)) off ? now.add(j) : now.delete(j);
+  draft.off = [...now].sort((a, b) => a - b);
+  preview();
+}
+
+function onlyUpTo(i) {
+  draft.off = draft.request.messages.map((_, j) => j).filter((j) => j > i || (j < i && draft.off.includes(j)));
+  preview();
+}
+
+function checkbox(i, on) {
+  const box = el("input", "msg-on");
+  box.type = "checkbox";
+  box.checked = on;
+  box.dataset.message = i;
+  box.title = on ? "Sent. Untick to leave it out." : "Left out. Tick to send it again.";
+  return box;
+}
+
+// What a turned-off message is, in a line.
+function summary(m) {
+  const text = typeof m.content === "string" ? m.content : (m.content || []).map((p) => p.text || "").join(" ");
+  const line = text.trim().split("\n")[0];
+  const calls = (m.tool_calls || []).map((c) => c.function?.name).join(", ");
+  return (line.length > 120 ? `${line.slice(0, 119)}…` : line) || (calls ? `Calls ${calls}` : "Empty");
+}
+
+const ROLE_LABELS = { system: "System", user: "User", assistant: "Assistant", tool: "Result" };
+
+function addMessageControls() {
+  const parts = drawn()?.prompt.parts;
+  if (!draft || !parts) return;
+  const last = draft.request.messages.length - 1;
+  const firstRow = (k) => $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"].top`)?.closest(".pl");
+  // The first row of each message that's sent, by its index in the request.
+  const rows = new Map();
+  parts.forEach((part, k) => {
+    if (!MESSAGE_KINDS.has(part.kind) || (part.kind === "system" && part.parent !== -1)) return;
+    const i = indexOf(part);
+    const row = firstRow(k);
+    if (!row || rows.has(i)) return;
+    rows.set(i, row);
+    row.querySelector(".pl-part").prepend(checkbox(i, true));
+    if (i < last) {
+      const up = el("button", "mini up-to-here", "Only Up To Here");
+      up.type = "button";
+      up.dataset.message = i;
+      up.title = "Leave out everything after this";
+      row.querySelector(".pl-text").append(up);
+    }
+  });
+  // A row for each message that's turned off, where it would be.
+  const end = $("prompt").querySelector(".prompt-rows .pblock:last-child");
+  for (const i of draft.off) {
+    const m = draft.request.messages[i];
+    if (!m) continue;
+    const row = el("div", "pl off-row");
+    const gutter = el("div", "pl-gutter");
+    const label = el("div", "pl-part", ROLE_LABELS[m.role] || m.role);
+    label.prepend(checkbox(i, false));
+    // Empty bars, so its text lines up with the rest.
+    const bars = el("div", "pl-bars");
+    bars.innerHTML = "<i></i>".repeat(DEPTHS);
+    gutter.append(label, bars, el("div", "pl-num"));
+    row.append(gutter, el("div", "pl-text", summary(m)));
+    const next = [...rows.keys()].sort((a, b) => a - b).find((j) => j > i);
+    const before = next === undefined ? null : rows.get(next);
+    if (before) before.before(row);
+    else end?.append(row);
+  }
+}
+
+$("prompt").addEventListener("change", (event) => {
+  const box = event.target.closest(".msg-on");
+  if (box && draft) setOff([Number(box.dataset.message)], !box.checked);
+});
+$("prompt").addEventListener("click", (event) => {
+  const up = event.target.closest(".up-to-here");
+  if (up && draft) onlyUpTo(Number(up.dataset.message));
+});
 
 // Each tool call in a draft gets a Run button by its result, which runs the call as the draft's
 // agent and puts what the model will see in the result. Beside it is what the approval card
@@ -118,7 +230,7 @@ function addRunButtons() {
   if (!draft || !parts) return;
   parts.forEach((part, k) => {
     if (part.kind !== "tool_result") return;
-    const id = draft.request.messages[part.message]?.tool_call_id;
+    const id = messageOf(part)?.tool_call_id;
     const name = id && callName(id);
     const row = name && $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"]`)?.closest(".pl");
     if (!row) return;
@@ -191,7 +303,7 @@ const textOf = (content) => (typeof content === "string" ? content : (content ||
 // edited as text.
 function fieldOf(parts, k) {
   const part = parts[k];
-  const m = draft?.request.messages[part.message];
+  const m = draft && messageOf(part);
   if (!m) return null;
   switch (part.kind) {
     case "prompt":
@@ -294,7 +406,7 @@ function openEditor(k) {
 // innermost part of the row that can be edited.
 $("prompt").addEventListener("click", (event) => {
   // A click that ends selecting text, there or in a box that's open, isn't one to edit with.
-  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing, .run-call")) return;
+  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing, .run-call, .up-to-here, .off-row")) return;
   if (!getSelection().isCollapsed) return;
   const parts = drawn().prompt.parts;
   const span = event.target.closest("[data-f]");

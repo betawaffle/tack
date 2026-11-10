@@ -399,7 +399,11 @@ the controls, with a slug that's only for you; the call a draft becomes, and the
 it, run as the same agent. A tool call in a draft has **Run** by its result, with what the
 approval card would point out beside it, since clicking it is the approval: it runs the call as
 the draft's agent, with that agent's /work and scratch store, which it leaves changed, and puts
-exactly what the model would see in the result, to edit or send. One run at a time per agent. **Send** sends it as a
+exactly what the model would see in the result, to edit or send. One run at a time per agent. Each message
+in a draft has a checkbox where it starts: one that's unticked isn't sent, and stays as a dim row
+to tick again until the draft is sent (a model's message with tool calls and their results go
+together). **Only Up To Here**, on the row being pointed at, leaves out everything after a
+message, which is how to start again from an earlier one. **Send** sends it as a
 custom request that remembers where it came from, so the page shows it against that call, and
 a draft can be made from it in turn. The reply is drawn as it comes in, as text, and as tokens
 once it's done. `/prompt` on its own lists the drafts that haven't been sent and the calls

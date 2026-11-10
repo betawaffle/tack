@@ -381,6 +381,35 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 
+  // Starting again from a call's first message: Only Up To Here leaves out everything after it,
+  // which stays as rows to turn back on until the draft is sent.
+  await p.goto(B + "/prompt#" + promptAt);
+  await p.waitForSelector(".pl");
+  await p.click("#edit");
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".msg-on"));
+  const firstUser = p.locator(".pl.k-user:has(.msg-on)").first();
+  const textOf = (row) => row.evaluate((r) => [...r.querySelectorAll(".pl-text .tok")].map((t) => t.textContent).join(""));
+  const kept = await textOf(firstUser);
+  await firstUser.hover();
+  await firstUser.locator(".up-to-here").click();
+  await p.waitForFunction(() => document.querySelectorAll(".off-row").length >= 2);
+  const upTo = await p.evaluate(() => ({
+    off: document.querySelectorAll(".off-row .msg-on:not(:checked)").length,
+    users: document.querySelectorAll(".pl.k-user:has(.msg-on:checked)").length,
+    reply: !!document.querySelector(".pl.k-assistant:has(.msg-on)"),
+  }));
+  ok(upTo.off >= 2 && upTo.users === 1 && !upTo.reply, `Only Up To Here leaves out the rest, as rows to turn back on (${JSON.stringify(upTo)})`);
+  ok((await textOf(p.locator(".pl.k-user:has(.msg-on)").first())) === kept && kept !== "", "and the message it was on stays, to edit");
+  const offBefore = await p.locator(".off-row").count();
+  await p.locator(".off-row .msg-on").first().check();
+  await p.waitForFunction((n) => document.querySelectorAll(".off-row").length < n, offBefore);
+  ok(true, "a message turned off can be turned back on");
+  await p.reload();
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".msg-on"));
+  ok((await p.locator(".off-row").count()) === offBefore - 1, "and what's turned off is kept with the draft");
+  await p.locator(".off-row").first().scrollIntoViewIfNeeded();
+  await p.screenshot({ path: "shots/msg-on.png" });
+
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
   await p.goto(B + "/prompt#synthetic/3000");
   await p.waitForSelector(".pl.k-tool");

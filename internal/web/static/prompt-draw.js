@@ -308,7 +308,7 @@ function showCounts(data) {
 
 // Copying gives the text as it is rather than as it's drawn: spaces, tabs and newlines instead
 // of the marks for them, and without deleted text, the gutter or what a collapsed row says.
-const NOT_COPIED = ".del, .collapsed, .collapsed-note, .collapsed-changed, .pl-gutter, .ghost, .run-call, [hidden]";
+const NOT_COPIED = ".del, .collapsed, .collapsed-note, .collapsed-changed, .pl-gutter, .ghost, .run-call, .up-to-here, .off-row, [hidden]";
 function copyText(node, range) {
   if (!range.intersectsNode(node)) return "";
   if (node.nodeType === Node.TEXT_NODE) {

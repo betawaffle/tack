@@ -43,7 +43,7 @@ func TestADraftsCallRunsAsItsAgent(t *testing.T) {
 	// A draft with a call the model made, and nothing in its result yet.
 	request := strings.Replace(string(d.Request), `{"role":"user","content":""}`,
 		`{"role":"user","content":"Remember Wren."},{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"remember","arguments":"{\"name\":\"Wren\"}"}},{"id":"c2","type":"function","function":{"name":"remember","arguments":"{\"name\":\"net fail\"}"}}]},{"role":"tool","tool_call_id":"c1","content":""},{"role":"tool","tool_call_id":"c2","content":""}`, 1)
-	if _, err := c.SaveDraft(d.ID, jsontext.Value(request)); err != nil {
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(request), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.RunDraftCall(d.ID, "c1", nil); !errors.Is(err, ErrNoAgentForDraft) {
@@ -86,6 +86,32 @@ func TestADraftsCallRunsAsItsAgent(t *testing.T) {
 	}
 	if _, err := c.RunDraftCall(d.ID, "nope", nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a call that isn't there: %v", err)
+	}
+
+	// Turning off one call's result turns off the model's message that made it, and every
+	// result of that message: what's left is the system prompt, if any, and the user's message.
+	kept, _, _ = c.Draft(d.ID)
+	p, err := c.SaveDraft(d.ID, kept.Request, []int{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _, _ := c.Draft(d.ID); len(again.Off) != 3 || again.Off[0] != 1 || again.Off[2] != 3 {
+		t.Errorf("off = %v", again.Off)
+	}
+	if len(p.Shown) != 1 || p.Shown[0] != 0 || strings.Contains(p.Prompt.Text(), `invoke name="remember"`) {
+		t.Errorf("shown = %v, prompt = %q", p.Shown, p.Prompt.Text())
+	}
+	// What's turned off isn't sent.
+	f.mu.Lock()
+	sentBefore := len(f.bodies)
+	f.mu.Unlock()
+	_, updates, err := c.SendDraft(d.ID)
+	mustFinish(t, updates, err)
+	f.mu.Lock()
+	body := string(f.bodies[sentBefore])
+	f.mu.Unlock()
+	if strings.Contains(body, "tool_call") || !strings.Contains(body, "Remember Wren.") {
+		t.Errorf("sent = %s", body)
 	}
 
 	// After a restart, the agent's state is still what the runs left.
