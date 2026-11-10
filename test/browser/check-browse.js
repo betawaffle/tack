@@ -226,8 +226,25 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting"));
   ok((await p.innerText("#which")) === "Draft of the next call", "a draft can be made from a sent call too");
+  // Scrolled as far as it goes, the last row is still on the screen.
+  const held = await p.evaluate(() => {
+    const s = getComputedStyle(document.getElementById("prompt")).overflowY === "auto" ? document.getElementById("prompt") : document.querySelector(".prompt-inner");
+    s.scrollTop = s.scrollHeight;
+    const view = s.getBoundingClientRect();
+    const last = document.querySelector(".prompt-rows .pl:last-child").getBoundingClientRect().bottom > view.top;
+    // Then with the last row of what the call had at the top.
+    const tok = [...document.querySelectorAll(".tok[data-t]:not(.ins)")].at(-1);
+    const row = tok.closest(".pl");
+    s.scrollTop += row.getBoundingClientRect().top - view.top;
+    return { last, text: row.textContent, top: row.getBoundingClientRect().top };
+  });
+  ok(held.last, "scrolled to the end, the last row is still on the screen");
   await p.click("#edit");
   await p.waitForFunction(() => !document.body.classList.contains("drafting"));
+  ok((await p.locator(".pl.ghost").count()) > 0, "what the draft added fades out");
+  await p.waitForFunction(() => !document.querySelector(".pl.ghost"));
+  const top = await p.evaluate((text) => [...document.querySelectorAll(".pl")].findLast((r) => r.textContent === text)?.getBoundingClientRect().top, held.text);
+  ok(Math.abs(top - held.top) < 1, `and what was on the screen stays where it was (${held.top} then ${top})`);
   ok(p.url().includes("#manual/") && (await p.innerText("#which")).startsWith("Sent draft"), "stopping goes back to the call");
 
   // A made-up prompt, which has tools, for pretty JSON as it's drawn.
