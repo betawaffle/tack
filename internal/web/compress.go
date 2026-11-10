@@ -56,7 +56,7 @@ func compressible(contentType string) bool {
 }
 
 var gzipWriters = sync.Pool{New: func() any {
-	w, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+	w, _ := gzip.NewWriterLevel(nil, gzip.DefaultCompression)
 	return w
 }}
 

@@ -4,7 +4,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"strings"
-	"unicode/utf8"
 )
 
 // A prompt, as a model reads it, is the format's own text around the fields of the request.
@@ -108,9 +107,8 @@ func (t *tokenizer) Tokens(text string) []int {
 			if piece == "" {
 				continue
 			}
-			for _, symbol := range t.merge(piece) {
-				// Each rune of a symbol stands for one byte of the text.
-				out = append(out, utf8.RuneCountInString(symbol))
+			for _, n := range t.pieceTokens(piece) {
+				out = append(out, int(n))
 			}
 		}
 	}

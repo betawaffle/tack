@@ -25,7 +25,7 @@ type tokenizer struct {
 	split   func(string) []string
 
 	mu    sync.Mutex
-	cache map[string]int
+	cache map[string][]int32
 }
 
 // byteLevel maps each byte to the character that stands for it in the vocabulary.
@@ -74,7 +74,7 @@ func loadTokenizer(packed []byte, split func(string) []string) (*tokenizer, erro
 		vocab: file.Model.Vocab, split: split,
 		ranks: make(map[[2]string]int32, len(file.Model.Merges)),
 		added: make(map[string]int32, len(file.AddedTokens)),
-		cache: map[string]int{},
+		cache: map[string][]int32{},
 	}
 	for i, merge := range file.Model.Merges {
 		left, right, ok := strings.Cut(merge, " ")
@@ -126,28 +126,38 @@ const (
 	cacheLimit = 1 << 18
 )
 
-func (t *tokenizer) countPiece(piece string) int {
+func (t *tokenizer) countPiece(piece string) int { return len(t.pieceTokens(piece)) }
+
+// pieceTokens is the byte length of each of a piece's tokens. Most pieces are words that come
+// up again and again, so they're remembered rather than merged every time.
+func (t *tokenizer) pieceTokens(piece string) []int32 {
 	if piece == "" {
-		return 0
+		return nil
 	}
 	if len(piece) < cacheBelow {
 		t.mu.Lock()
-		n, ok := t.cache[piece]
+		lengths, ok := t.cache[piece]
 		t.mu.Unlock()
 		if ok {
-			return n
+			return lengths
 		}
 	}
-	n := len(t.merge(piece))
-	if len(piece) < cacheBelow {
-		t.mu.Lock()
-		if len(t.cache) >= cacheLimit {
-			clear(t.cache)
-		}
-		t.cache[piece] = n
-		t.mu.Unlock()
+	symbols := t.merge(piece)
+	lengths := make([]int32, len(symbols))
+	for i, symbol := range symbols {
+		// Each rune of a symbol stands for one byte of the text.
+		lengths[i] = int32(utf8.RuneCountInString(symbol))
 	}
-	return n
+	if len(piece) >= cacheBelow {
+		return lengths
+	}
+	t.mu.Lock()
+	if len(t.cache) >= cacheLimit {
+		clear(t.cache)
+	}
+	t.cache[piece] = lengths
+	t.mu.Unlock()
+	return lengths
 }
 
 // merge applies merges lowest rank first. It keeps the symbols in a linked list with a heap of
