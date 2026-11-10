@@ -1,18 +1,24 @@
 // A call's prompt as the model read it: every token in its own box, the format's own text set
 // apart from the request's fields, each part of the request starting on its own row with its
 // bars beside it (one per level it's nested at, outermost nearest the text), and, when asked
-// for, what changed since the call before. The address is /prompt#conversation/call.
-"use strict";
+// for, what changed since the call before. This module draws it, and owns what's drawn, the
+// switches for how, and which parts are collapsed.
+import { $, el, escapeHTML, visible } from "./prompt-dom.js";
+import { fitRoom } from "./prompt-room.js";
 
-const $ = (id) => document.getElementById(id);
-const SWITCHES_KEY = "tack.prompt.switches";
-const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false };
-const LABELS = {
+// prompt-layout.js is a plain script, so the tests can load it in Node; it comes first.
+const layout = tackPromptLayout;
+
+export const LABELS = {
   start: "Preamble", effort: "Effort", system: "System", prompt: "Prompt", tools: "Tools", tool: "Tool", user_turn: "User",
   user: "Message", tool_result: "Result", assistant: "Assistant", reasoning: "Reasoning", content: "Reply",
   calls: "Calls", tool_call: "Call", parameter: "Parameter", value: "Value", stop: "Stop", static: "Static", next: "",
 };
-const DEPTHS = 5;
+export const DEPTHS = 5;
+
+// The switches for how it's drawn, kept in this browser.
+const SWITCHES_KEY = "tack.prompt.switches";
+const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false };
 
 function loadSwitches() {
   try {
@@ -31,9 +37,8 @@ function saveSwitches(values) {
 }
 
 let switches = loadSwitches();
-let current = null;
 
-function applySwitches() {
+export function applySwitches() {
   const body = $("prompt");
   body.classList.toggle("show-changes", switches.changes);
   body.classList.toggle("show-cache", switches.cache);
@@ -54,31 +59,8 @@ for (const button of document.querySelectorAll("[data-switch]")) {
     saveSwitches(switches);
     applySwitches();
     // Pretty-printing changes the rows, so it draws again.
-    if (name === "pretty" && current) render(current.data);
+    if (name === "pretty") redraw();
   });
-}
-
-function el(tag, cls, text) {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-const escapeHTML = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-
-// Text with its spaces and tabs drawn, so a token that's only whitespace can be seen, as HTML,
-// and a class for the element it goes in. A single leading space, which most tokens that have
-// a space have, is drawn by CSS (.sp) rather than by an element of its own.
-function visible(text) {
-  if (text.startsWith(" ") && !text.includes(" ", 1) && !text.includes("\t")) return { cls: " sp", html: escapeHTML(text.slice(1)) };
-  let html = "";
-  for (const ch of text) {
-    if (ch === " ") html += '<span class="ws">·</span>';
-    else if (ch === "\t") html += '<span class="ws">→   </span>';
-    else html += escapeHTML(ch);
-  }
-  return { cls: "", html };
 }
 
 // Which parts are collapsed, by what they are rather than their index, so the same part stays
@@ -86,11 +68,11 @@ function visible(text) {
 const collapsedKeys = new Set();
 const openedKeys = new Set();
 const COLLAPSED_AT_FIRST = new Set(["static"]);
-const isCollapsed = (parts, k) => {
+export const isCollapsed = (parts, k) => {
   const key = partKey(parts, k);
   return collapsedKeys.has(key) || (COLLAPSED_AT_FIRST.has(parts[k].kind) && !openedKeys.has(key));
 };
-function setCollapsed(parts, k, collapsed) {
+export function setCollapsed(parts, k, collapsed) {
   const key = partKey(parts, k);
   if (collapsed) {
     collapsedKeys.add(key);
@@ -104,6 +86,16 @@ function partKey(parts, k) {
   const out = [];
   for (; k >= 0; k = parts[k].parent) out.unshift(`${parts[k].kind}.${parts[k].message}.${parts[k].call || 0}`);
   return out.join("/");
+}
+
+// Collapse All folds every top-level part that has a name; Expand All opens everything.
+export function collapseAll(collapsed) {
+  if (!shown) return;
+  const parts = shown.prompt.parts;
+  parts.forEach((part, k) => {
+    if (collapsed ? part.parent === -1 && LABELS[part.kind] && part.kind !== "start" : true) setCollapsed(parts, k, collapsed);
+  });
+  redraw({ eager: true });
 }
 
 // What the next call can't get from the host's cache. The host caches a call's prompt in
@@ -207,16 +199,18 @@ function rowHTML(r, parts) {
 const BLOCK_ROWS = 200;
 let drawing = 0;
 
-// eager draws every block at once, for when what's on screen has to stay put. drawAllNext
-// asks that of the next drawing, wherever it comes from.
-let drawAllNext = false;
-function render(data, done, eager) {
-  eager = eager || drawAllNext;
-  drawAllNext = false;
+// What's drawn: the data render was last given.
+let shown = null;
+export const drawn = () => shown;
+
+// render draws data. eager draws every block at once, for when what's on the screen has to
+// stay put; done is called once it's all drawn.
+export function render(data, { eager = false, done = null } = {}) {
+  shown = data;
   const parts = data.prompt.parts;
   const collapsed = new Set(parts.map((_, k) => k).filter((k) => isCollapsed(parts, k)));
   cache = cacheOf(data);
-  const { rows } = tackPromptLayout.layout(data, { pretty: switches.pretty, collapsed });
+  const { rows } = layout.layout(data, { pretty: switches.pretty, collapsed });
   const body = $("prompt");
   const inner = el("div", "prompt-inner");
   // Rows go in a box as wide as the widest, so every row's background reaches the end when
@@ -226,7 +220,7 @@ function render(data, done, eager) {
   // Room past the last row (see .prompt-end).
   const end = el("div", "prompt-end");
   let longest = 0;
-  for (const r of rows) longest = Math.max(longest, r.indent + tackPromptLayout.rowText(r).length);
+  for (const r of rows) longest = Math.max(longest, r.indent + layout.rowText(r).length);
   box.style.setProperty("--longest", `${longest}ch`);
   inner.append(box, end);
   body.replaceChildren(inner);
@@ -250,6 +244,10 @@ function render(data, done, eager) {
     box.append(div);
     at = end;
   };
+  const finish = () => {
+    fitRoom();
+    if (done) done();
+  };
   block();
   if (eager) while (at < rows.length) block();
   const more = () => {
@@ -257,16 +255,21 @@ function render(data, done, eager) {
     const until = performance.now() + 12;
     while (at < rows.length && performance.now() < until) block();
     if (at < rows.length) setTimeout(more, 0);
-    else {
-      fitRoom();
-      if (done) done();
-    }
+    else finish();
   };
   if (at < rows.length) setTimeout(more, 0);
-  else {
-    fitRoom();
-    if (done) done();
-  }
+  else finish();
+}
+
+// redraw draws what's drawn again, after something about how it's drawn changed.
+export function redraw(options) {
+  if (shown) render(shown, options);
+}
+
+// clear draws nothing.
+export function clear() {
+  shown = null;
+  $("prompt").replaceChildren();
 }
 
 // Whether tack's count of the prompt and the reply is the host's.

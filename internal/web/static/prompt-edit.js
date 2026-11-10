@@ -1,51 +1,63 @@
-// Editing a draft of the next call, and sending it: the text boxes over a part's rows, the call
-// controls under the draft, and the reply drawn as it comes in. Loaded after prompt-view.js.
-"use strict";
+// Editing a draft of the next call, and sending it. A draft is the call being looked at, its
+// reply, and an empty result for each tool call in it, kept by tack as it's changed, at
+// #draft/<id>. Clicking a part's text opens it in a text box over it; when the box loses focus,
+// the draft is saved and drawn again, compared with the call it came from. This module owns the
+// draft that's open.
+import { $, el, showError, hideError } from "./prompt-dom.js";
+import { render, drawn, clear } from "./prompt-draw.js";
+import { keepView, keepPlace } from "./prompt-hold.js";
+import { go } from "./prompt-nav.js";
+import { showAgents } from "./prompt-agents.js";
+import { startStream, streamText, endStream } from "./prompt-stream.js";
 
-// Editing. A draft is the next call: the call being looked at, its reply, and an empty
-// result for each tool call in it. It's kept by tack as it's changed, so it's there to come
-// back to, at #draft/<id>. Clicking a part's text opens it in a text box over it; when the box
-// loses focus, the draft is saved and drawn again, compared with the call it came from.
 let draft = null;
 
-// Edit opens a draft of the call after this one: the one already started, or a new one.
-async function startDraft() {
-  const { conv, data } = current;
-  const from = conv === "manual" ? data.call : `${conv}/${data.call}`;
+// drafting says whether a draft is open.
+export const drafting = () => draft !== null;
+
+// startDraft opens a draft of the call after from (conversation/call or manual/call): the one
+// already started, or a new one.
+export async function startDraft(from) {
   const res = await fetch("/api/drafts", { method: "POST", body: JSON.stringify({ from }) });
   if (!res.ok) return showError((await res.text()) || res.statusText);
-  holdNext = true;
-  location.hash = `draft/${(await res.json()).id}`;
+  go(`draft/${(await res.json()).id}`, { hold: true });
 }
 
-function showError(text) {
-  $("error").textContent = text;
-  $("error").hidden = false;
-}
-
-// A draft, at #draft/<id>.
-async function loadDraft(id) {
-  $("error").hidden = true;
+// loadDraft shows a draft. A sent one is the call it became.
+export async function loadDraft(id, { eager = false } = {}) {
+  hideError();
   const res = await fetch(`/api/drafts/${id}`);
   if (!res.ok) {
     showError((await res.text()) || res.statusText);
-    $("prompt").replaceChildren();
+    clear();
     return;
   }
   const { draft: d, prompt: data } = await res.json();
-  // A sent draft is the call it became.
-  if (d.sent) return location.replace(`#manual/${d.sent}`);
+  if (d.sent) return go(`manual/${d.sent}`, { replace: true });
   draft = { id: d.id, from: d.from || "", request: d.request, agent: d.agent || "" };
   $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/";
   $("edit").hidden = false;
   await showSendBar();
-  // Drawn as it is: going to it holds the view, if anything does.
-  showDraft(data, null);
+  show(data, { eager });
+}
+
+// stopDraft goes back to the call the draft came from. The draft stays, to come back to.
+export function stopDraft() {
+  go(draft.from, { hold: true });
+}
+
+// closeDraft puts the draft away, when the page goes to something else.
+export function closeDraft() {
+  if (!draft) return;
+  draft = null;
+  $("send-bar").hidden = true;
+  document.body.classList.remove("drafting");
+  $("edit").textContent = "Edit";
 }
 
 // Saves the draft, one save at a time so they land in order, and gives back its prompt.
 let saving = Promise.resolve();
-function saveDraft() {
+function save() {
   const request = structuredClone(draft.request);
   const id = draft.id;
   const result = saving.then(async () => {
@@ -59,36 +71,26 @@ function saveDraft() {
 
 // Saves the draft and draws it again, keeping part anchor, or else what's on the screen, in
 // place.
-async function previewDraft(anchor) {
+async function preview(anchor) {
   let data;
   try {
-    data = await saveDraft();
+    data = await save();
   } catch (err) {
     return showError(`Saving the draft failed: ${err.message}`);
   }
-  showDraft(data, anchor);
+  if (anchor === undefined) keepView(() => show(data, { eager: true }));
+  else keepPlace(anchor, () => show(data, { eager: true }));
 }
 
-function showDraft(data, anchor) {
+function show(data, options) {
   data.before_draft = true;
-  current = { conv: "draft", data, draft: true };
   $("which").textContent = "Draft of the next call";
   $("prev").disabled = $("next").disabled = true;
   $("edit").textContent = "Stop Editing";
   document.body.classList.add("drafting");
   document.title = "Draft · tack";
-  if (anchor === null) render(data, null, drawAllNext);
-  else if (anchor === undefined) keepView(() => render(data, null, true));
-  else keepPlace(anchor, () => render(data, null, true));
+  render(data, options);
 }
-
-// Stop Editing goes back to the call the draft came from. The draft stays, to come back to.
-function stopDraft() {
-  holdNext = true;
-  location.hash = draft.from || "";
-}
-
-$("edit").addEventListener("click", () => (draft ? stopDraft() : startDraft()));
 
 // A message's text, which can be a string or a list of parts.
 const textOf = (content) => (typeof content === "string" ? content : (content || []).map((p) => p.text || "").join("\n\n"));
@@ -139,7 +141,7 @@ function fieldOf(parts, k) {
 
 // openEditor puts a text box over the rows of part k, with the field's text in it.
 function openEditor(k) {
-  const parts = current.data.prompt.parts;
+  const parts = drawn().prompt.parts;
   const field = fieldOf(parts, k);
   if (!field) return;
   const rows = [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`[data-f="${k}"], .pl-bars [data-p="${k}"]`));
@@ -179,7 +181,7 @@ function openEditor(k) {
     done = true;
     if (save && area.value !== was) {
       field.set(area.value);
-      previewDraft(k);
+      preview(k);
       return;
     }
     editing.remove();
@@ -202,7 +204,7 @@ $("prompt").addEventListener("click", (event) => {
   // A click that ends selecting text, there or in a box that's open, isn't one to edit with.
   if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing")) return;
   if (!getSelection().isCollapsed) return;
-  const parts = current.data.prompt.parts;
+  const parts = drawn().prompt.parts;
   const span = event.target.closest("[data-f]");
   if (span && fieldOf(parts, Number(span.dataset.f))) return openEditor(Number(span.dataset.f));
   const row = event.target.closest(".pl");
@@ -219,8 +221,8 @@ $("prompt").addEventListener("click", (event) => {
   if (inside.length === 1) return openEditor(inside[0]);
 });
 
-// The call controls, under a draft: the effort and most tokens always, the rest under More,
-// with what the call could cost, and Send. What's set here goes in the draft's request.
+// The call controls, under a draft: the agent, the effort and most tokens always, the rest
+// under More, with what the call could cost, and Send. What's set here goes in the draft.
 const PAGE_REQUIRED = document.querySelector('meta[name="tack-page"]')?.dataset.required || "";
 let efforts = null;
 let estimating = 0;
@@ -245,78 +247,21 @@ async function showSendBar() {
   effort.value = req.reasoning?.effort || "";
   $("send-max").value = req.max_tokens ?? "";
   for (const input of document.querySelectorAll("[data-param]")) input.value = req[input.dataset.param] ?? "";
-  await showAgents();
+  await showAgents(draft.agent, setAgent);
   $("send-bar").hidden = false;
   estimate();
 }
 
-// The agent a draft's tools run as: none, one of the agents, or a new one. Agents are shown by
-// their slug, or by their ID if they have none.
-const NEW_AGENT = "new";
-async function showAgents() {
-  let agents = [];
-  try {
-    agents = await (await fetch("/api/agents")).json();
-  } catch {}
-  const select = $("send-agent");
-  select.replaceChildren(el("option", "", "No agent"));
-  select.firstChild.value = "";
-  for (const a of agents) {
-    const option = el("option", "", a.slug || a.id);
-    option.value = a.id;
-    option.title = a.id;
-    select.append(option);
-  }
-  const add = el("option", "", "New agent…");
-  add.value = NEW_AGENT;
-  select.append(add);
-  select.value = draft.agent;
-  $("agent-rename").hidden = !draft.agent;
-  $("agent-naming").hidden = true;
-}
-
-let naming = null; // "new" or "rename" while the slug box is open
-function nameAgent(mode) {
-  naming = mode;
-  const slug = $("agent-slug");
-  slug.value = mode === "rename" ? $("send-agent").selectedOptions[0]?.textContent || "" : "";
-  if (mode === "rename" && slug.value === draft.agent) slug.value = "";
-  $("agent-naming").hidden = false;
-  $("agent-rename").hidden = true;
-  slug.focus();
-}
-
-async function setDraftAgent(agent) {
+// setAgent sets the agent the draft's tools run as, and says whether it did.
+async function setAgent(agent) {
   const res = await fetch(`/api/drafts/${draft.id}/agent`, { method: "PUT", body: JSON.stringify({ agent }) });
-  if (!res.ok) return showError((await res.text()) || res.statusText);
-  draft.agent = agent;
-}
-
-$("send-agent").addEventListener("change", async () => {
-  const value = $("send-agent").value;
-  if (value === NEW_AGENT) return nameAgent("new");
-  await setDraftAgent(value);
-  await showAgents();
-});
-$("agent-rename").addEventListener("click", () => nameAgent("rename"));
-$("agent-cancel").addEventListener("click", () => showAgents());
-async function saveAgentName() {
-  const slug = $("agent-slug").value;
-  if (naming === "new") {
-    const res = await fetch("/api/agents", { method: "POST", body: JSON.stringify({ slug }) });
-    if (!res.ok) return showError((await res.text()) || res.statusText);
-    await setDraftAgent((await res.json()).id);
-  } else {
-    const res = await fetch(`/api/agents/${draft.agent}/slug`, { method: "POST", body: JSON.stringify({ slug }) });
-    if (!res.ok) return showError((await res.text()) || res.statusText);
+  if (!res.ok) {
+    showError((await res.text()) || res.statusText);
+    return false;
   }
-  await showAgents();
+  draft.agent = agent;
+  return true;
 }
-$("agent-save").addEventListener("click", saveAgentName);
-$("agent-slug").addEventListener("keydown", (event) => {
-  if (event.key === "Enter") saveAgentName();
-  else if (event.key === "Escape") showAgents();
-});
 
 // A number from a box, or undefined to leave it out.
 const numberIn = (input) => (input.value.trim() === "" ? undefined : Number(input.value));
@@ -324,7 +269,7 @@ const numberIn = (input) => (input.value.trim() === "" ? undefined : Number(inpu
 function setParam(key, value) {
   if (value === undefined || Number.isNaN(value)) delete draft.request[key];
   else draft.request[key] = value;
-  saveDraft().catch((err) => showError(`Saving the draft failed: ${err.message}`));
+  save().catch((err) => showError(`Saving the draft failed: ${err.message}`));
 }
 
 $("send-effort").addEventListener("change", () => {
@@ -335,7 +280,7 @@ $("send-effort").addEventListener("change", () => {
     if (!Object.keys(draft.request.reasoning).length) delete draft.request.reasoning;
   }
   // The effort is written into the prompt, so it's drawn again.
-  previewDraft();
+  preview();
   estimate();
 });
 $("send-max").addEventListener("change", () => {
@@ -363,68 +308,17 @@ async function estimate() {
   }
 }
 
-// Send sends the draft as a call of its own, then shows that call.
-// While a sent draft's reply comes in, its text is drawn after the draft as it arrives, in rows
-// of its own without tokens: the host sends text, and tack splits it into tokens when the call
-// is done and drawn in full.
-let stream = null;
-function startStream() {
-  const box = $("prompt").querySelector(".prompt-rows");
-  if (!box) return;
-  const block = el("div", "pblock laid streaming");
-  box.append(block);
-  // Its lines are numbered on from the draft's last.
-  const nums = box.querySelectorAll(".pl-num");
-  let number = 0;
-  for (let i = nums.length - 1; i >= 0 && !number; i--) number = parseInt(nums[i].textContent.split("–").at(-1), 10) || 0;
-  stream = { block, kind: null, text: null, number, first: true };
-}
-function streamRow(kind, numbered) {
-  const fresh = kind !== stream.kind;
-  let bars = "";
-  const chain = ["assistant", kind];
-  for (let d = DEPTHS - 1; d >= 0; d--) {
-    const top = d === 0 ? stream.first : fresh;
-    bars += chain[d] === undefined ? "<i></i>" : `<i class="k-${chain[d]}${top ? " top" : ""}"></i>`;
-  }
-  const row = el("div", `pl k-${kind} gen${fresh ? " starts" : ""}`);
-  row.innerHTML = `<div class="pl-gutter"><div class="pl-part">${fresh ? LABELS[kind] : ""}</div><div class="pl-bars">${bars}</div>` +
-    `<div class="pl-num">${numbered ? ++stream.number : ""}</div></div><div class="pl-text"></div>`;
-  stream.block.append(row);
-  stream.kind = kind;
-  stream.text = row.lastElementChild;
-  stream.first = false;
-}
-function streamText(kind, text) {
-  if (!stream) return;
-  if (kind !== stream.kind) streamRow(kind, false);
-  text.split("\n").forEach((line, i) => {
-    if (i > 0) {
-      stream.text.insertAdjacentHTML("beforeend", '<span class="ws nl">↵</span>');
-      streamRow(kind, true);
-    }
-    if (!line) return;
-    const v = visible(line);
-    stream.text.insertAdjacentHTML("beforeend", `<span class="f g${v.cls}">${v.html}</span>`);
-  });
-  fitRoom();
-}
-
-// Going to another address draws it with what's on the screen held in place when holdNext is
-// set. afterSend says it's to the call a draft just became, whose tokens line up with the
-// draft's through the same call they both came from.
-let holdNext = false;
-let afterSend = false;
-
+// Send sends the draft as a call of its own, drawing the reply as it comes in, then shows that
+// call.
 $("send").addEventListener("click", async () => {
   const button = $("send");
   button.disabled = true;
   button.textContent = "Sending…";
-  $("error").hidden = true;
+  hideError();
   let id = null;
   try {
     // Whatever was changed last is saved before it's sent.
-    await saveDraft();
+    await save();
     const res = await fetch(`/api/drafts/${draft.id}/send`, {
       method: "POST",
       headers: { "X-Tack-Page-Required": PAGE_REQUIRED },
@@ -434,6 +328,7 @@ $("send").addEventListener("click", async () => {
     const decoder = new TextDecoder();
     let buffered = "";
     let failed = "";
+    let streaming = false;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -445,7 +340,8 @@ $("send").addEventListener("click", async () => {
         if (u.kind === "call") id = u.id;
         if (u.kind === "error") failed = u.text;
         if (u.kind === "content" || u.kind === "reasoning") {
-          if (!stream) startStream();
+          if (!streaming) startStream();
+          streaming = true;
           button.textContent = "Receiving…";
           streamText(u.kind, u.text);
         }
@@ -453,16 +349,11 @@ $("send").addEventListener("click", async () => {
     }
     if (failed) throw new Error(failed);
   } catch (err) {
-    $("error").textContent = `Sending failed: ${err.message}`;
-    $("error").hidden = false;
+    showError(`Sending failed: ${err.message}`);
   } finally {
     button.disabled = false;
     button.textContent = "Send";
   }
-  stream = null;
-  if (id) {
-    afterSend = holdNext = true;
-    location.hash = `manual/${id}`;
-  }
+  endStream();
+  if (id) go(`manual/${id}`, { hold: true, sent: true });
 });
-

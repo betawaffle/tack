@@ -1,51 +1,14 @@
-// Keeping what's on the screen in place when the prompt page draws again: the room after the
-// last row, holding a part's row or the first token on the screen that's in both drawings,
-// and fading out rows that are gone. Loaded after prompt-draw.js.
-"use strict";
+// Keeping what's on the screen in place when the page draws again: a part's row, or the first
+// token on the screen that's in both drawings, with rows that are gone fading out. The drawings
+// before and after are what the drawing module has drawn then.
+import { $ } from "./prompt-dom.js";
+import { drawn } from "./prompt-draw.js";
+import { scroller, scrollPageTo, scrollBack } from "./prompt-room.js";
 
-// The element that scrolls up and down: the page body, or the column when lines aren't
-// wrapped. Drawing again replaces the column, so it's looked up each time.
-const scroller = () => (switches.wrap ? $("prompt") : $("prompt").querySelector(".prompt-inner") || $("prompt"));
 const firstRowOf = (k) => $("prompt").querySelector(`.pl:not([hidden]) [data-f="${k}"], .pl:not([hidden]) .pl-bars [data-p="${k}"], .pl.editing`)?.closest(".pl");
 
-// The room past the last row: enough to scroll the last line up to the top of the screen and
-// no further, except for more that's needed for a while to keep something where it was on the
-// screen, which goes as the page is scrolled back up. top is where the page is about to be
-// scrolled to.
-function fitRoom(top) {
-  const s = scroller();
-  const end = $("prompt").querySelector(".prompt-end");
-  const last = end?.previousElementSibling.lastElementChild?.lastElementChild;
-  if (!last) return;
-  // A block that isn't laid out has no real place for its rows, so the last is laid out.
-  last.parentElement.classList.add("laid");
-  const box = s.getBoundingClientRect();
-  // Where a thing is from the top of what scrolls.
-  const at = (node) => s.scrollTop + node.getBoundingClientRect().top - box.top;
-  // What comes after the room, which is the column's padding.
-  const below = s.scrollHeight - at(end) - end.getBoundingClientRect().height;
-  const fits = (y) => y + s.clientHeight - at(end) - below;
-  end.style.height = `${Math.max(fits(at(last)), fits(top ?? s.scrollTop), 0)}px`;
-}
-// Scrolling events don't bubble, but they can be caught on the way down, whichever element
-// scrolls.
-$("prompt").addEventListener("scroll", () => fitRoom(), true);
-new ResizeObserver(() => fitRoom()).observe($("prompt"));
-
-// Scrolls so that the page's top is top, with the room for it.
-function scrollPageTo(top) {
-  fitRoom(top);
-  scroller().scrollTop = top;
-}
-
-// Scrolls back to where it was, or as near as the usual room allows, when nothing's held.
-function scrollBack(top) {
-  fitRoom(0);
-  scroller().scrollTop = top;
-}
-
 // keepPlace draws again with part k's first row where it was on the screen.
-function keepPlace(k, draw) {
+export function keepPlace(k, draw) {
   const before = firstRowOf(k);
   const top = before?.getBoundingClientRect().top;
   const scrolled = scroller().scrollTop;
@@ -60,18 +23,6 @@ function keepPlace(k, draw) {
   for (let block = after.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
   scrollPageTo(scrolled + after.getBoundingClientRect().top - top);
 }
-
-// Collapse All folds every top-level part that has a name; Expand All opens everything.
-function collapseAll(collapsed) {
-  if (!current) return;
-  const parts = current.data.prompt.parts;
-  parts.forEach((part, k) => {
-    if (collapsed ? part.parent === -1 && LABELS[part.kind] && part.kind !== "start" : true) setCollapsed(parts, k, collapsed);
-  });
-  render(current.data, null, true);
-}
-$("collapse-all").addEventListener("click", () => collapseAll(true));
-$("expand-all").addEventListener("click", () => collapseAll(false));
 
 // How a drawing's tokens line up with those of the call a draft came from: a draft's through
 // what changed, and so a sent draft's just after it's sent (against_base), a call's one for
@@ -154,8 +105,8 @@ function smoothScroll(top) {
 // the first token on the screen that's in both. Rows on the screen that aren't in the new
 // drawing fade out, and then the room they took closes up. With nothing on the screen that
 // the call has (only what a draft added), it first scrolls up to the nearest row that it has.
-function keepView(draw) {
-  const was = current ? lineUp(current.data) : null;
+export function keepView(draw) {
+  const was = drawn() ? lineUp(drawn()) : null;
   const has = (row) => [...row.querySelectorAll(".tok[data-t]")].some((t) => was.toBase(Number(t.dataset.t)) !== null);
   if (was) {
     const on = rowsOnScreen();
@@ -174,7 +125,7 @@ function keepView(draw) {
 }
 
 function holdView(draw) {
-  const was = current ? lineUp(current.data) : null;
+  const was = drawn() ? lineUp(drawn()) : null;
   const scrolled = scroller().scrollTop;
   // For each row on the screen, its tokens that the base call has, as the base call's, where
   // the first of those is, and whether it has any tokens at all.
@@ -195,7 +146,7 @@ function holdView(draw) {
   });
   const result = draw();
   const settle = () => {
-    const now = lineUp(current.data);
+    const now = lineUp(drawn());
     const tokenAt = (b) => {
       const t = now.fromBase(b);
       const node = t === null ? null : $("prompt").querySelector(`.tok[data-t="${t}"]`);
@@ -219,8 +170,7 @@ function holdView(draw) {
     pin();
     if (motion) fadeOut(rows, now, tokenAt, anchor, pin);
   };
-  if (result && result.then) return result.then(settle);
-  settle();
+  return Promise.resolve(result).then(settle);
 }
 
 // fadeOut puts back the rows that were on the screen and aren't in the new drawing, where they
@@ -273,15 +223,3 @@ function fadeOut(rows, now, tokenAt, anchor, pin) {
     if (anchor.isConnected) pin();
   });
 }
-
-// Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it.
-$("prompt").addEventListener("click", (event) => {
-  const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
-  if (!target || !current) return;
-  const parts = current.data.prompt.parts;
-  const k = Number(target.dataset.p);
-  setCollapsed(parts, k, !isCollapsed(parts, k));
-  // Keep the row that was clicked where it was on the screen.
-  keepPlace(Number(target.dataset.p), () => render(current.data, null, true));
-});
-

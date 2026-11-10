@@ -1,5 +1,14 @@
-// Loading a call, a sent draft or a made-up prompt, and moving between calls. Loaded last.
-"use strict";
+// The prompt page: a call, a sent draft, a draft or a made-up prompt, as the model reads it. This
+// module loads whichever the address names and wires up the header; the others draw it, keep
+// the view in place, and edit drafts.
+import { $, el, showError, hideError } from "./prompt-dom.js";
+import { render, drawn, clear, applySwitches, isCollapsed, setCollapsed, collapseAll } from "./prompt-draw.js";
+import { keepPlace } from "./prompt-hold.js";
+import { go, onAddress, start } from "./prompt-nav.js";
+import { drafting, startDraft, loadDraft, stopDraft, closeDraft } from "./prompt-edit.js";
+
+// Where the page is: the address's two parts, like conversation and call.
+let where = { conv: "", call: "" };
 
 // A made-up conversation of about this many tokens, of every kind of part, for seeing how
 // the page copes with a big prompt: /prompt#synthetic/250000.
@@ -35,16 +44,12 @@ async function loadSynthetic(size) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: request.model, request }),
   });
-  if (!res.ok) {
-    $("error").textContent = (await res.text()) || res.statusText;
-    $("error").hidden = false;
-    return;
-  }
+  if (!res.ok) return showError((await res.text()) || res.statusText);
   const data = await res.json();
   times.push(["Fetched", performance.now() - t]);
-  current = { conv: "synthetic", data };
   $("which").textContent = `Synthetic, about ${n.toLocaleString("en-US")} tokens`;
   $("prev").disabled = $("next").disabled = true;
+  $("edit").hidden = true;
   t = performance.now();
   const show = () => {
     for (const [label, ms] of times) {
@@ -53,76 +58,55 @@ async function loadSynthetic(size) {
       $("counts").append(item);
     }
   };
-  render(data, () => {
-    times.push(["All drawn", performance.now() - t]);
-    show();
+  render(data, {
+    done: () => {
+      times.push(["All drawn", performance.now() - t]);
+      show();
+    },
   });
   // The first screen, once the browser has laid it out.
   $("prompt").scrollHeight;
   times.push(["First screen", performance.now() - t]);
 }
 
-async function load() {
-  const [conv, call] = location.hash.slice(1).split("/");
-  if (draft) {
-    // Going to another call throws the draft away.
-    draft = null;
-    $("send-bar").hidden = true;
-    document.body.classList.remove("drafting");
-    $("edit").textContent = "Edit";
-  }
-  if (conv === "draft") return loadDraft(call);
-  if (conv === "synthetic") return loadSynthetic(call);
-  if (conv === "manual") return loadManual(call);
+// A call in a conversation; with no call, its last.
+async function loadCall(conv, call, { eager }) {
   $("back").href = conv ? `/#${conv}` : "/";
-  $("error").hidden = true;
-  if (!conv) {
-    $("error").textContent = "Open this from a reply's Prompt button.";
-    $("error").hidden = false;
-    return;
-  }
+  if (!conv) return showError("Open this from a reply's Prompt button.");
   let id = call;
   if (!id) {
     const res = await fetch(`/api/conversations/${conv}`);
     const data = res.ok ? await res.json() : { items: [] };
     id = data.items.filter((i) => i.call).at(-1)?.call;
-    if (!id) {
-      $("error").textContent = "This conversation hasn't called the model yet.";
-      $("error").hidden = false;
-      return;
-    }
+    if (!id) return showError("This conversation hasn't called the model yet.");
   }
   const res = await fetch(`/api/conversations/${conv}/calls/${id}/prompt`);
   if (!res.ok) {
-    $("error").textContent = (await res.text()) || res.statusText;
-    $("error").hidden = false;
-    $("prompt").replaceChildren();
+    showError((await res.text()) || res.statusText);
+    clear();
     return;
   }
   const data = await res.json();
-  current = { conv, data };
   $("edit").hidden = false;
   const n = data.calls.indexOf(data.call);
   $("which").textContent = `Call ${n + 1} of ${data.calls.length}`;
   $("prev").disabled = n <= 0;
   $("next").disabled = n >= data.calls.length - 1;
   document.title = `Prompt, Call ${n + 1} · tack`;
-  render(data);
+  render(data, { eager });
 }
 
-// A sent draft: shown like any call, with the chain of drafts it came from to move along.
-async function loadManual(id) {
-  $("error").hidden = true;
+// A sent draft: shown like any call, with the chain of drafts it came from to move along. Just
+// after it's sent, its tokens line up with the draft's through the call they came from.
+async function loadManual(id, { eager, sent }) {
   const res = await fetch(`/api/manual-calls/${id}/prompt`);
   if (!res.ok) {
-    $("error").textContent = (await res.text()) || res.statusText;
-    $("error").hidden = false;
-    $("prompt").replaceChildren();
+    showError((await res.text()) || res.statusText);
+    clear();
     return;
   }
   const data = await res.json();
-  if (afterSend) data.against_base = true;
-  current = { conv: "manual", data };
+  if (sent) data.against_base = true;
   const root = data.calls.find((c) => !c.startsWith("manual/"));
   $("back").href = root ? `/#${root.split("/")[0]}` : "/";
   $("edit").hidden = false;
@@ -131,29 +115,53 @@ async function loadManual(id) {
   $("prev").disabled = n <= 0;
   $("next").disabled = n >= data.calls.length - 1;
   document.title = "Sent draft · tack";
-  render(data);
+  render(data, { eager });
 }
 
-function go(step) {
-  if (!current) return;
-  const calls = current.data.calls;
-  const n = calls.indexOf(current.data.call) + step;
-  if (n < 0 || n >= calls.length) return;
-  // A sent draft's chain names each call in full; a conversation's are its own.
-  location.hash = calls[n].includes("/") ? calls[n] : `${current.conv}/${calls[n]}`;
-}
-
-$("prev").addEventListener("click", () => go(-1));
-$("next").addEventListener("click", () => go(1));
-window.addEventListener("hashchange", () => {
-  if (!holdNext) return load();
-  holdNext = false;
-  drawAllNext = true;
-  keepView(load).finally(() => {
-    afterSend = false;
-    // From here on it's a call like any other.
-    if (current) delete current.data.against_base;
-  });
+onAddress((options) => {
+  const [conv = "", call = ""] = location.hash.slice(1).split("/");
+  where = { conv, call };
+  hideError();
+  if (conv !== "draft") closeDraft();
+  if (conv === "draft") return loadDraft(call, options);
+  if (conv === "synthetic") return loadSynthetic(call);
+  if (conv === "manual") return loadManual(call, options);
+  return loadCall(conv, call, options);
 });
+
+// Moving along the calls: a sent draft's chain names each call in full; a conversation's are
+// its own.
+function step(by) {
+  const data = drawn();
+  if (!data?.calls) return;
+  const n = data.calls.indexOf(data.call) + by;
+  if (n < 0 || n >= data.calls.length) return;
+  go(data.calls[n].includes("/") ? data.calls[n] : `${where.conv}/${data.calls[n]}`);
+}
+$("prev").addEventListener("click", () => step(-1));
+$("next").addEventListener("click", () => step(1));
+
+// Edit opens a draft of the call after the one shown; in a draft, Stop Editing goes back.
+$("edit").addEventListener("click", () => {
+  if (drafting()) return stopDraft();
+  const data = drawn();
+  if (!data) return;
+  startDraft(where.conv === "manual" ? data.call : `${where.conv}/${data.call}`);
+});
+
+// Clicking a part's bar or name collapses it to one row, and clicking that row's … opens it,
+// with the row that was clicked kept where it was on the screen.
+$("prompt").addEventListener("click", (event) => {
+  const target = event.target.closest(".pl-bars [data-p], .pl-part[data-p], .collapsed[data-p]");
+  const data = drawn();
+  if (!target || !data) return;
+  const parts = data.prompt.parts;
+  const k = Number(target.dataset.p);
+  setCollapsed(parts, k, !isCollapsed(parts, k));
+  keepPlace(k, () => render(data, { eager: true }));
+});
+$("collapse-all").addEventListener("click", () => collapseAll(true));
+$("expand-all").addEventListener("click", () => collapseAll(false));
+
 applySwitches();
-load();
+start();
