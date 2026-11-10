@@ -330,6 +330,12 @@ function scrollTo(top) {
   scroller().scrollTop = top;
 }
 
+// Scrolls back to where it was, or as near as the usual room allows, when nothing's held.
+function scrollBack(top) {
+  fitRoom(0);
+  scroller().scrollTop = top;
+}
+
 // keepPlace draws again with part k's first row where it was on the screen.
 function keepPlace(k, draw) {
   const before = firstRowOf(k);
@@ -338,7 +344,7 @@ function keepPlace(k, draw) {
   draw();
   const after = $("prompt").querySelector(`.pl [data-f="${k}"], .pl .pl-bars [data-p="${k}"]`)?.closest(".pl");
   if (!before || !after) {
-    scrollTo(scrolled);
+    scrollBack(scrolled);
     return;
   }
   // Blocks off screen have only an estimated height, so the ones down to the part are laid
@@ -434,7 +440,7 @@ function keepView(draw) {
       }
     }
     if (!anchor) {
-      scrollTo(scrolled);
+      scrollBack(scrolled);
       return;
     }
     for (let block = anchor.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
