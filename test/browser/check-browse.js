@@ -268,9 +268,17 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.fill(".edit-box", "paced reply");
   await p.keyboard.press("Enter");
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("paced"));
+  // Narrow, so the reply's lines have to wrap as they come in.
+  const wide = p.viewportSize();
+  await p.setViewportSize({ width: 430, height: wide.height });
   await p.click("#send");
   await p.waitForSelector(".streaming .pl.k-content");
   ok(/^Receiving/.test(await p.innerText("#send")) && (await p.locator(".streaming .pl.k-reasoning").count()) === 1, "the reply is drawn as it comes in");
+  await p.waitForFunction(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.textContent.length > 30));
+  const overflow = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].filter((t) => t.scrollWidth > t.clientWidth + 1).length);
+  const wrapped = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.getBoundingClientRect().height > 30));
+  ok(overflow === 0 && wrapped, `and wraps like the rest (${overflow} rows run off the side)`);
+  await p.setViewportSize(wide);
   await p.waitForFunction(() => location.hash.startsWith("#manual/") && /Sent draft, 2 of 2/.test(document.getElementById("which").textContent), null, { timeout: 15000 });
   ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0, "the sent call shows, with what changed from the call it came from");
   ok(!(await p.locator("#send-bar").isVisible()) && !(await p.isDisabled("#prev")), "and steps back to that call");
@@ -280,6 +288,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.click("#edit");
   await p.waitForFunction(() => document.body.classList.contains("drafting"));
   ok((await p.innerText("#which")) === "Draft of the next call", "a draft can be made from a sent call too");
+  await p.waitForFunction(() => !document.querySelector(".ghost"));
   ok((await p.evaluate(() => document.getElementById("send-agent").selectedOptions[0]?.textContent)) === "renamed", "and it runs as the same agent");
   // Scrolled as far as it goes, the last row is still on the screen.
   const held = await p.evaluate(() => {

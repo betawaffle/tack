@@ -207,8 +207,14 @@ function fadeOut(rows, now, tokenAt, anchor, pin) {
   if (!ghosts.length) return;
   pin();
   let running = true;
+  // Scrolling by hand puts an end to holding it, so the page doesn't pull against it.
+  const stop = () => {
+    running = false;
+  };
+  const hands = ["wheel", "touchmove", "keydown", "pointerdown"];
+  for (const type of hands) addEventListener(type, stop, { once: true, passive: true });
   const follow = () => {
-    // Drawing again puts an end to it.
+    // Drawing again puts an end to it too.
     if (!running || !anchor.isConnected) return;
     pin();
     requestAnimationFrame(follow);
@@ -221,7 +227,8 @@ function fadeOut(rows, now, tokenAt, anchor, pin) {
     row.remove();
   });
   Promise.all(fades).finally(() => {
+    for (const type of hands) removeEventListener(type, stop);
+    if (running && anchor.isConnected) pin();
     running = false;
-    if (anchor.isConnected) pin();
   });
 }

@@ -42,8 +42,18 @@ export function streamText(kind, text) {
       streamRow(kind, true);
     }
     if (!line) return;
-    const v = visible(line);
-    stream.text.insertAdjacentHTML("beforeend", `<span class="f g${v.cls}">${v.html}</span>`);
+    // Each word, with the spaces before it, is a box of its own, as a token is, so the line
+    // can wrap between them.
+    // A chunk can end partway through a word, and the rest of it goes in the same box.
+    const words = line.match(/\s*\S+|\s+/g);
+    const last = stream.text.lastElementChild;
+    if (!/^\s/.test(words[0]) && last?.classList.contains("tok")) last.insertAdjacentHTML("beforeend", visible(words.shift()).html);
+    let html = "";
+    for (const word of words) {
+      const v = visible(word);
+      html += `<span class="tok f g${v.cls}">${v.html}</span>`;
+    }
+    stream.text.insertAdjacentHTML("beforeend", html);
   });
   fitRoom();
 }
