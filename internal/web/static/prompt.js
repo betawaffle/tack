@@ -546,6 +546,34 @@ $("prompt").addEventListener("click", (event) => {
   keepPlace(Number(target.dataset.p), () => render(current.data, null, true));
 });
 
+// Copying gives the text as it is rather than as it's drawn: spaces, tabs and newlines instead
+// of the marks for them, and without deleted text, the gutter or what a collapsed row says.
+const NOT_COPIED = ".del, .collapsed, .collapsed-note, .collapsed-changed, .pl-gutter, .ghost, [hidden]";
+function copyText(node, range) {
+  if (!range.intersectsNode(node)) return "";
+  if (node.nodeType === Node.TEXT_NODE) {
+    const a = node === range.startContainer ? range.startOffset : 0;
+    const b = node === range.endContainer ? range.endOffset : node.data.length;
+    return node.data.slice(a, b);
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE || node.matches(NOT_COPIED)) return "";
+  if (node.matches(".nl")) return "\n";
+  if (node.matches(".ws")) return node.textContent === "·" ? " " : "\t";
+  let out = "";
+  // The leading space that CSS draws, unless the selection starts after it.
+  if (node.matches(".sp") && !(node.firstChild && node.firstChild === range.startContainer && range.startOffset > 0)) out = " ";
+  for (const child of node.childNodes) out += copyText(child, range);
+  return out;
+}
+$("prompt").addEventListener("copy", (event) => {
+  const selection = getSelection();
+  if (!selection.rangeCount || selection.isCollapsed) return;
+  let text = "";
+  for (let i = 0; i < selection.rangeCount; i++) text += copyText($("prompt"), selection.getRangeAt(i));
+  event.clipboardData.setData("text/plain", text);
+  event.preventDefault();
+});
+
 // Pointing at a part's bar or name marks its whole bar and its name.
 let hotBar = [];
 $("prompt").addEventListener("mouseover", (event) => {

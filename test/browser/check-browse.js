@@ -210,6 +210,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
   ok((await p.locator(".tok.ins").count()) > 0, "the edit shows as a change from the call");
   ok((await p.locator(".tok.nc").count()) > 0, "and what's after it can't come from the cache");
+  // Copying gives the text itself, with its spaces, not the marks drawn for them.
+  const copied = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".pl.k-user")];
+    const range = document.createRange();
+    range.setStartBefore(rows[0]);
+    range.setEndAfter(rows.at(-1));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    const event = new ClipboardEvent("copy", { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
+    document.getElementById("prompt").dispatchEvent(event);
+    getSelection().removeAllRanges();
+    return event.clipboardData.getData("text/plain");
+  });
+  ok(copied.endsWith(original + " Edited in the draft.") && !copied.includes("·"), `copying gives the text as it is (${JSON.stringify(copied.slice(-40))})`);
   // Sending it: the call controls, an estimate, and then the sent call, shown against the
   // one it came from.
   ok(await p.locator("#send-bar").isVisible(), "a draft has the call controls");
