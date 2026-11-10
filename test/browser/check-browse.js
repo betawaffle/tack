@@ -205,6 +205,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await userText.click();
   await p.waitForSelector(".edit-box");
   const original = await p.inputValue(".edit-box");
+  // Selecting in the box and letting go outside it doesn't open another.
+  const box = await p.locator(".edit-box").boundingBox();
+  await p.mouse.move(box.x + 5, box.y + box.height / 2);
+  await p.mouse.down();
+  await p.mouse.move(box.x - 4, box.y + 4, { steps: 5 });
+  await p.mouse.up();
+  const shown = await p.evaluate((text) => [...document.querySelectorAll(".pl:not([hidden]):not(.editing)")].filter((r) => r.textContent.replace(/[·\s]/g, "").includes(text.replace(/\s/g, ""))).length, original);
+  ok((await p.locator(".edit-box").count()) === 1 && shown === 0, `selecting in the box doesn't open another (${shown} rows of it showing)`);
   await p.fill(".edit-box", original + " Edited in the draft.");
   await p.locator("#which").click();
   await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("Edited"));
@@ -231,10 +239,19 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.locator("#send-max").dispatchEvent("change");
   await p.waitForFunction(() => /at most/.test(document.getElementById("send-estimate").textContent));
   ok(true, "with what it could cost");
+  // A reply that comes in slowly, so it can be seen arriving.
+  await p.locator(".pl.k-user_turn").last().click();
+  await p.waitForSelector(".edit-box");
+  await p.fill(".edit-box", "paced reply");
+  await p.keyboard.press("Enter");
+  await p.waitForFunction(() => !document.querySelector(".edit-box") && document.querySelector("#prompt").textContent.includes("paced"));
   await p.click("#send");
+  await p.waitForSelector(".streaming .pl.k-content");
+  ok(/^Receiving/.test(await p.innerText("#send")) && (await p.locator(".streaming .pl.k-reasoning").count()) === 1, "the reply is drawn as it comes in");
   await p.waitForFunction(() => location.hash.startsWith("#manual/") && /Sent draft, 2 of 2/.test(document.getElementById("which").textContent), null, { timeout: 15000 });
   ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0, "the sent call shows, with what changed from the call it came from");
   ok(!(await p.locator("#send-bar").isVisible()) && !(await p.isDisabled("#prev")), "and steps back to that call");
+  ok((await p.locator(".streaming").count()) === 0 && (await p.locator(".pl.gen .tok").count()) > 0, "and then as tokens, once it's done");
   const sentBody = (await bodies()).at(-1);
   ok(sentBody && sentBody.max_tokens === 50 && JSON.stringify(sentBody.messages).includes("Edited in the draft"), "what was sent is the draft, with its settings");
   await p.click("#edit");

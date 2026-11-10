@@ -374,9 +374,10 @@ $("collapse-all").addEventListener("click", () => collapseAll(true));
 $("expand-all").addEventListener("click", () => collapseAll(false));
 
 // How a drawing's tokens line up with those of the call a draft came from: a draft's through
-// what changed, a call's one for one. Each way gives null for a token the other doesn't have.
+// what changed, and so a sent draft's just after it's sent (against_base), a call's one for
+// one. Each way gives null for a token the other doesn't have.
 function lineUp(data) {
-  if (!data.before_draft) return { toBase: (t) => t, fromBase: (b) => b };
+  if (!data.before_draft && !data.against_base) return { toBase: (t) => t, fromBase: (b) => b };
   const runs = [];
   let i = 0, j = 0;
   for (const e of data.changes || []) {
@@ -767,7 +768,10 @@ function openEditor(k) {
     if (!after) return;
   }
   const editing = el("div", "pl editing");
-  editing.append((rows[0] || after).querySelector(".pl-gutter").cloneNode(true));
+  const gutter = (rows[0] || after).querySelector(".pl-gutter").cloneNode(true);
+  // The box's copy of the gutter isn't the part's own.
+  for (const node of gutter.querySelectorAll("[data-p]")) delete node.dataset.p;
+  editing.append(gutter);
   const text = el("div", "pl-text");
   const area = el("textarea", "edit-box");
   const was = field.get();
@@ -812,7 +816,9 @@ function openEditor(k) {
 // In a draft, clicking a part's text edits it: the field under the pointer, or else the
 // innermost part of the row that can be edited.
 $("prompt").addEventListener("click", (event) => {
-  if (!draft || event.target.closest(".pl-gutter, .collapsed, .edit-box")) return;
+  // A click that ends selecting text, there or in a box that's open, isn't one to edit with.
+  if (!draft || event.target.closest(".pl-gutter, .collapsed, .editing")) return;
+  if (!getSelection().isCollapsed) return;
   const parts = current.data.prompt.parts;
   const span = event.target.closest("[data-f]");
   if (span && fieldOf(parts, Number(span.dataset.f))) return openEditor(Number(span.dataset.f));
@@ -905,6 +911,55 @@ async function estimate() {
 }
 
 // Send sends the draft as a call of its own, then shows that call.
+// While a sent draft's reply comes in, its text is drawn after the draft as it arrives, in rows
+// of its own without tokens: the host sends text, and tack splits it into tokens when the call
+// is done and drawn in full.
+let stream = null;
+function startStream() {
+  const box = $("prompt").querySelector(".prompt-rows");
+  if (!box) return;
+  const block = el("div", "pblock laid streaming");
+  box.append(block);
+  // Its lines are numbered on from the draft's last.
+  const nums = box.querySelectorAll(".pl-num");
+  let number = 0;
+  for (let i = nums.length - 1; i >= 0 && !number; i--) number = parseInt(nums[i].textContent.split("–").at(-1), 10) || 0;
+  stream = { block, kind: null, text: null, number, first: true };
+}
+function streamRow(kind, numbered) {
+  const fresh = kind !== stream.kind;
+  let bars = "";
+  const chain = ["assistant", kind];
+  for (let d = DEPTHS - 1; d >= 0; d--) {
+    const top = d === 0 ? stream.first : fresh;
+    bars += chain[d] === undefined ? "<i></i>" : `<i class="k-${chain[d]}${top ? " top" : ""}"></i>`;
+  }
+  const row = el("div", `pl k-${kind} gen${fresh ? " starts" : ""}`);
+  row.innerHTML = `<div class="pl-gutter"><div class="pl-part">${fresh ? LABELS[kind] : ""}</div><div class="pl-bars">${bars}</div>` +
+    `<div class="pl-num">${numbered ? ++stream.number : ""}</div></div><div class="pl-text"></div>`;
+  stream.block.append(row);
+  stream.kind = kind;
+  stream.text = row.lastElementChild;
+  stream.first = false;
+}
+function streamText(kind, text) {
+  if (!stream) return;
+  if (kind !== stream.kind) streamRow(kind, false);
+  text.split("\n").forEach((line, i) => {
+    if (i > 0) {
+      stream.text.insertAdjacentHTML("beforeend", '<span class="ws nl">↵</span>');
+      streamRow(kind, true);
+    }
+    if (!line) return;
+    const v = visible(line);
+    stream.text.insertAdjacentHTML("beforeend", `<span class="f g${v.cls}">${v.html}</span>`);
+  });
+  fitRoom();
+}
+
+// After sending, the sent call is drawn with what was on the screen held in place.
+let afterSend = false;
+
 $("send").addEventListener("click", async () => {
   const button = $("send");
   button.disabled = true;
@@ -932,7 +987,11 @@ $("send").addEventListener("click", async () => {
         buffered = buffered.slice(nl + 1);
         if (u.kind === "call") id = u.id;
         if (u.kind === "error") failed = u.text;
-        if (u.kind === "content" || u.kind === "reasoning") button.textContent = "Receiving…";
+        if (u.kind === "content" || u.kind === "reasoning") {
+          if (!stream) startStream();
+          button.textContent = "Receiving…";
+          streamText(u.kind, u.text);
+        }
       }
     }
     if (failed) throw new Error(failed);
@@ -943,7 +1002,11 @@ $("send").addEventListener("click", async () => {
     button.disabled = false;
     button.textContent = "Send";
   }
-  if (id) location.hash = `manual/${id}`;
+  stream = null;
+  if (id) {
+    afterSend = true;
+    location.hash = `manual/${id}`;
+  }
 });
 
 // A made-up conversation of about this many tokens, of every kind of part, for seeing how
@@ -1065,6 +1128,7 @@ async function loadManual(id) {
     return;
   }
   const data = await res.json();
+  if (afterSend) data.against_base = true;
   current = { conv: "manual", data };
   const root = data.calls.find((c) => !c.startsWith("manual/"));
   $("back").href = root ? `/#${root.split("/")[0]}` : "/";
@@ -1088,6 +1152,14 @@ function go(step) {
 
 $("prev").addEventListener("click", () => go(-1));
 $("next").addEventListener("click", () => go(1));
-window.addEventListener("hashchange", load);
+window.addEventListener("hashchange", () => {
+  if (!afterSend) return load();
+  drawAllNext = true;
+  keepView(load).finally(() => {
+    afterSend = false;
+    // From here on it's a call like any other.
+    if (current) delete current.data.against_base;
+  });
+});
 applySwitches();
 load();
