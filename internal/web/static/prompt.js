@@ -431,10 +431,48 @@ function pieceAt(first, n) {
 
 const motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// smoothScroll scrolls to top a little at a time.
+function smoothScroll(top) {
+  const s = scroller(), from = s.scrollTop, start = performance.now(), length = 180;
+  if (!motion) {
+    scrollPageTo(top);
+    return Promise.resolve();
+  }
+  return new Promise((done) => {
+    const step = (now) => {
+      const x = Math.min(1, (now - start) / length);
+      scrollPageTo(from + (top - from) * (1 - (1 - x) ** 3));
+      if (x < 1) requestAnimationFrame(step);
+      else done();
+    };
+    requestAnimationFrame(step);
+  });
+}
+
 // keepView draws again with something that's on the screen and in both drawings where it was:
 // the first token on the screen that's in both. Rows on the screen that aren't in the new
-// drawing fade out, and then the room they took closes up.
+// drawing fade out, and then the room they took closes up. With nothing on the screen that
+// the call has (only what a draft added), it first scrolls up to the nearest row that it has.
 function keepView(draw) {
+  const was = current ? lineUp(current.data) : null;
+  const has = (row) => [...row.querySelectorAll(".tok[data-t]")].some((t) => was.toBase(Number(t.dataset.t)) !== null);
+  if (was) {
+    const on = rowsOnScreen();
+    if (!on.some(has)) {
+      const all = [...$("prompt").querySelectorAll(".prompt-rows .pl:not([hidden])")];
+      let i = on.length ? all.indexOf(on[0]) : all.length;
+      while (--i >= 0 && !has(all[i]));
+      if (i >= 0) {
+        const s = scroller();
+        const top = s.scrollTop + all[i].getBoundingClientRect().top - s.getBoundingClientRect().top;
+        return smoothScroll(top).then(() => holdView(draw));
+      }
+    }
+  }
+  return holdView(draw);
+}
+
+function holdView(draw) {
   const was = current ? lineUp(current.data) : null;
   const scrolled = scroller().scrollTop;
   // For each row on the screen, its tokens that the base call has, as the base call's, where
