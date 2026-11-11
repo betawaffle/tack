@@ -269,3 +269,10 @@ test("what streamed goes back where the server took it out", () => {
   assert.equal(out.prompt.o.segs.s[2][0].text, "thought");
   assert.equal(out.streamed, undefined);
 });
+
+test("an answer whose streamed text the page didn't get just so isn't used", () => {
+  const reply = () => ({ re: 1, x: "ab", streamed: [{ at: "/x", offset: 1, is: "content" }], lengths: { content: 3, "call:0": 2 } });
+  assert.equal(patch.putBack(reply(), { content: "xyz", "call:0": "{}" }).x, "axyzb");
+  assert.equal(patch.putBack(reply(), { content: "xy", "call:0": "{}" }), null);
+  assert.equal(patch.putBack(reply(), { content: "xyz" }), null);
+});

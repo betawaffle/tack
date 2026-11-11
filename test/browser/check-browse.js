@@ -750,6 +750,62 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(/cancelled/.test(stoppedRecord.error) && stoppedRecord.text.length < 1000 && (await p.innerText("#send")) === "Send",
     `Stop stops a call that's going (${stoppedRecord.error}, ${stoppedRecord.text?.length} characters of reply)`);
 
+  // A reply that calls tools draws each call as it streams, and the answer leaves out the
+  // arguments, as it does the reply.
+  const toolDraft = await p.evaluate(async () => {
+    const { id } = await (await fetch("/api/drafts", { method: "POST", body: "{}" })).json();
+    const d = (await (await fetch(`/api/drafts/${id}`)).json()).draft;
+    d.request.model = "deepseek/deepseek-v4.1-flash-1017";
+    await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: d.request }) });
+    return id;
+  });
+  await p.goto(B + "/prompt#draft/" + toolDraft);
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
+  await p.locator(".pl.k-user_turn").last().click();
+  await p.waitForSelector(".edit-box");
+  await p.fill(".edit-box", "tools context");
+  await p.locator("#which").click();
+  await p.waitForFunction(() => !document.querySelector(".edit-box") && !document.querySelector(".ghost"));
+  // A tool's form that's open when it's sent is saved first; if it can't be, nothing's sent,
+  // and the form says why.
+  await p.locator(".pl.k-tool .pl-text").first().click();
+  await p.waitForSelector(".schema-form");
+  const formName = await p.locator(".schema-input").first().inputValue();
+  await p.locator(".schema-input").first().fill("");
+  await p.locator("#prompt").evaluate((s) => (s.scrollTop = s.scrollHeight));
+  const sentBeforeForm = socketSent.length;
+  await p.click("#send");
+  await p.waitForFunction(() => /needs a name/.test(document.getElementById("error").textContent));
+  const formShown = await p.evaluate(() => {
+    const box = document.querySelector(".schema-editing").getBoundingClientRect();
+    return box.bottom > 0 && box.top < innerHeight && document.activeElement?.classList.contains("schema-input");
+  });
+  ok(formShown && !socketSent.slice(sentBeforeForm).some((m) => m.includes('"op":"send"')) && (await p.innerText("#send")) === "Send",
+    "a tool's form that can't be saved stops a send, and is shown, saying why");
+  await p.locator(".schema-input").first().fill(formName);
+  await p.locator(".schema-field").first().fill("Changed-before-sending.");
+  const gotBefore = socketGot.length;
+  await p.click("#send");
+  await p.waitForFunction(() => location.hash.startsWith("#manual/") && !document.querySelector(".streaming") && !document.querySelector(".ghost"), null, { timeout: 15000 });
+  const toolFrames = socketGot.slice(gotBefore);
+  const callPieces = toolFrames.filter((m) => m.includes('"kind":"tool_call"')).length;
+  const toolAnswer = toolFrames.filter((m) => m.startsWith('{"re":') && m.includes('"call":')).at(-1) || "";
+  const toolSame = await p.evaluate(async () => {
+    const canon = (v) => JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort()) : x));
+    const { drawn } = await import("/static/prompt-draw.js");
+    const got = await (await fetch(`/api/draft-for?from=${encodeURIComponent(location.hash.slice(1))}`)).json();
+    const have = { ...drawn() };
+    delete have.before_draft;
+    delete have.is_base;
+    return canon(have) === canon(got.prompt);
+  });
+  // The arguments as the model wrote them, which is what streamed; each value is in the
+  // prompt's text too, written out as the format writes them, and that still comes.
+  const formSent = (await bodies()).at(-1);
+  ok(formSent.tools.some((t) => t.function.description === "Changed-before-sending."), "and one that can be saved is, before it's sent");
+  ok(callPieces > 5 && toolAnswer.includes('"call:0"') && !toolAnswer.includes('{\\"language\\":\\"python\\"') && toolSame,
+    `a call streams as it's written, and the answer leaves out its arguments (${callPieces} pieces, ${toolAnswer.length} bytes, same: ${toolSame})`);
+
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.
   await p.goto(B + "/prompt#" + promptAt);

@@ -35,7 +35,7 @@ const maxMessageBytes = 8 << 20
 // this server, so that it has to be reloaded. Any other change to the page's files only
 // offers a reload. Pages send it with every request, and it's checked there too, since
 // they might not have heard yet.
-const pageRequired = 6
+const pageRequired = 7
 
 const pageRequiredHeader = "X-Tack-Page-Required"
 

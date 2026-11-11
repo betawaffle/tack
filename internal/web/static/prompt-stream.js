@@ -1,7 +1,7 @@
 // The reply to a draft that's just been sent, drawn after it as it comes in, in rows of its own
 // without tokens: the host sends text, and tack splits it into tokens when the call is done and
 // drawn in full.
-import { $, el, visible } from "./prompt-dom.js";
+import { $, el, visible, escapeHTML } from "./prompt-dom.js";
 import { LABELS, DEPTHS } from "./prompt-draw.js";
 import { fitRoom } from "./prompt-room.js";
 
@@ -30,6 +30,7 @@ function streamRow(kind, numbered) {
     `<div class="pl-num">${numbered ? ++stream.number : ""}</div></div><div class="pl-text"></div>`;
   stream.block.append(row);
   stream.kind = kind;
+  stream.call = undefined;
   stream.text = row.lastElementChild;
   stream.first = false;
 }
@@ -56,6 +57,18 @@ export function streamText(kind, text) {
     stream.text.insertAdjacentHTML("beforeend", html);
   });
   fitRoom();
+}
+
+// streamCall draws a piece of tool call index: its name, which comes first, then its
+// arguments as they're written, on rows of its own.
+export function streamCall(index, name, text) {
+  if (!stream) return;
+  if (stream.kind !== "tool_call" || stream.call !== index) {
+    streamRow("tool_call", false);
+    stream.call = index;
+  }
+  if (name) stream.text.insertAdjacentHTML("beforeend", `<span class="tok t call-name">${escapeHTML(name)}</span> `);
+  if (text) streamText("tool_call", text);
 }
 
 // endStream stops drawing it; what's drawn stays until the page draws again.

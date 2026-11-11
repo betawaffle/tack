@@ -73,6 +73,9 @@ type socketRequest struct {
 	Call     string         `json:"call,omitzero"`
 	Flags    []string       `json:"flags,omitzero"`
 	Which    int            `json:"which,omitzero"`
+	// Fresh is set when the page has nothing of the draft that was open, so what's opened
+	// comes whole.
+	Fresh bool `json:"fresh,omitzero"`
 }
 
 type socketReply struct {
@@ -173,6 +176,9 @@ func (p *promptSession) handle(req socketRequest) socketReply {
 		}
 		if d == nil {
 			return socketReply{Error: errorText(err)}
+		}
+		if req.Fresh {
+			p.request, p.prompt = nil, nil
 		}
 		reply, err := p.opened(d, cp, err)
 		if err != nil {
@@ -287,13 +293,27 @@ func (p *promptSession) sendDraft(req socketRequest) {
 	done := p.going(req.ID, func() error { return p.s.core.CancelManual(call) })
 	defer done()
 	p.send(map[string]any{"for": req.ID, "call": call})
-	// What streamed, as the page got it, which it doesn't need again.
-	streamed := map[string]*strings.Builder{"reasoning": {}, "content": {}}
+	// What streamed, as the page got it, which it doesn't need again: the reasoning, the
+	// reply, and each call's arguments, as call:0 and so on.
+	streamed := map[string]*strings.Builder{}
 	for u := range updates {
 		p.send(map[string]any{"for": req.ID, "update": u})
-		if b := streamed[u.Kind]; b != nil {
-			b.WriteString(u.Text)
+		kind := u.Kind
+		switch kind {
+		case "reasoning", "content":
+		case "tool_call":
+			kind = "call:" + strconv.Itoa(u.Index)
+		default:
+			continue
 		}
+		if streamed[kind] == nil {
+			streamed[kind] = &strings.Builder{}
+		}
+		streamed[kind].WriteString(u.Text)
+	}
+	known := map[string]string{}
+	for kind, b := range streamed {
+		known[kind] = b.String()
 	}
 	// What the page shows next is the draft after the call, so it comes with the answer, if
 	// the draft that was sent is still the one open.
@@ -311,7 +331,7 @@ func (p *promptSession) sendDraft(req socketRequest) {
 	if err != nil {
 		log.Printf("socket: %v", err)
 		out, _ = json.Marshal(socketReply{Re: req.ID, Call: call, Error: err.Error()})
-	} else if stripped, err := withStreamed(out, map[string]string{"reasoning": streamed["reasoning"].String(), "content": streamed["content"].String()}); err == nil {
+	} else if stripped, err := withStreamed(out, known); err == nil {
 		out = stripped
 	} else {
 		// It goes whole, then.

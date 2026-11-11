@@ -8,7 +8,7 @@ import { render, drawn, clear, DEPTHS } from "./prompt-draw.js";
 import { keepView, keepPlace } from "./prompt-hold.js";
 import { go } from "./prompt-nav.js";
 import { showAgents } from "./prompt-agents.js";
-import { startStream, streamText, endStream } from "./prompt-stream.js";
+import { startStream, streamText, streamCall, endStream } from "./prompt-stream.js";
 import { request as ask, handlers } from "./prompt-socket.js";
 
 // prompt-patch.js is a plain script, so the tests can load it in Node; it comes first.
@@ -94,7 +94,8 @@ function opening(reply) {
 // openOver opens a draft over the socket, by its ID or the call it's after, and gives it and its
 // prompt, as GET /api/drafts/{id} does.
 async function openOver(which, options) {
-  return opening(await ask("open", which, options));
+  // With nothing of the draft that was open, what's opened comes whole.
+  return opening(await ask("open", remote.request === undefined ? { ...which, fresh: true } : which, options));
 }
 
 // fromRun takes what a run sent back: the result is in the draft now.
@@ -169,22 +170,40 @@ async function saved() {
 
 // Saves the draft and draws it again, keeping part anchor, or else what's on the screen, in
 // place.
+// It says whether it saved.
 async function preview(anchor) {
   let saved;
   try {
     saved = await save();
   } catch (err) {
-    return showError(`Saving the draft failed: ${err.message}`);
+    showError(`Saving the draft failed: ${err.message}`);
+    return false;
   }
   const { prompt: data, problem } = saved;
-  if (!data || !drawn()) return show(data, { problem });
+  if (!data || !drawn()) {
+    show(data, { problem });
+    return true;
+  }
   hideError();
   if (anchor === undefined) await keepView(() => show(data, { eager: true }));
   else keepPlace(anchor, () => show(data, { eager: true }));
+  return true;
+}
+
+// openForm is a tool's schema form that's open, whose changes go in the draft only once it's
+// saved. Sending or running saves it first (formSaved).
+let openForm = null;
+
+// formSaved saves the form that's open, if there is one, and says whether everything in it is
+// in the draft. If it can't be saved, it's shown, with why.
+async function formSaved() {
+  return openForm ? openForm() : true;
 }
 
 // show draws the draft's prompt, or, when there's none to draw, says why.
 function show(data, { eager = false, problem = "" } = {}) {
+  // Drawing again takes away a form that was open.
+  openForm = null;
   // A draft after a call is among the calls it follows, which the arrows move along.
   if (data?.calls?.length) [draft.call, draft.calls] = [data.call, data.calls];
   const n = draft.calls.indexOf(draft.call);
@@ -605,6 +624,11 @@ async function runCall(button) {
   // Its result goes in the draft, so nothing else in it changes until it's done.
   document.body.classList.add("running");
   try {
+    // A form that's open is saved first; if it can't be, it says why, and nothing runs.
+    if (!(await formSaved())) {
+      button.textContent = "Run";
+      return;
+    }
     await save();
     const going = ask("run", { call: button.dataset.call, flags: JSON.parse(button.dataset.flags || "[]") });
     button.dataset.request = going.id;
@@ -925,20 +949,36 @@ function openToolEditor(k) {
     const cancel = el("button", "mini", "Cancel");
     saveButton.type = cancel.type = "button";
     cancel.addEventListener("click", close);
-    saveButton.addEventListener("click", () => {
-      if (!edited.name) return showError("A tool needs a name.");
-      if (JSON.stringify(edited) === JSON.stringify(tool)) return close();
-      draft.request.tools[i].function = edited;
-      preview(k);
-    });
+    saveButton.addEventListener("click", () => saveForm());
     buttons.append(saveButton, cancel);
     form.append(buttons);
   };
-  const close = () =>
+  const close = () => {
+    if (openForm === saveForm) openForm = null;
     keepPlace(k, () => {
       editing.remove();
       for (const row of rows) row.hidden = false;
     });
+  };
+  // Saving puts the copy in the draft. If it can't be, the form stays, in sight, saying why.
+  const saveForm = async () => {
+    const fail = (text, field) => {
+      showError(text);
+      editing.scrollIntoView({ block: "center" });
+      field?.focus();
+      return false;
+    };
+    if (!edited.name) return fail("A tool needs a name.", form.querySelector("input"));
+    if (JSON.stringify(edited) === JSON.stringify(tool)) {
+      close();
+      return true;
+    }
+    draft.request.tools[i].function = edited;
+    if (!(await preview(k))) return fail(document.getElementById("error").textContent);
+    if (openForm === saveForm) openForm = null;
+    return true;
+  };
+  openForm = saveForm;
   draw();
   editing.append(gutter, form);
   rows[0].before(editing);
@@ -1111,29 +1151,42 @@ $("send").addEventListener("click", async () => {
   hideError();
   let id = null;
   try {
-    // Whatever was changed last is saved before it's sent.
+    // Whatever was changed last is saved before it's sent, and a form that's open with it. One
+    // that can't be stops it going.
+    if (!(await formSaved())) return;
     await saveChanges();
     let failed = "";
     let streaming = false;
     // What streamed, which the answer leaves out (patch.putBack).
     const streamed = { reasoning: "", content: "" };
+    const startStreaming = () => {
+      if (!streaming) startStream();
+      streaming = true;
+    };
     const going = ask("send", {}, {
       update: (message) => {
         if (message.call) id = message.call;
         const u = message.update;
         if (u?.kind === "error") failed = u.text;
         if (u?.kind === "content" || u?.kind === "reasoning") {
-          if (!streaming) startStream();
-          streaming = true;
+          startStreaming();
           streamed[u.kind] += u.text;
           streamText(u.kind, u.text);
+        }
+        if (u?.kind === "tool_call") {
+          startStreaming();
+          const key = `call:${u.index || 0}`;
+          streamed[key] = (streamed[key] || "") + (u.text || "");
+          streamCall(u.index || 0, u.name, u.text);
         }
       },
     });
     sending.request = going.id;
-    const reply = patch.putBack(await going, streamed);
-    id = reply.call;
-    if (reply.draft) afterSend = { from: `manual/${id}`, opened: opening(reply) };
+    const answer = await going;
+    id = answer.call;
+    const reply = patch.putBack(answer, streamed);
+    if (!reply) remote = { request: undefined, prompt: undefined };
+    else if (reply.draft) afterSend = { from: `manual/${id}`, opened: opening(reply) };
     if (failed) throw new Error(failed);
   } catch (err) {
     // If the connection went, the call carries on, and it's recorded: it's shown once it's back.

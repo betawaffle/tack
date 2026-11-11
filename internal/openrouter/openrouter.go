@@ -93,6 +93,16 @@ func Render(r Request) ([]byte, error) {
 type Delta struct {
 	Reasoning string
 	Content   string
+	// Calls are pieces of tool calls: each call's name comes first, then its arguments, a piece
+	// at a time.
+	Calls []CallDelta
+}
+
+// CallDelta is a piece of tool call Index: its name, once, and some of its arguments.
+type CallDelta struct {
+	Index     int
+	Name      string
+	Arguments string
 }
 
 // Result is what a finished call produced.
@@ -336,10 +346,14 @@ func (c *Client) apply(res *Result, ch *chunk, text, reasoning *strings.Builder,
 		if choice.FinishReason != "" {
 			res.FinishReason = choice.FinishReason
 		}
+		var calls []CallDelta
 		for _, piece := range choice.Delta.ToolCalls {
 			if piece.Index < 0 || piece.Index > maxToolCalls {
 				res.ParseErrors++
 				continue
+			}
+			if piece.Function.Name != "" || piece.Function.Arguments != "" {
+				calls = append(calls, CallDelta{Index: piece.Index, Name: piece.Function.Name, Arguments: piece.Function.Arguments})
 			}
 			for len(res.ToolCalls) <= piece.Index {
 				res.ToolCalls = append(res.ToolCalls, FunctionCallResult{})
@@ -356,11 +370,11 @@ func (c *Client) apply(res *Result, ch *chunk, text, reasoning *strings.Builder,
 				res.TTFT = time.Since(start)
 			}
 		}
-		d := Delta{Content: choice.Delta.Content, Reasoning: choice.Delta.Reasoning}
+		d := Delta{Content: choice.Delta.Content, Reasoning: choice.Delta.Reasoning, Calls: calls}
 		if d.Reasoning == "" {
 			d.Reasoning = choice.Delta.ReasoningContent
 		}
-		if d == (Delta{}) {
+		if d.Content == "" && d.Reasoning == "" && len(d.Calls) == 0 {
 			continue
 		}
 		if res.TTFT == 0 {

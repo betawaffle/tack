@@ -673,6 +673,10 @@ type Update struct {
 	Kind string `json:"kind"`
 	Text string `json:"text,omitzero"`
 	ID   string `json:"id,omitzero"`
+	// For a piece of a tool call ("tool_call"): which of the reply's calls it is, and its
+	// name, in the call's first piece. Text is some of its arguments.
+	Index int    `json:"index,omitzero"`
+	Name  string `json:"name,omitzero"`
 }
 
 // updateBuffer is how far a slow reader can fall behind before it misses deltas.

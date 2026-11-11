@@ -293,6 +293,9 @@ func (c *Core) runManual(ctx context.Context, m *manualCall, body []byte, send f
 		if d.Content != "" {
 			send(Update{Kind: "content", Text: d.Content})
 		}
+		for _, call := range d.Calls {
+			send(Update{Kind: "tool_call", Index: call.Index, Name: call.Name, Text: call.Arguments})
+		}
 	})
 	finished := &store.Event{
 		Type:            store.ManualCallFinished,

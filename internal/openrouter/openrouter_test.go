@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -265,5 +266,28 @@ func TestWholeReply(t *testing.T) {
 	res, err = bad.Do(context.Background(), []byte("{}"), io.Discard, nil)
 	if err != nil || res.ParseErrors != 1 || res.Error == "" {
 		t.Errorf("bad JSON: err %v, res %+v", err, res)
+	}
+}
+
+func TestToolCallsStream(t *testing.T) {
+	const text = `data: {"id":"g1","choices":[{"delta":{"reasoning":"hmm"}}]}` + "\n\n" +
+		`data: {"id":"g1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"run_code","arguments":""}}]}}]}` + "\n\n" +
+		`data: {"id":"g1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"code\":"}}]}}]}` + "\n\n" +
+		`data: {"id":"g1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"print(1)\"}"}}]}}]}` + "\n\n" +
+		`data: {"id":"g1","choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"scratch","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	c := serve(t, stream(text))
+	var calls []CallDelta
+	res, err := c.Do(context.Background(), []byte("{}"), io.Discard, func(d Delta) { calls = append(calls, d.Calls...) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []CallDelta{{0, "run_code", ""}, {0, "", `{"code":`}, {0, "", `"print(1)"}`}, {1, "scratch", "{}"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("pieces %+v", calls)
+	}
+	// What streamed is what's kept.
+	if len(res.ToolCalls) != 2 || res.ToolCalls[0].Arguments != `{"code":"print(1)"}` || res.ToolCalls[1].Name != "scratch" {
+		t.Errorf("calls %+v", res.ToolCalls)
 	}
 }
