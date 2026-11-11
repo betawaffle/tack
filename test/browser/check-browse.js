@@ -17,6 +17,9 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
 (async () => {
   const browser = await chromium.launch();
   const p = await browser.newPage();
+  // What the page sends over its socket, for checking what goes.
+  const socketSent = [];
+  p.on("websocket", (ws) => ws.on("framesent", (f) => socketSent.push(String(f.payload))));
   const errs = [];
   p.on("console", (m) => {
     if (m.type() === "error" && !/400|404/.test(m.text())) errs.push(m.text());
@@ -294,13 +297,11 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const wide = p.viewportSize();
   await p.setViewportSize({ width: 430, height: wide.height });
   // Sending what's saved already doesn't save it again.
-  const resaved = [];
-  const onSave = (r) => r.method() === "PUT" && r.url().includes("/api/drafts/") && resaved.push(r.url());
-  p.on("request", onSave);
+  const sentBefore = socketSent.length;
   await p.click("#send");
   await p.waitForSelector(".streaming .pl.k-content");
-  p.off("request", onSave);
-  ok(resaved.length === 0, `sending a saved draft doesn't save it again (${resaved.length})`);
+  const resaved = socketSent.slice(sentBefore).filter((m) => m.includes('"op":"save"')).length;
+  ok(resaved === 0 && sentBefore > 0, `sending a saved draft doesn't save it again (${resaved})`);
   ok(/^Receiving/.test(await p.innerText("#send")) && (await p.locator(".streaming .pl.k-reasoning").count()) === 1, "the reply is drawn as it comes in");
   await p.waitForFunction(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.textContent.length > 30));
   const overflow = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].filter((t) => t.scrollWidth > t.clientWidth + 1).length);
@@ -523,20 +524,48 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       });
       ok(room.room < 2, `no empty room is left under the end after editing near it (${JSON.stringify(room)})`);
 
-      // A big draft is saved gzipped, and comes back the same.
-      const long = Array.from({ length: 2000 }, (_, i) => `word ${i}`).join(" ");
-      const puts = [];
-      const onRequest = (r) => r.method() === "PUT" && r.url().includes("/api/drafts/") && puts.push(r.headers()["content-encoding"] || "");
-      p.on("request", onRequest);
+      // Saved over the socket, the prompt the page has, made of patches, is the draft's.
+      const sameAsTack = () => p.evaluate(async (id) => {
+        const canon = (v) => JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort()) : x));
+        const { drawn } = await import("/static/prompt-draw.js");
+        const fresh = (await (await fetch(`/api/drafts/${id}`)).json()).prompt;
+        const have = drawn();
+        // What the page adds to what it draws, for itself.
+        const keys = [...new Set([...Object.keys(have), ...Object.keys(fresh)])].filter((k) => k !== "before_draft" && k !== "is_base");
+        const off = keys.filter((k) => canon(have[k]) !== canon(fresh[k]));
+        const deeper = off.includes("prompt") ? Object.keys(fresh.prompt).filter((k) => canon(have.prompt?.[k]) !== canon(fresh.prompt[k])) : [];
+        return off.length ? `differs in ${off.join(",")} ${deeper.join(",")}` : "";
+      }, runDraft);
+      const differs = await sameAsTack();
+      ok(!differs, `after edits saved over the socket, the page's prompt is the draft's ${differs}`);
+      // And an edit sends and gets back little, however long the draft.
+      const frames = { sent: [], got: [] };
+      const watch = (ws) => {
+        ws.on("framesent", (f) => frames.sent.push(String(f.payload).length));
+        ws.on("framereceived", (f) => frames.got.push(String(f.payload).length));
+      };
+      p.on("websocket", watch);
+      // The connection goes, and an edit made then is saved once it's back.
+      await p.evaluate(async () => (await import("/static/prompt-socket.js")).drop());
       await p.locator(".add-after").last().click({ force: true });
       await p.click(".add-choice[data-role=user]");
       await p.waitForSelector(".edit-box");
-      await p.fill(".edit-box", long);
+      await p.fill(".edit-box", "written-while-reconnecting");
       await p.keyboard.press("Enter");
-      await p.waitForFunction(() => !document.querySelector(".edit-box") && !document.querySelector(".ghost"));
-      p.off("request", onRequest);
-      const kept = await p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.some((m) => typeof m.content === "string" && m.content.startsWith("word 0 word 1") && m.content.endsWith("word 1999")), runDraft);
-      ok(puts.includes("gzip") && kept, `a big draft is saved gzipped (${puts.join(",")}), and kept whole`);
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && !document.querySelector(".ghost") && document.getElementById("socket-status").hidden &&
+        document.getElementById("prompt").textContent.includes("written-while-reconnecting"));
+      const kept = await p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.some((m) => m.content === "written-while-reconnecting"), runDraft);
+      ok(kept && !(await sameAsTack()), "an edit made while the connection was gone is saved once it's back");
+      frames.sent.length = frames.got.length = 0;
+      await p.locator(".pl.k-user", { hasText: "written-while-reconnecting" }).first().click();
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "written-while-reconnecting-changed");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && document.getElementById("prompt").textContent.includes("reconnecting-changed"));
+      await p.waitForTimeout(300);
+      p.off("websocket", watch);
+      const most = Math.max(...frames.sent, ...frames.got);
+      ok(frames.sent.length > 0 && most < 4000 && !(await sameAsTack()), `an edit's messages are small (${JSON.stringify(frames)})`);
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 

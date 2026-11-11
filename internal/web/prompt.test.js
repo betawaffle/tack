@@ -190,3 +190,56 @@ test("a deleted part is on a row of its own, not in the part after it", () => {
   // A change inside a part stays in that part's row.
   assert.ok(l.rows.some((r) => kindOf(l, r) === "prompt" && deleted(r).trim() === "short"));
 });
+
+// Patches, which internal/web/patch.go makes and applies too.
+const patch = require("./static/prompt-patch.js");
+test("patches make one value into another", () => {
+  const cases = [
+    [{ a: 1 }, { a: 1 }],
+    [{ a: 1, b: "x" }, { a: 1, b: "y" }],
+    [{ a: 1 }, { a: 1, c: [1] }],
+    [{ a: 1, b: 2, c: 3 }, { a: 1, c: 3 }],
+    [{ a: 1, b: 2 }, { b: 2, a: 1 }],
+    [{ b: 2 }, { a: 1, b: 2 }],
+    [{ m: [{ c: "one" }, { c: "two" }] }, { m: [{ c: "one" }, { c: "2" }] }],
+    [[1, 2, 3], [1, 2, 9, 3]],
+    [[1, 2, 3, 4], [1, 4]],
+    [[1, 2, 3], []],
+    [{ a: [1] }, { a: { b: 1 } }],
+    [{ a: { b: { c: [1, { d: "x" }] } } }, { a: { b: { c: [1, { d: "y", e: null }] } } }],
+    [undefined, { a: 1 }],
+  ];
+  for (const [a, b] of cases) {
+    const before = JSON.stringify(a);
+    const p = patch.diff(a, b);
+    if (a !== undefined && JSON.stringify(a) === JSON.stringify(b)) assert.equal(p, null);
+    const got = patch.apply(a, JSON.parse(JSON.stringify(p)));
+    assert.equal(JSON.stringify(got), JSON.stringify(b), JSON.stringify(p));
+    assert.equal(JSON.stringify(a), before, "the value patched is left as it was");
+  }
+});
+
+test("a patch is in the form the server makes", () => {
+  const messages = Array.from({ length: 500 }, () => ({ role: "user", content: "a message that is some way into the conversation" }));
+  const changed = structuredClone(messages);
+  changed[0].content = "a message that is some way in to the conversation";
+  // As TestPatchIsSmall has it.
+  assert.equal(JSON.stringify(patch.diff({ messages }, { messages: changed })),
+    '{"o":{"messages":{"i":[[0,{"o":{"content":{"=":"a message that is some way in to the conversation"}}}]]}}}');
+  assert.deepEqual(patch.diff([1, 2, 3], [1, 2, 9, 3]), { s: [2, 0, [9]] });
+  assert.deepEqual(patch.diff({ a: 1, b: 2, c: 3 }, { a: 1, c: 3 }), { o: {}, d: ["b"] });
+});
+
+test("a prompt sent with relative indices is drawn with absolute ones", () => {
+  const wire = { call: "x", prompt: {
+    parts: [{ kind: "start" }, { kind: "system", m: 0 }, { kind: "effort", p: 1 }, { kind: "user_turn", m: 1 }, { kind: "user", m: 0, p: 1 }, { kind: "tool_call", m: 1, call: 1, p: 1, name: "run" }],
+    segments: [{ text: "<s>" }, { text: "sys", p: 1, field: true }, { text: "hi", p: 3 }],
+    tokens: [1, 2],
+  } };
+  const out = patch.absolute(wire);
+  assert.deepEqual(out.prompt.parts.map((p) => [p.kind, p.message, p.parent]),
+    [["start", -1, -1], ["system", 0, -1], ["effort", -1, 1], ["user_turn", 1, -1], ["user", 1, 3], ["tool_call", 2, 4]]);
+  assert.equal(out.prompt.parts[5].call, 1);
+  assert.deepEqual(out.prompt.segments.map((s) => s.part), [0, 1, 4]);
+  assert.equal(out.call, "x");
+});

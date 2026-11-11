@@ -192,6 +192,8 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .agent-naming[hidden], .send-agent .mini[hidden] { display: none; }
 .send-bar #agent-slug { width: 12em; }
 .send-estimate { font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.socket-status { font: 12px var(--mono); white-space: nowrap; color: var(--del-text); }
+.socket-status[hidden] { display: none; }
 .send-more { position: relative; flex: none; }
 .send-more .mini[aria-expanded="true"] { color: var(--text); border-color: var(--text); background: var(--hover); }
 .send-panel {

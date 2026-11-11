@@ -26,7 +26,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt-dom.js static/prompt-room.js static/prompt-draw.js static/prompt-hold.js static/prompt-nav.js static/prompt-stream.js static/prompt-agents.js static/prompt-list.js static/prompt-agent.js static/prompt-edit.js static/prompt.js static/prompt.css
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt-patch.js static/prompt-socket.js static/prompt-dom.js static/prompt-room.js static/prompt-draw.js static/prompt-hold.js static/prompt-nav.js static/prompt-stream.js static/prompt-agents.js static/prompt-list.js static/prompt-agent.js static/prompt-edit.js static/prompt.js static/prompt.css
 var static embed.FS
 
 const maxMessageBytes = 8 << 20
@@ -179,6 +179,7 @@ func Handler(c *core.Core, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/tool-flags", s.toolFlags)
 	mux.HandleFunc("GET /api/drafts/{id}", s.getDraft)
 	mux.HandleFunc("PUT /api/drafts/{id}", s.saveDraft)
+	mux.HandleFunc("GET /api/socket", s.promptSocket)
 	mux.HandleFunc("POST /api/drafts/{id}/send", s.current(s.sendDraft))
 	mux.HandleFunc("PUT /api/drafts/{id}/agent", s.setDraftAgent)
 	mux.HandleFunc("GET /api/drafts/{id}/calls/{call}/flags", s.draftCallFlags)

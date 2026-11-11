@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/static/prompt.css">
 <script src="/static/money.js" defer></script>
 <script src="/static/prompt-layout.js" defer></script>
+<script src="/static/prompt-patch.js" defer></script>
 <script type="module" src="/static/prompt.js"></script>
 </head>
 <body class="prompt-page">
@@ -52,6 +53,7 @@
     </span>
   </span>
   <span class="spacer"></span>
+  <span id="socket-status" class="socket-status" role="status" hidden></span>
   <span id="send-estimate" class="send-estimate"></span>
   <div class="send-more">
     <button id="send-more" class="mini" type="button" aria-expanded="false" aria-controls="send-panel">More</button>

@@ -3,12 +3,16 @@
 // call's address shows. One that doesn't follow a call is at #draft/<id>. Clicking a part's text opens it in a text box over it; when the box loses focus,
 // the draft is saved and drawn again, compared with the call it came from. This module owns the
 // draft that's open.
-import { $, el, showError, hideError, jsonBody } from "./prompt-dom.js";
+import { $, el, showError, hideError } from "./prompt-dom.js";
 import { render, drawn, clear, DEPTHS } from "./prompt-draw.js";
 import { keepView, keepPlace } from "./prompt-hold.js";
 import { go } from "./prompt-nav.js";
 import { showAgents } from "./prompt-agents.js";
 import { startStream, streamText, endStream } from "./prompt-stream.js";
+import { request as ask, handlers } from "./prompt-socket.js";
+
+// prompt-patch.js is a plain script, so the tests can load it in Node; it comes first.
+const patch = tackPatch;
 
 let draft = null;
 
@@ -30,13 +34,15 @@ async function open(d) {
 // one already started, or else one that isn't saved until something in it changes. That's what
 // a call's address shows.
 export async function loadDraftFor(from, { eager = false } = {}) {
-  const res = await fetch(`/api/draft-for?from=${encodeURIComponent(from)}`);
-  if (!res.ok) {
-    showError((await res.text()) || res.statusText);
+  let opened;
+  try {
+    opened = await openOver({ from });
+  } catch (err) {
+    showError(err.message);
     clear();
     return;
   }
-  const { draft: d, prompt: data, problem } = await res.json();
+  const { draft: d, prompt: data, problem } = opened;
   await open(d);
   show(data, { eager, problem });
 }
@@ -44,13 +50,15 @@ export async function loadDraftFor(from, { eager = false } = {}) {
 // loadDraft shows a draft by its ID, at #draft/<id>: one that follows on from a call is shown
 // at that call's address, and a sent one is the call it became.
 export async function loadDraft(id, { eager = false } = {}) {
-  const res = await fetch(`/api/drafts/${id}`);
-  if (!res.ok) {
-    showError((await res.text()) || res.statusText);
+  let opened;
+  try {
+    opened = await openOver({ draft: id });
+  } catch (err) {
+    showError(err.message);
     clear();
     return;
   }
-  const { draft: d, prompt: data, problem } = await res.json();
+  const { draft: d, prompt: data, problem } = opened;
   if (d.sent) return go(`manual/${d.sent}`, { replace: true });
   if (d.from) return go(d.from, { replace: true });
   await open(d);
@@ -65,6 +73,30 @@ export function closeDraft() {
   document.body.classList.remove("drafting");
 }
 
+// What tack has of the open draft, over the socket: its request as last saved, and its prompt
+// as last sent (internal/web/wire.go). Each save sends the request as a patch of the one, and
+// gets the prompt back as a patch of the other.
+let remote = { request: undefined, prompt: undefined };
+
+// openOver opens a draft over the socket, by its ID or the call it's after, and gives it and its
+// prompt, as GET /api/drafts/{id} does.
+async function openOver(which, options) {
+  const reply = await ask("open", which, options);
+  remote = { request: structuredClone(reply.draft.request), prompt: patch.apply(undefined, reply.prompt) };
+  return { draft: reply.draft, prompt: patch.absolute(remote.prompt), problem: reply.problem || "" };
+}
+
+handlers({
+  push: (message) => {
+    if (message.estimate) showEstimate(message.estimate);
+  },
+  // Connected again, tack has forgotten what it had, so the draft's opened again. What wasn't
+  // saved is saved again from there (save).
+  reconnect: async () => {
+    if (draft) await openOver(draft.id ? { draft: draft.id } : { from: draft.from }, { now: true });
+  },
+});
+
 // Saves the draft, one save at a time so they land in order, and gives back its prompt. A
 // draft that isn't saved yet is made first.
 let saving = Promise.resolve();
@@ -76,11 +108,19 @@ function save() {
   const { off, offTools } = draft;
   const text = savedText();
   const result = saving.then(async () => {
-    await saved();
-    const res = await fetch(`/api/drafts/${draft.id}`, await jsonBody({ request, off, off_tools: offTools }, { method: "PUT" }));
-    if (!res.ok) throw new Error((await res.text()) || res.statusText);
-    lastSaved = text;
-    return res.json();
+    for (;;) {
+      try {
+        const reply = await ask("save", { patch: patch.diff(remote.request, request), off, off_tools: offTools });
+        remote = { request, prompt: patch.apply(remote.prompt, reply.prompt) };
+        draft.id = reply.id;
+        lastSaved = text;
+        return { prompt: patch.absolute(remote.prompt), problem: reply.problem || "" };
+      } catch (err) {
+        // The connection went before it was answered; once the draft's open again, it goes again
+        // as a patch of whatever tack has then.
+        if (!err.retry) throw err;
+      }
+    }
   });
   saving = result.catch(() => {});
   return result;
@@ -95,10 +135,7 @@ async function saveChanges() {
 
 // saved makes sure the draft is saved, so it has an ID.
 async function saved() {
-  if (draft.id) return;
-  const res = await fetch("/api/drafts", { method: "POST", body: JSON.stringify({ from: draft.from }) });
-  if (!res.ok) throw new Error((await res.text()) || res.statusText);
-  draft.id = (await res.json()).id;
+  if (!draft.id) await save();
 }
 
 // Saves the draft and draws it again, keeping part anchor, or else what's on the screen, in
@@ -916,7 +953,6 @@ let efforts = null;
 let defaultModel = "";
 // The tools tack has, which Run can run.
 let builtinTools = new Set();
-let estimating = 0;
 
 async function showSendBar() {
   if (!efforts) {
@@ -951,7 +987,6 @@ async function showSendBar() {
   for (const input of document.querySelectorAll("[data-param]")) input.value = req[input.dataset.param] ?? "";
   await showAgents(draft.agent, setAgent);
   $("send-bar").hidden = false;
-  estimate();
 }
 
 // setAgent sets the agent the draft's tools run as, and says whether it did.
@@ -992,7 +1027,6 @@ $("send-effort").addEventListener("change", () => {
   }
   // The effort is written into the prompt, so it's drawn again.
   preview();
-  estimate();
 });
 // The model decides how the prompt is written out, so it's drawn again.
 $("send-model").addEventListener("change", () => {
@@ -1003,33 +1037,24 @@ $("send-model").addEventListener("change", () => {
   }
   draft.request.model = value;
   preview();
-  estimate();
 });
 $("send-max").addEventListener("change", () => {
   setParam("max_tokens", numberIn($("send-max")));
-  estimate();
 });
 for (const input of document.querySelectorAll("[data-param]")) {
   input.addEventListener("change", () => setParam(input.dataset.param, numberIn(input)));
 }
 
-async function estimate() {
-  const mine = ++estimating;
+// showEstimate shows what the draft could cost, which tack sends after each save.
+function showEstimate(e) {
   const box = $("send-estimate");
-  try {
-    const res = await fetch("/api/estimate", await jsonBody(draft.request, { method: "POST" }));
-    const e = await res.json();
-    if (mine !== estimating) return;
-    const parts = [];
-    if (e.least_known) parts.push(`at least ${tackMoney.format(e.least_pico)}`);
-    if (e.likely_known) parts.push(`likely ${tackMoney.format(e.likely_pico)}`);
-    if (e.most_known) parts.push(`at most ${tackMoney.format(e.most_pico)}`);
-    // The bar shows the likeliest; all of it is in the title.
-    box.textContent = e.likely_known ? `likely ${tackMoney.format(e.likely_pico)}` : parts[0] || "No estimate";
-    box.title = parts.length ? `This call could cost ${parts.join(", ")}.` : "";
-  } catch {
-    if (mine === estimating) box.textContent = "No estimate";
-  }
+  const parts = [];
+  if (e.least_known) parts.push(`at least ${tackMoney.format(e.least_pico)}`);
+  if (e.likely_known) parts.push(`likely ${tackMoney.format(e.likely_pico)}`);
+  if (e.most_known) parts.push(`at most ${tackMoney.format(e.most_pico)}`);
+  // The bar shows the likeliest; all of it is in the title.
+  box.textContent = e.likely_known ? `likely ${tackMoney.format(e.likely_pico)}` : parts[0] || "No estimate";
+  box.title = parts.length ? `This call could cost ${parts.join(", ")}.` : "";
 }
 
 // Send sends the draft as a call of its own, drawing the reply as it comes in, then shows that
