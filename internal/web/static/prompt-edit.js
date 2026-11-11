@@ -699,13 +699,18 @@ $("prompt").addEventListener("click", (event) => {
   area.setAttribute("aria-label", "Text");
   target.hidden = true;
   target.after(area);
+  // Measuring it shrinks it for a moment, which would make the page shorter and move it, so
+  // what's around it keeps its height while it does.
   const grow = () => {
+    const around = area.parentElement;
+    if (around) around.style.minHeight = `${around.offsetHeight}px`;
     area.style.height = "auto";
     area.style.height = `${area.scrollHeight}px`;
+    if (around) around.style.minHeight = "";
   };
   area.addEventListener("input", grow);
   grow();
-  area.focus();
+  area.focus({ preventScroll: true });
   let done = false;
   const close = (save) => {
     if (done) return;

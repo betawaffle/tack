@@ -895,6 +895,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(!mdRuns.includes("none") && mdRuns.includes("Run"), `each result's card has its call's Run, or says it's yours to answer (${mdRuns})`);
   await p.locator(".md-card.k-user .md-empty").last().click();
   await p.waitForSelector(".md-edit");
+  // Typing doesn't move the page: what's being written stays where it is.
+  const typedAt = await p.evaluate(() => document.querySelector(".md-edit").getBoundingClientRect().top);
+  for (let n = 0; n < 30; n++) {
+    await p.keyboard.type(`line ${n}`);
+    await p.keyboard.press("Shift+Enter");
+  }
+  const typed = await p.evaluate(() => ({ top: document.querySelector(".md-edit").getBoundingClientRect().top, bottom: document.querySelector(".md-edit").getBoundingClientRect().bottom / innerHeight }));
+  ok(Math.abs(typed.top - typedAt) < 2 || typed.bottom > 0.6, `typing in the markdown view doesn't move the page about (${JSON.stringify({ was: typedAt, ...typed })})`);
   await p.fill(".md-edit", "paced, in **markdown**");
   await p.keyboard.press("Enter");
   await p.waitForFunction(() => !document.querySelector(".md-edit") && !document.querySelector(".ghost") && [...document.querySelectorAll(".md-card.k-user strong")].some((s) => s.textContent === "markdown"));

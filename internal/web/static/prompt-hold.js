@@ -109,6 +109,7 @@ function smoothScroll(top) {
 // drawing fade out, and then the room they took closes up. With nothing on the screen that
 // the call has (only what a draft added), it first scrolls up to the nearest row that it has.
 export function keepView(draw) {
+  if ($("prompt").querySelector(".md-view")) return keepCard(draw);
   const was = drawn() ? lineUp(drawn()) : null;
   const has = (row) => [...row.querySelectorAll(".tok[data-t]")].some((t) => was.toBase(Number(t.dataset.t)) !== null);
   if (was) {
@@ -125,6 +126,25 @@ export function keepView(draw) {
     }
   }
   return holdView(draw);
+}
+
+// keepCard is keepView for the markdown view: the first message's card on the screen stays
+// where it was.
+async function keepCard(draw) {
+  const s = scroller();
+  const view = s.getBoundingClientRect();
+  const anchor = [...$("prompt").querySelectorAll(".md-card[data-message]")].find((c) => c.getBoundingClientRect().bottom > view.top + 1);
+  const i = anchor?.dataset.message;
+  const top = anchor?.getBoundingClientRect().top;
+  const scrolled = s.scrollTop;
+  await draw();
+  const after = i === undefined ? null : $("prompt").querySelector(`.md-card[data-message="${i}"]`);
+  if (!after) {
+    scrollBack(scrolled);
+    return;
+  }
+  scrollPageTo(scroller().scrollTop + after.getBoundingClientRect().top - top);
+  easeRoom();
 }
 
 function holdView(draw) {

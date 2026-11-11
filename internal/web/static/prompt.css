@@ -291,7 +291,6 @@ body.running #prompt .run-call button[data-running] { pointer-events: auto; curs
 body:not(.drafting) .md-switch, body.markdown.drafting .raw-only { display: none !important; }
 .md-view { display: flex; flex-direction: column; gap: 10px; max-width: 90ch; margin: 0 auto; padding: 4px 0 8px; font: 14px/1.6 var(--ui); }
 .md-card {
-  content-visibility: auto; contain-intrinsic-size: auto 160px;
   padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid var(--k); border-radius: 8px;
   background: color-mix(in srgb, var(--k) 3%, var(--surface));
 }
@@ -326,7 +325,6 @@ body:not(.drafting) .md-switch, body.markdown.drafting .raw-only { display: none
 .md-type { color: var(--muted); font: 12px/1.6 var(--mono); white-space: nowrap; }
 .md-params .md-text p { margin: 0; }
 .md-streamed .md-output { font: inherit; }
-.md-card.streaming { content-visibility: visible; }
 .md-card [data-field] { cursor: text; border-radius: 4px; }
 .md-card [data-field]:hover { background: var(--hover); }
 .md-empty { min-height: 1.6em; }
