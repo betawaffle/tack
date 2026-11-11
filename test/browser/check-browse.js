@@ -465,6 +465,23 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       await p.keyboard.press("Escape");
       ok((await p.locator(".add-choices").count()) === 0 && /system,user$/.test(await roles()), "Escape closes the choices");
 
+      // A made-up turn can have a call of its own, with a result after it to write or run.
+      await p.locator(`.add-call[data-message="${made}"]`).click({ force: true });
+      await p.locator(".add-choice[data-tool]", { hasText: "run_code" }).click();
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "python");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box"));
+      const called = await p.evaluate(async ({ id, made }) => {
+        const ms = (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages;
+        const call = ms[made].tool_calls?.at(-1);
+        return { name: call?.function.name, args: call && JSON.parse(call.function.arguments), next: ms[made + 1], roles: ms.map((m) => m.role).join(",") };
+      }, { id: runDraft, made });
+      ok(called.name === "run_code" && called.args.language === "python" && called.next?.role === "tool" && called.next.tool_call_id && /assistant,tool,system,user$/.test(called.roles),
+        `a call can be added to a made-up turn, with a result after it (${JSON.stringify(called)})`);
+      await p.waitForFunction(() => document.querySelectorAll(".run-call button").length > 0);
+      ok(true, "and it has a Run button");
+
       // Writing a long message near the end keeps what's being written at the bottom of the
       // screen, rather than pulling it up to the top with nothing under it.
       await p.locator(".add-after").last().click({ force: true });

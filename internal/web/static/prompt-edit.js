@@ -272,6 +272,15 @@ function addMessageControls() {
       add.title = "Add a system message, a message from you, or a made-up turn of the model's after this";
       row.querySelector(".pl-text").append(add);
     }
+    // A turn of the model's can have calls added to it, each with an empty result to write
+    // or run.
+    if (draft.request.messages[i]?.role === "assistant") {
+      const add = el("button", "mini up-to-here add-call", "Add a Call");
+      add.type = "button";
+      add.dataset.message = i;
+      add.title = "Add a call to one of the tools to this turn of the model's, with a result after it";
+      row.querySelector(".pl-text").append(add);
+    }
     if (i < last) {
       const up = el("button", "mini up-to-here", "Only Up To Here");
       up.type = "button";
@@ -302,27 +311,38 @@ $("prompt").addEventListener("change", (event) => {
 });
 $("prompt").addEventListener("click", (event) => {
   const choice = event.target.closest(".add-choice");
-  if (choice && draft) return addAfter(Number(choice.dataset.message), choice.dataset.role);
+  if (choice && draft) {
+    const i = Number(choice.dataset.message);
+    return choice.dataset.tool !== undefined ? addCall(i, Number(choice.dataset.tool)) : addAfter(i, choice.dataset.role);
+  }
   const up = event.target.closest(".up-to-here");
   if (!up || !draft) return;
   if (up.classList.contains("add-tool")) addTool();
-  else if (up.classList.contains("add-after")) showChoices(up);
+  else if (up.classList.contains("add-after")) showChoices(up, ADDABLE.map(([role, label]) => ({ label, data: { role } })));
+  else if (up.classList.contains("add-call")) showChoices(up, toolChoices());
   else onlyUpTo(Number(up.dataset.message));
 });
 
-// Add After opens into the kinds of message it can add.
+// Add After opens into the kinds of message it can add, and Add a Call into the tools that
+// are offered.
 const ADDABLE = [["system", "System Message"], ["user", "User Message"], ["assistant", "Assistant Turn"]];
-function showChoices(button) {
+function toolChoices() {
+  const off = new Set(draft.offTools);
+  return (draft.request.tools || []).flatMap((tool, i) => (off.has(i) || !tool.function?.name ? [] : [{ label: tool.function.name, data: { tool: i } }]));
+}
+
+function showChoices(button, items) {
   const choices = el("span", "add-choices");
-  for (const [role, label] of ADDABLE) {
+  if (!items.length) choices.append(el("span", "add-none", "No tools are offered."));
+  for (const { label, data } of items) {
     const choice = el("button", "mini add-choice", label);
     choice.type = "button";
     choice.dataset.message = button.dataset.message;
-    choice.dataset.role = role;
+    Object.assign(choice.dataset, data);
     choices.append(choice);
   }
   button.replaceWith(choices);
-  choices.firstChild.focus();
+  choices.querySelector("button")?.focus();
   // Clicking anywhere else, or Escape, closes it again.
   const close = (event) => {
     if (event.type === "keydown" ? event.key !== "Escape" : choices.contains(event.target)) return;
@@ -332,6 +352,38 @@ function showChoices(button) {
   };
   document.addEventListener("pointerdown", close, true);
   document.addEventListener("keydown", close, true);
+}
+
+// An empty value of a parameter's type, for a new call to start with.
+const EMPTY = { string: "", number: 0, integer: 0, boolean: false, array: [], object: {} };
+
+// addCall adds a call to tool t to the model's message i, with its required parameters empty,
+// and an empty result after the message's other results. An empty message from you after the
+// turn goes, since the results take its place. The call's first parameter opens to write in.
+async function addCall(i, t) {
+  const messages = draft.request.messages;
+  const m = messages[i];
+  const fn = draft.request.tools[t].function;
+  const args = {};
+  for (const name of fn.parameters?.required || []) {
+    const type = fn.parameters.properties?.[name]?.type;
+    args[name] = structuredClone(EMPTY[Array.isArray(type) ? type[0] : type] ?? "");
+  }
+  const id = `call-${[...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("")}-0`;
+  m.tool_calls = [...(m.tool_calls || []), { id, type: "function", function: { name: fn.name, arguments: JSON.stringify(args) } }];
+  let at = Math.max(...groupOf(i)) + 1;
+  const next = messages[at];
+  if (next?.role === "user" && !textOf(next.content).trim() && !draft.off.includes(at)) {
+    messages.splice(at, 1);
+    draft.off = draft.off.filter((j) => j !== at).map((j) => (j > at ? j - 1 : j));
+  }
+  messages.splice(at, 0, { role: "tool", tool_call_id: id, content: "" });
+  draft.off = draft.off.map((j) => (j >= at ? j + 1 : j));
+  await preview();
+  const parts = drawn()?.prompt.parts || [];
+  const n = m.tool_calls.length - 1;
+  const k = parts.findIndex((p) => p.kind === "value" && indexOf(p) === i && (p.call || 0) === n);
+  if (k >= 0) openEditor(k);
 }
 
 // The part that's a new message's text, which its box opens on.
