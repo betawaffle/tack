@@ -296,29 +296,13 @@ func dsText(content jsontext.Value) (string, error) {
 	return strings.Join(texts, "\n\n"), nil
 }
 
-// dsMerge puts tool results into user messages, in the order they were called in, since this
-// format has no role for them. Neighboring user messages become one.
+// dsMerge puts tool results into user messages, since this format has no role for them, and
+// neighboring user messages become one. As DeepSeek's encoder does
+// (sort_tool_results_by_call_order in the model card's encoding.py), the results in each merged
+// message go in the order of the calls of the last assistant message that made any: a system
+// message between results keeps them in separate messages, each sorted on its own.
 func dsMerge(req *dsRequest) ([]dsMessage, error) {
 	var out []dsMessage
-	var order map[string]int
-	sortResults := func(m *dsMessage) {
-		if m == nil || order == nil {
-			return
-		}
-		var tools []dsBlock
-		for _, block := range m.blocks {
-			if block.tool {
-				tools = append(tools, block)
-			}
-		}
-		slices.SortStableFunc(tools, func(a, b dsBlock) int { return order[a.id] - order[b.id] })
-		for i, n := 0, 0; i < len(m.blocks); i++ {
-			if m.blocks[i].tool {
-				m.blocks[i] = tools[n]
-				n++
-			}
-		}
-	}
 	for i := range req.Messages {
 		m := &req.Messages[i]
 		text, err := dsText(m.Content)
@@ -338,24 +322,44 @@ func dsMerge(req *dsRequest) ([]dsMessage, error) {
 			if message.reasoning == "" {
 				message.reasoning = m.Reasoning
 			}
-			out = append(out, message)
 			if m.Role == "assistant" {
-				if len(out) >= 2 {
-					sortResults(&out[len(out)-2])
+				for _, call := range m.ToolCalls {
+					message.calls = append(message.calls, dsCall{call.ID, call.Function.Name, call.Function.Arguments})
 				}
-				order = nil
-				for j, call := range m.ToolCalls {
-					if order == nil {
-						order = map[string]int{}
-					}
-					order[call.ID] = j
-					out[len(out)-1].calls = append(out[len(out)-1].calls, dsCall{call.ID, call.Function.Name, call.Function.Arguments})
+			}
+			out = append(out, message)
+		}
+	}
+	var order map[string]int
+	for i := range out {
+		m := &out[i]
+		if m.role == "assistant" && len(m.calls) > 0 {
+			order = map[string]int{}
+			for j, call := range m.calls {
+				if call.id != "" {
+					order[call.id] = j
 				}
 			}
 		}
-	}
-	if len(out) > 0 {
-		sortResults(&out[len(out)-1])
+		if m.role != "user" || order == nil {
+			continue
+		}
+		var tools []dsBlock
+		for _, block := range m.blocks {
+			if block.tool {
+				tools = append(tools, block)
+			}
+		}
+		if len(tools) < 2 {
+			continue
+		}
+		slices.SortStableFunc(tools, func(a, b dsBlock) int { return order[a.id] - order[b.id] })
+		for k, n := 0, 0; k < len(m.blocks); k++ {
+			if m.blocks[k].tool {
+				m.blocks[k] = tools[n]
+				n++
+			}
+		}
 	}
 	return out, nil
 }

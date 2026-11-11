@@ -35,7 +35,7 @@ const maxMessageBytes = 8 << 20
 // this server, so that it has to be reloaded. Any other change to the page's files only
 // offers a reload. Pages send it with every request, and it's checked there too, since
 // they might not have heard yet.
-const pageRequired = 5
+const pageRequired = 6
 
 const pageRequiredHeader = "X-Tack-Page-Required"
 
@@ -820,7 +820,7 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, core.ErrNotFound), errors.Is(err, store.ErrNoDraft), errors.Is(err, core.ErrNoMessage), errors.Is(err, core.ErrNoEdit), errors.Is(err, core.ErrNoDecision):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, core.ErrBusy), errors.Is(err, core.ErrNothingToSend), errors.Is(err, core.ErrAwaiting), errors.Is(err, core.ErrNothingRunning),
-		errors.Is(err, core.ErrDraftSent), errors.Is(err, core.ErrCallChanged):
+		errors.Is(err, core.ErrDraftSent), errors.Is(err, core.ErrDraftRunning), errors.Is(err, core.ErrCallChanged):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrBadChoice), errors.Is(err, core.ErrBadSettings), errors.Is(err, core.ErrBadTools), errors.Is(err, core.ErrBadFork), errors.Is(err, core.ErrBadMessage),
 		errors.Is(err, core.ErrBadRequest), errors.Is(err, core.ErrBadSlug):

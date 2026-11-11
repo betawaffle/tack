@@ -124,7 +124,7 @@ type pendingSettings struct {
 var (
 	errBudgetStop     = errors.New("the budget stopped this call")
 	errReplyCancelled = errors.New("You cancelled this reply.")
-	errToolStopped    = errors.New("you stopped it")
+	errToolStopped    = errors.New("the user stopped it")
 )
 
 // ToolInfo describes a tool for the page.

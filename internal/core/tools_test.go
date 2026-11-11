@@ -1326,7 +1326,7 @@ func TestStopToolEndsOneCallAndKeepsItsOutput(t *testing.T) {
 	}
 	finish(t, updates)
 	got := f.calls(c, id)[0]
-	if got.Output != "partial" || !strings.Contains(got.Error, "you stopped it") {
+	if got.Output != "partial" || !strings.Contains(got.Error, "the user stopped it") {
 		t.Errorf("call = %+v", got)
 	}
 	f.decision(c, id, store.DecideOutput)

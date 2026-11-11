@@ -18,8 +18,11 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const browser = await chromium.launch();
   const p = await browser.newPage();
   // What the page sends over its socket, for checking what goes.
-  const socketSent = [];
-  p.on("websocket", (ws) => ws.on("framesent", (f) => socketSent.push(String(f.payload))));
+  const socketSent = [], socketGot = [];
+  p.on("websocket", (ws) => {
+    ws.on("framesent", (f) => socketSent.push(String(f.payload)));
+    ws.on("framereceived", (f) => socketGot.push(String(f.payload)));
+  });
   const errs = [];
   p.on("console", (m) => {
     if (m.type() === "error" && !/400|404/.test(m.text())) errs.push(m.text());
@@ -311,6 +314,23 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // After sending, it's the draft of the call after the one it became.
   await p.waitForFunction(() => location.hash.startsWith("#manual/") && /^After call 2 of 2/.test(document.getElementById("which").textContent) && !document.querySelector(".streaming"), null, { timeout: 15000 });
   ok((await p.locator("#prompt").textContent()).includes("Edited") && (await p.locator(".tok.ins").count()) > 0 && !(await p.isDisabled("#prev")), "after sending, it's the next draft, which steps back to the call before");
+  const opens = socketSent.slice(sentBefore).filter((m) => m.includes('"op":"open"')).length;
+  ok(opens === 0, `and the next draft came with the answer, rather than being asked for (${opens} opened)`);
+  // The answer leaves out the reply, which came as it was written, and the page puts it back.
+  const answer = socketGot.filter((m) => m.startsWith('{"re":') && m.includes('"call":')).at(-1) || "";
+  const afterSend = await p.evaluate(async () => {
+    const canon = (v) => JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort()) : x));
+    const { drawn } = await import("/static/prompt-draw.js");
+    const got = await (await fetch(`/api/draft-for?from=${encodeURIComponent(location.hash.slice(1))}`)).json();
+    const have = { ...drawn() };
+    delete have.before_draft;
+    delete have.is_base;
+    const reply = got.draft.request.messages.findLast((m) => m.role === "assistant");
+    return { same: canon(have) === canon(got.prompt), reply: [reply.content, reply.reasoning].filter((t) => t && t.length > 100).map((t) => t.slice(0, 60)) };
+  });
+  const left = afterSend.reply.filter((text) => answer.includes(JSON.stringify(text).slice(1, -1)));
+  ok(answer.includes('"streamed":') && afterSend.reply.length > 0 && left.length === 0 && afterSend.same,
+    `the next draft leaves out the reply that streamed, and is tack's once it's put back (${answer.length} bytes, ${left.length} of ${afterSend.reply.length} in it, same: ${afterSend.same})`);
   // As Sent shows the call it became, with its reply.
   await p.click("#edit");
   await p.waitForFunction(() => /^Sent draft, 2 of 2/.test(document.getElementById("which").textContent));
@@ -503,11 +523,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       await p.click(`.run-call button[data-call="${sleepCall}"]`);
       await p.waitForFunction((c) => document.querySelector(`.run-call button[data-call="${c}"]`)?.textContent === "Stop", sleepCall);
       await p.waitForTimeout(1500);
+      // While it runs, the rest of the draft can't change: the page won't take a click on it,
+      // and tack won't save it.
+      const locked = await p.evaluate(() => ({
+        row: getComputedStyle(document.querySelector(".pl.k-user")).pointerEvents,
+        send: getComputedStyle(document.getElementById("send")).pointerEvents,
+      }));
+      const lockedDraft = (await (await fetch(`${B}/api/drafts/${runDraft}`)).json()).draft;
+      locked.status = (await fetch(`${B}/api/drafts/${runDraft}`, { method: "PUT", body: JSON.stringify({ request: lockedDraft.request }) })).status;
+      ok(locked.row === "none" && locked.send === "none" && locked.status === 409, `a draft can't change while one of its calls runs (${JSON.stringify(locked)})`);
       const stoppedAt = Date.now();
       await p.click(`.run-call button[data-call="${sleepCall}"]`);
       await p.waitForFunction(() => document.getElementById("prompt").textContent.includes("stopped"), null, { timeout: 20000 });
       const stoppedResult = await p.evaluate(async ({ id, c }) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.find((m) => m.tool_call_id === c)?.content, { id: runDraft, c: sleepCall });
-      ok(/you stopped it/.test(stoppedResult) && Date.now() - stoppedAt < 15000, `Stop stops a run that's going (${JSON.stringify(stoppedResult)})`);
+      ok(/the user stopped it/.test(stoppedResult) && !/EOF/.test(stoppedResult) && Date.now() - stoppedAt < 15000, `Stop stops a run that's going (${JSON.stringify(stoppedResult)})`);
 
       // A parameter the call leaves out can be added from its tool's schema.
       const callNo = called.roles ? (await p.evaluate(async ({ id, made }) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages[made].tool_calls.length - 1, { id: runDraft, made })) : 0;

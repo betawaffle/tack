@@ -138,6 +138,21 @@
     return { ...wire, prompt: { ...body, parts, segments } };
   }
 
+  // putBack puts what streamed back in a send's answer, where internal/web/streamed.go took it
+  // out: each piece into the string at its JSON Pointer, at its offset, in order.
+  function putBack(reply, known) {
+    for (const { at, offset, is } of reply.streamed || []) {
+      const path = at.split("/").slice(1).map((p) => p.replaceAll("~1", "/").replaceAll("~0", "~"));
+      let parent = reply;
+      for (const p of path.slice(0, -1)) parent = parent[p];
+      const last = path.at(-1);
+      parent[last] = parent[last].slice(0, offset) + known[is] + parent[last].slice(offset);
+    }
+    delete reply.streamed;
+    return reply;
+  }
+
+  exports.putBack = putBack;
   exports.same = same;
   exports.diff = diff;
   exports.apply = apply;

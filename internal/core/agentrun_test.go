@@ -158,10 +158,21 @@ func TestADraftsRunningCallCanBeStopped(t *testing.T) {
 		done <- run
 	}()
 	<-started
+	// While it runs, the draft can't change or be sent, so nothing can get in the way of its result.
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(request), nil, nil); !errors.Is(err, ErrDraftRunning) {
+		t.Errorf("saved while running: %v", err)
+	}
+	if _, _, err := c.SendDraft(d.ID); !errors.Is(err, ErrDraftRunning) {
+		t.Errorf("sent while running: %v", err)
+	}
 	if err := c.StopDraftRun(d.ID, "w"); err != nil {
 		t.Fatal(err)
 	}
-	if run := <-done; !strings.HasPrefix(run.Result, "so far") || !strings.Contains(run.Failure, "you stopped it") {
+	if run := <-done; !strings.HasPrefix(run.Result, "so far") || !strings.Contains(run.Failure, "the user stopped it") {
 		t.Errorf("stopped run = %+v", run)
+	}
+	// And once it's done, it can.
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(request), nil, nil); err != nil {
+		t.Errorf("saved once it's done: %v", err)
 	}
 }

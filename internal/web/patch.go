@@ -240,7 +240,7 @@ func diffString(a, b jsontext.Value) (jsontext.Value, error) {
 	for start < len(as) && start < len(bs) && as[start] == bs[start] {
 		start++
 	}
-	for start > 0 && !utf8.RuneStart(as[start]) {
+	for start > 0 && start < len(as) && !utf8.RuneStart(as[start]) {
 		start--
 	}
 	end := 0

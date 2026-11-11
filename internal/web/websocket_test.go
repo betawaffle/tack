@@ -263,12 +263,14 @@ func TestSocketOpensAndSavesADraft(t *testing.T) {
 		t.Errorf("a bad patch was taken: %v", bad)
 	}
 
-	// Sent over the socket: the call's named first, then the reply comes, then the answer.
+	// Sent over the socket: the call's named first, then the reply comes, then the answer, which
+	// is the draft after it, as a patch of the one that was sent.
 	data, _ := json.Marshal(map[string]any{"id": 5, "op": "send"})
 	c.send(0x1, data, false)
 	var call string
 	var replied strings.Builder
-	for {
+	var answer map[string]jsontext.Value
+	for answer == nil {
 		_, payload := c.next()
 		var m struct {
 			For    int    `json:"for"`
@@ -291,23 +293,18 @@ func TestSocketOpensAndSavesADraft(t *testing.T) {
 			replied.WriteString(m.Update.Text)
 		}
 		if m.Re == 5 {
-			if m.Call != call || call == "" {
-				t.Errorf("the answer names %q, not %q", m.Call, call)
-			}
-			break
+			json.Unmarshal(payload, &answer)
 		}
+	}
+	if string(answer["call"]) != strconv.Quote(call) || call == "" {
+		t.Errorf("the answer names %s, not %q", answer["call"], call)
 	}
 	if replied.String() != "Hello" {
 		t.Errorf("the reply came as %q", replied.String())
 	}
-	// The draft after it, opened, comes as a patch of the one that was open.
-	next := c.call(map[string]any{"id": 6, "op": "open", "from": "manual/" + call})
-	if next["error"] != nil {
-		t.Fatalf("open the next: %v", next)
-	}
-	nextPrompt, err := applyJSON(prompt, next["prompt"])
-	if err != nil {
-		t.Fatal(err)
+	nextPrompt, err := applyJSON(prompt, answer["prompt"])
+	if err != nil || answer["draft"] == nil {
+		t.Fatalf("the next draft: %v, %s", err, answer["draft"])
 	}
 	// The call before is new, so its text comes whole, but the prompt's parts come as changes.
 	var top struct {
@@ -315,7 +312,7 @@ func TestSocketOpensAndSavesADraft(t *testing.T) {
 			Prompt jsontext.Value `json:"prompt"`
 		} `json:"o"`
 	}
-	json.Unmarshal(next["prompt"], &top)
+	json.Unmarshal(answer["prompt"], &top)
 	if len(top.O.Prompt) == 0 || len(top.O.Prompt) > len(nextPrompt)/10 {
 		t.Errorf("the next draft's prompt came nearly whole: %d bytes of %d", len(top.O.Prompt), len(nextPrompt))
 	}
@@ -323,6 +320,11 @@ func TestSocketOpensAndSavesADraft(t *testing.T) {
 		t.Error("the next draft doesn't have the reply")
 	}
 	c.next() // its estimate
+	// Opening it again changes nothing.
+	if again := c.call(map[string]any{"id": 6, "op": "open", "from": "manual/" + call}); again["error"] != nil || again["prompt"] != nil || again["request"] != nil {
+		t.Errorf("opened again: %v", again)
+	}
+	c.next()
 	if stopped := c.call(map[string]any{"id": 7, "op": "stop", "which": 5}); stopped["error"] == nil {
 		t.Errorf("stopping what's done: %v", stopped)
 	}

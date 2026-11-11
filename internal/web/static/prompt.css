@@ -279,3 +279,9 @@ input.agent-key { width: 20em; padding: 2px 4px; border: 1px solid var(--line); 
 .schema-type { font: 12.5px var(--ui); padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); }
 .schema-required { display: inline-flex; align-items: center; gap: 4px; }
 .run-yours { margin-left: 12px; color: var(--muted); font: italic 12px var(--ui); user-select: none; text-indent: 0; }
+/* While a call runs, its result goes in the draft, so nothing else in it can change: only its
+   Stop button works. */
+body.running #prompt { cursor: progress; }
+body.running #prompt .pl, body.running #send-bar > * { pointer-events: none; }
+body.running #send-bar > * { opacity: 0.6; }
+body.running #prompt .run-call button[data-running] { pointer-events: auto; cursor: pointer; }

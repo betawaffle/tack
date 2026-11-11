@@ -36,7 +36,10 @@ async function open(d) {
 export async function loadDraftFor(from, { eager = false } = {}) {
   let opened;
   try {
-    opened = await openOver({ from });
+    // The draft after a call that was just sent came with it.
+    if (afterSend?.from === from) opened = afterSend.opened;
+    else opened = await openOver({ from });
+    afterSend = null;
   } catch (err) {
     showError(err.message);
     clear();
@@ -78,13 +81,20 @@ export function closeDraft() {
 // gets the prompt back as a patch of the other.
 let remote = { request: undefined, prompt: undefined };
 
+// afterSend is the draft after the call that was just sent, which came with the answer.
+let afterSend = null;
+
+// opening takes a draft that's been opened over the socket, as open or a send's answer gives
+// it: both its request and its prompt come as patches of the draft that was open before.
+function opening(reply) {
+  remote = { request: patch.apply(remote.request, reply.request), prompt: patch.apply(remote.prompt, reply.prompt) };
+  return { draft: { ...reply.draft, request: structuredClone(remote.request) }, prompt: patch.absolute(remote.prompt), problem: reply.problem || "" };
+}
+
 // openOver opens a draft over the socket, by its ID or the call it's after, and gives it and its
 // prompt, as GET /api/drafts/{id} does.
 async function openOver(which, options) {
-  const reply = await ask("open", which, options);
-  // Both come as patches of the draft that was open before, like the one a call was sent from.
-  remote = { request: patch.apply(remote.request, reply.request), prompt: patch.apply(remote.prompt, reply.prompt) };
-  return { draft: { ...reply.draft, request: structuredClone(remote.request) }, prompt: patch.absolute(remote.prompt), problem: reply.problem || "" };
+  return opening(await ask("open", which, options));
 }
 
 // fromRun takes what a run sent back: the result is in the draft now.
@@ -592,6 +602,8 @@ async function runCall(button) {
   button.textContent = "Stop";
   button.dataset.running = "";
   hideError();
+  // Its result goes in the draft, so nothing else in it changes until it's done.
+  document.body.classList.add("running");
   try {
     await save();
     const going = ask("run", { call: button.dataset.call, flags: JSON.parse(button.dataset.flags || "[]") });
@@ -605,6 +617,7 @@ async function runCall(button) {
     button.disabled = false;
     button.textContent = "Run again";
   } finally {
+    document.body.classList.remove("running");
     delete button.dataset.running;
     delete button.dataset.request;
   }
@@ -1102,6 +1115,8 @@ $("send").addEventListener("click", async () => {
     await saveChanges();
     let failed = "";
     let streaming = false;
+    // What streamed, which the answer leaves out (patch.putBack).
+    const streamed = { reasoning: "", content: "" };
     const going = ask("send", {}, {
       update: (message) => {
         if (message.call) id = message.call;
@@ -1110,12 +1125,15 @@ $("send").addEventListener("click", async () => {
         if (u?.kind === "content" || u?.kind === "reasoning") {
           if (!streaming) startStream();
           streaming = true;
+          streamed[u.kind] += u.text;
           streamText(u.kind, u.text);
         }
       },
     });
     sending.request = going.id;
-    id = (await going).call;
+    const reply = patch.putBack(await going, streamed);
+    id = reply.call;
+    if (reply.draft) afterSend = { from: `manual/${id}`, opened: opening(reply) };
     if (failed) throw new Error(failed);
   } catch (err) {
     // If the connection went, the call carries on, and it's recorded: it's shown once it's back.

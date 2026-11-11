@@ -88,6 +88,9 @@ func TestPatchSplicesLongStrings(t *testing.T) {
 		{long + "é and 𝄞 and é" + long, long + "é but 𝄞 or é" + long},
 		{long + "𝄞" + long, long + "𝄟" + long}, // differs only in a surrogate pair's second half
 		{long, "short now"},
+		{long, long + "and more after it"},
+		{long, "before it, " + long},
+		{long + "é", long + "é and more"},
 	}
 	for _, c := range cases {
 		a, _ := json.Marshal(c.a)

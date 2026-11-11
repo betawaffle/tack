@@ -258,3 +258,14 @@ test("a long string goes as a splice, and never splits a character", () => {
   // As the server makes them.
   assert.deepEqual(patch.apply("a𝄞b", { t: [3, 1, "c"] }), "a𝄞c");
 });
+
+test("what streamed goes back where the server took it out", () => {
+  const content = "the reply, 𝄞 and all";
+  const reply = { re: 1, prompt: { o: { "a/b~c": { t: [0, 0, "<a>𝄞</a>"] }, segs: { s: [0, 0, [{ text: "" }]] } } },
+    streamed: [{ at: "/prompt/o/a~1b~0c/t/2", offset: 5, is: "content" }, { at: "/prompt/o/a~1b~0c/t/2", offset: 5 + content.length + 4, is: "content" }, { at: "/prompt/o/segs/s/2/0/text", offset: 0, is: "reasoning" }] };
+  reply.prompt.o["a/b~c"].t[2] = "<a>𝄞</a>" + "</a>";
+  const out = patch.putBack(reply, { content, reasoning: "thought" });
+  assert.equal(out.prompt.o["a/b~c"].t[2], "<a>𝄞" + content + "</a>" + content + "</a>");
+  assert.equal(out.prompt.o.segs.s[2][0].text, "thought");
+  assert.equal(out.streamed, undefined);
+});

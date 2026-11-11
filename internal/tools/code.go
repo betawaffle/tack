@@ -752,7 +752,11 @@ func (r *reader) runCode(ctx context.Context, call core.Call) ([]byte, error) {
 	// going to wait on it, so it gets a limit anyway.
 	keptRead.SetReadDeadline(time.Now().Add(5 * time.Second))
 	data := <-kept
-	if err := r.saveKept(call, data); err != nil {
+	if ctx.Err() != nil {
+		// Stopped, or out of time, so what it left in /work may be half done: it isn't kept,
+		// and why isn't news.
+		failure = errors.Join(failure, errors.New("its changes to /work weren't kept, so /work is as it was before this call"))
+	} else if err := r.saveKept(call, data); err != nil {
 		failure = errors.Join(failure, fmt.Errorf("the files in /work weren't kept, so they're as they were before this call: %w", err))
 	}
 	if failure != nil {

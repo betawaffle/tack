@@ -16,6 +16,10 @@ import (
 // ErrDraftSent is a change to a draft that's already been sent.
 var ErrDraftSent = errors.New("this draft has been sent, so it can't change")
 
+// ErrDraftRunning is a change to a draft, or sending it, while one of its calls is running,
+// whose result goes in it when it's done.
+var ErrDraftRunning = errors.New("one of this draft's calls is running: wait for it, or stop it, first")
+
 // requestOf is a call's request and reply, by conversation/call or manual/call.
 func (c *Core) requestOf(ref string) (CallRequest, error) {
 	c.mu.Lock()
@@ -354,6 +358,26 @@ func (c *Core) SetDraftAgent(id, agent string) error {
 // SaveDraft replaces a draft's request, and shows it as Draft does. off and offTools, where
 // they aren't nil, replace which of its messages and tools are turned off.
 func (c *Core) SaveDraft(id string, request jsontext.Value, off, offTools []int) (CallPrompt, error) {
+	if c.draftRunning(id) {
+		return CallPrompt{}, ErrDraftRunning
+	}
+	return c.saveDraft(id, request, off, offTools)
+}
+
+// draftRunning says whether one of a draft's calls is running.
+func (c *Core) draftRunning(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.draftRuns {
+		if strings.HasPrefix(key, id+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// saveDraft is SaveDraft, whether a call's running or not: a run puts its own result in.
+func (c *Core) saveDraft(id string, request jsontext.Value, off, offTools []int) (CallPrompt, error) {
 	var check map[string]jsontext.Value
 	if err := json.Unmarshal(request, &check); err != nil {
 		return CallPrompt{}, fmt.Errorf("%w: the request isn't a JSON object: %v", ErrBadRequest, err)
@@ -394,6 +418,9 @@ func (c *Core) SendDraft(id string) (string, <-chan Update, error) {
 	}
 	if d.Sent != "" {
 		return "", nil, ErrDraftSent
+	}
+	if c.draftRunning(id) {
+		return "", nil, ErrDraftRunning
 	}
 	if d.Agent != "" {
 		if _, err := c.Agent(d.Agent); err != nil {

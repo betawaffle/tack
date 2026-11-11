@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"encoding/json/jsontext"
@@ -32,7 +33,9 @@ import (
 //	    is then), with "prompt" a patch of the last prompt sent
 //	send {}: the draft sent, as POST /api/drafts/{id}/send does. First comes {"for": n,
 //	    "call": id} naming the call, then {"for": n, "update": u} for each part of the reply as it
-//	    comes, and the answer once it's done
+//	    comes, and the answer once it's done, which is the draft after the call, opened, as open
+//	    gives it, but without what streamed: "streamed" says where each piece of it goes back
+//	    (streamed.go)
 //	run {"call": id, "flags": [...]}: one of its tool calls run, as POST
 //	    /api/drafts/{id}/calls/{call}/run does, with "run" what it gave, and "request" and
 //	    "prompt" as patches, since the result is in the draft now
@@ -171,19 +174,10 @@ func (p *promptSession) handle(req socketRequest) socketReply {
 		if d == nil {
 			return socketReply{Error: errorText(err)}
 		}
-		prompt, problem, err := wirePrompt(cp, err)
+		reply, err := p.opened(d, cp, err)
 		if err != nil {
 			return socketReply{Error: errorText(err)}
 		}
-		reply, err := p.patches(d.Request, prompt)
-		if err != nil {
-			return socketReply{Error: errorText(err)}
-		}
-		// The request goes as a patch, rather than in the draft.
-		shown := *d
-		shown.Request = jsontext.Value("null")
-		reply.Draft, reply.Problem = &shown, problem
-		p.open, p.id, p.from = true, d.ID, d.From
 		return reply
 	case "save":
 		if !p.open {
@@ -218,6 +212,25 @@ func (p *promptSession) handle(req socketRequest) socketReply {
 		return socketReply{ID: p.id, Prompt: patch, Problem: problem}
 	}
 	return socketReply{Error: "unknown op " + strconv.Quote(req.Op)}
+}
+
+// opened makes d the open draft, and says what it is: the draft, with its request and prompt as
+// patches of what was open. The caller holds mu.
+func (p *promptSession) opened(d *store.Draft, cp core.CallPrompt, err error) (socketReply, error) {
+	prompt, problem, err := wirePrompt(cp, err)
+	if err != nil {
+		return socketReply{}, err
+	}
+	reply, err := p.patches(d.Request, prompt)
+	if err != nil {
+		return socketReply{}, err
+	}
+	// The request goes as a patch, rather than in the draft.
+	shown := *d
+	shown.Request = jsontext.Value("null")
+	reply.Draft, reply.Problem = &shown, problem
+	p.open, p.id, p.from = true, d.ID, d.From
+	return reply, nil
 }
 
 // patches makes request and prompt what the page has, and says how they changed. The caller
@@ -274,10 +287,42 @@ func (p *promptSession) sendDraft(req socketRequest) {
 	done := p.going(req.ID, func() error { return p.s.core.CancelManual(call) })
 	defer done()
 	p.send(map[string]any{"for": req.ID, "call": call})
+	// What streamed, as the page got it, which it doesn't need again.
+	streamed := map[string]*strings.Builder{"reasoning": {}, "content": {}}
 	for u := range updates {
 		p.send(map[string]any{"for": req.ID, "update": u})
+		if b := streamed[u.Kind]; b != nil {
+			b.WriteString(u.Text)
+		}
 	}
-	p.send(socketReply{Re: req.ID, Call: call})
+	// What the page shows next is the draft after the call, so it comes with the answer, if
+	// the draft that was sent is still the one open.
+	reply := socketReply{Re: req.ID, Call: call}
+	p.mu.Lock()
+	if p.open && p.id == id {
+		if d, cp, err := p.s.core.DraftFor("manual/" + call); d != nil {
+			if next, err := p.opened(d, cp, err); err == nil {
+				next.Re, next.Call = req.ID, call
+				reply = next
+			}
+		}
+	}
+	out, err := json.Marshal(reply)
+	if err != nil {
+		log.Printf("socket: %v", err)
+		out, _ = json.Marshal(socketReply{Re: req.ID, Call: call, Error: err.Error()})
+	} else if stripped, err := withStreamed(out, map[string]string{"reasoning": streamed["reasoning"].String(), "content": streamed["content"].String()}); err == nil {
+		out = stripped
+	} else {
+		// It goes whole, then.
+		log.Printf("socket: %v", err)
+	}
+	p.c.Write(context.Background(), messageText, out)
+	request := p.request
+	p.mu.Unlock()
+	if reply.Draft != nil {
+		p.estimate(context.Background(), request)
+	}
 }
 
 func (p *promptSession) runCall(req socketRequest) {

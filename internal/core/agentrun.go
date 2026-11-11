@@ -227,7 +227,7 @@ func (c *Core) RunDraftCall(draftID, callID string, flags []string) (DraftRun, e
 		}
 	}
 	// A draft for a model tack can't draw is saved all the same.
-	if _, err := c.SaveDraft(draftID, request, nil, nil); err != nil && !errors.Is(err, tokens.ErrNoRenderer) {
+	if _, err := c.saveDraft(draftID, request, nil, nil); err != nil && !errors.Is(err, tokens.ErrNoRenderer) {
 		return run, err
 	}
 	return run, nil

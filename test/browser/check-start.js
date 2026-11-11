@@ -320,7 +320,7 @@ let page;
   await p.waitForFunction((n) => [...document.querySelectorAll(".prose")].filter((x) => x.innerText.includes("Done with tools.")).length > n, doneBefore, { timeout: 15000 });
   ok(Date.now() - stoppedAt < 8000, "the code stops");
   const stopped = await p.locator(".tool-output").last().textContent();
-  ok(stopped.includes("you stopped it") && stopped.includes("begun"), "and its output so far is kept, and sent: " + stopped.slice(0, 120));
+  ok(stopped.includes("the user stopped it") && stopped.includes("begun"), "and its output so far is kept, and sent: " + stopped.slice(0, 120));
   await idle();
 
   // Cancel reply.
