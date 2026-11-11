@@ -25,6 +25,7 @@
   function diff(a, b) {
     if (a !== undefined && same(a, b)) return null;
     const k = kindOf(a);
+    if (typeof a === "string" && typeof b === "string" && b.length > 256) return diffString(a, b);
     if (a === undefined || k !== kindOf(b) || k === "v") return { "=": b };
     if (k === "o") {
       const ak = Object.keys(a), bk = Object.keys(b);
@@ -67,6 +68,24 @@
     return { s: [start, a.length - start - end, b.slice(start, b.length - end)] };
   }
 
+  // diffString is a splice of a long string, counted in UTF-16 code units, which is what
+  // JavaScript's strings are, never splitting a character in two.
+  const low = (s, i) => {
+    const c = s.charCodeAt(i);
+    return c >= 0xdc00 && c <= 0xdfff;
+  };
+  function diffString(a, b) {
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    if (start > 0 && low(a, start)) start--;
+    let end = 0;
+    while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+    if (end > 0 && low(a, a.length - end)) end--;
+    const insert = b.slice(start, b.length - end);
+    if (insert.length + 20 >= b.length) return { "=": b };
+    return { t: [start, a.length - start - end, insert] };
+  }
+
   // apply makes v into what the patch says. It doesn't change v: what's changed is copied, and
   // the rest is shared.
   function apply(v, p) {
@@ -82,6 +101,10 @@
       const out = v.slice();
       for (const [n, q] of p.i) out[n] = apply(out[n], q);
       return out;
+    }
+    if ("t" in p) {
+      const [at, n, text] = p.t;
+      return v.slice(0, at) + text + v.slice(at + n);
     }
     if ("s" in p) {
       const [at, n, values] = p.s;

@@ -243,3 +243,18 @@ test("a prompt sent with relative indices is drawn with absolute ones", () => {
   assert.deepEqual(out.prompt.segments.map((s) => s.part), [0, 1, 4]);
   assert.equal(out.call, "x");
 });
+
+test("a long string goes as a splice, and never splits a character", () => {
+  const long = "words, words and more words. ".repeat(40);
+  const cases = [[long + "end", long + "the end"], ["start " + long, "a start " + long], [long + "𝄞" + long, long + "𝄟" + long], [long + "é and 𝄞" + long, long + "é but 𝄞" + long]];
+  for (const [a, b] of cases) {
+    const p = patch.diff(a, b);
+    assert.ok(p.t && JSON.stringify(p).length < 100, JSON.stringify(p));
+    assert.equal(patch.apply(a, p), b);
+    // The offsets never land between a surrogate pair's halves.
+    const [at, n] = p.t;
+    for (const i of [at, at + n]) assert.ok(!(a.charCodeAt(i) >= 0xdc00 && a.charCodeAt(i) <= 0xdfff), `${i} splits a character`);
+  }
+  // As the server makes them.
+  assert.deepEqual(patch.apply("a𝄞b", { t: [3, 1, "c"] }), "a𝄞c");
+});

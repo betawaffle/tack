@@ -74,6 +74,8 @@ type Core struct {
 	// agents are by ID, and agentOrder is the order they were made in.
 	agents     map[string]*agent
 	agentOrder []string
+	// draftRuns stop each draft call that's running, by draft and call ID. Guarded by mu.
+	draftRuns map[string]func(error)
 	// codeCalls are calls running code made to custom tools, waiting for a person, by ID.
 	codeCalls map[string]*waitingCodeCall
 	// Prices by model, as last asked, and which are being asked for.

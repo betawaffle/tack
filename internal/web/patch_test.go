@@ -2,9 +2,11 @@ package web
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 )
 
 func TestPatchRoundTrips(t *testing.T) {
@@ -75,5 +77,44 @@ func TestPatchRefusesNonsense(t *testing.T) {
 				t.Errorf("%s was applied", p)
 			}
 		}
+	}
+}
+
+func TestPatchSplicesLongStrings(t *testing.T) {
+	long := strings.Repeat("words, words and more words. ", 40)
+	cases := []struct{ a, b string }{
+		{long + "end", long + "the end"},
+		{"start " + long, "a start " + long},
+		{long + "é and 𝄞 and é" + long, long + "é but 𝄞 or é" + long},
+		{long + "𝄞" + long, long + "𝄟" + long}, // differs only in a surrogate pair's second half
+		{long, "short now"},
+	}
+	for _, c := range cases {
+		a, _ := json.Marshal(c.a)
+		b, _ := json.Marshal(c.b)
+		p, err := diffJSON(a, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.b) > 300 && (!bytes.HasPrefix(p, []byte(`{"t":`)) || len(p) > 100) {
+			t.Errorf("not a small splice: %s", p)
+		}
+		got, err := applyJSON(a, p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		var s string
+		json.Unmarshal(got, &s)
+		if s != c.b {
+			t.Errorf("%s made %q", p, s)
+		}
+	}
+	// UTF-16 offsets that split a character are refused.
+	a, _ := json.Marshal("a𝄞b")
+	if _, err := applyJSON(a, jsontext.Value(`{"t":[2,0,"x"]}`)); err == nil {
+		t.Error("a splice in the middle of a character was applied")
+	}
+	if got, err := applyJSON(a, jsontext.Value(`{"t":[3,1,"c"]}`)); err != nil || string(got) != `"a𝄞c"` {
+		t.Errorf("after a surrogate pair: %s %v", got, err)
 	}
 }

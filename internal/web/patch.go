@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -17,9 +19,12 @@ import (
 //	{"o": {key: patch}, "d": [k]} an object: keys with patches, then keys gone (new keys go last)
 //	{"i": [[n, patch], ...]}      an array of the same length, with patches for some elements
 //	{"s": [at, n, [v, ...]]}      an array with n elements at at replaced by these
+//	{"t": [at, n, "text"]}        a string with n characters at at replaced by text, counted
+//	                              in UTF-16 code units, as JavaScript counts them
 //
-// No change at all is null. An object whose keys moved is sent whole, so order is kept, which
-// matters where a tool's schema is written into the prompt.
+// No change at all is null. Where the order of an object's keys matters, an object whose keys
+// moved is sent whole, so it's kept: a request's does, where a tool's schema is written into
+// the prompt, but what's drawn doesn't.
 
 // member is one of an object's keys and its value, in order.
 type member struct {
@@ -96,9 +101,19 @@ func replace(v jsontext.Value) jsontext.Value {
 	return jsontext.Value(`{"=":` + string(v) + `}`)
 }
 
-// diffJSON is the patch that makes a into b, or nil if they're the same. Both are compact JSON,
-// as Marshal makes it, so the same value is the same bytes.
+// diffJSON is the patch that makes a into b, or nil if they're the same, keeping the order of
+// objects' keys. Both are compact JSON, as Marshal makes it, so the same value is the same
+// bytes.
 func diffJSON(a, b jsontext.Value) (jsontext.Value, error) {
+	return diffValues(a, b, true)
+}
+
+// diffUnordered is diffJSON for values whose objects' keys can come in any order.
+func diffUnordered(a, b jsontext.Value) (jsontext.Value, error) {
+	return diffValues(a, b, false)
+}
+
+func diffValues(a, b jsontext.Value, ordered bool) (jsontext.Value, error) {
 	if bytes.Equal(a, b) {
 		return nil, nil
 	}
@@ -129,7 +144,7 @@ func diffJSON(a, b jsontext.Value) (jsontext.Value, error) {
 				gone = append(gone, m.name)
 				continue
 			}
-			if i < last {
+			if ordered && i < last {
 				return replace(b), nil
 			}
 			last = i
@@ -137,14 +152,14 @@ func diffJSON(a, b jsontext.Value) (jsontext.Value, error) {
 		}
 		// New keys go last, after the ones both have.
 		for i, m := range bm {
-			if _, ok := old[m.name]; !ok && i < last {
+			if _, ok := old[m.name]; !ok && ordered && i < last {
 				return replace(b), nil
 			}
 		}
 		var changed []member
 		for _, m := range bm {
 			if prev, ok := old[m.name]; ok {
-				p, err := diffJSON(prev, m.value)
+				p, err := diffValues(prev, m.value, ordered)
 				if err != nil {
 					return nil, err
 				}
@@ -186,7 +201,7 @@ func diffJSON(a, b jsontext.Value) (jsontext.Value, error) {
 		if len(ae) == len(be) {
 			out := []byte(`{"i":[`)
 			for i := start; i < len(ae)-end; i++ {
-				p, err := diffJSON(ae[i], be[i])
+				p, err := diffValues(ae[i], be[i], ordered)
 				if err != nil {
 					return nil, err
 				}
@@ -201,8 +216,76 @@ func diffJSON(a, b jsontext.Value) (jsontext.Value, error) {
 			return append(out, "]}"...), nil
 		}
 		return jsontext.Value(fmt.Sprintf(`{"s":[%d,%d,%s]}`, start, len(ae)-start-end, arrayOf(be[start:len(be)-end]))), nil
+	case '"':
+		if len(b) > stringSpliceAbove {
+			return diffString(a, b)
+		}
 	}
 	return replace(b), nil
+}
+
+// A string shorter than this is sent whole when it changes.
+const stringSpliceAbove = 256
+
+// diffString is the patch that makes string a into string b, as a splice if that's smaller.
+func diffString(a, b jsontext.Value) (jsontext.Value, error) {
+	var as, bs string
+	if err := json.Unmarshal(a, &as); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &bs); err != nil {
+		return nil, err
+	}
+	start := 0
+	for start < len(as) && start < len(bs) && as[start] == bs[start] {
+		start++
+	}
+	for start > 0 && !utf8.RuneStart(as[start]) {
+		start--
+	}
+	end := 0
+	for end < len(as)-start && end < len(bs)-start && as[len(as)-1-end] == bs[len(bs)-1-end] {
+		end++
+	}
+	for end > 0 && !utf8.RuneStart(as[len(as)-end]) {
+		end--
+	}
+	insert, err := json.Marshal(bs[start : len(bs)-end])
+	if err != nil {
+		return nil, err
+	}
+	if len(insert) >= len(b) {
+		return replace(b), nil
+	}
+	return jsontext.Value(fmt.Sprintf(`{"t":[%d,%d,%s]}`, utf16Len(as[:start]), utf16Len(as[start:len(as)-end]), insert)), nil
+}
+
+// utf16Len is how many UTF-16 code units s is.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
+// utf16At is the byte offset of UTF-16 code unit n of s, or -1 if it's past the end or in the
+// middle of a character.
+func utf16At(s string, n int) int {
+	units := 0
+	for i, r := range s {
+		if units == n {
+			return i
+		}
+		if units > n {
+			return -1
+		}
+		units += utf16.RuneLen(r)
+	}
+	if units == n {
+		return len(s)
+	}
+	return -1
 }
 
 // applyJSON makes v into what patch says, keeping the order of an object's keys.
@@ -260,6 +343,19 @@ func applyJSON(v jsontext.Value, patch jsontext.Value) (jsontext.Value, error) {
 			ms = append(ms, member{c.name, value})
 		}
 		return objectOf(ms), nil
+	case "t":
+		var t [3]jsontext.Value
+		var str, insert string
+		var at, n int
+		if len(ps) != 1 || json.Unmarshal(ps[0].value, &t) != nil || json.Unmarshal(v, &str) != nil || json.Unmarshal(t[0], &at) != nil ||
+			json.Unmarshal(t[1], &n) != nil || json.Unmarshal(t[2], &insert) != nil || at < 0 || n < 0 {
+			return nil, errors.New("bad patch")
+		}
+		from, to := utf16At(str, at), utf16At(str, at+n)
+		if from < 0 || to < 0 {
+			return nil, errors.New("bad patch")
+		}
+		return json.Marshal(str[:from] + insert + str[to:])
 	case "i", "s":
 		if len(ps) != 1 {
 			return nil, errors.New("bad patch")

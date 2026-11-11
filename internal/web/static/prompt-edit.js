@@ -82,8 +82,17 @@ let remote = { request: undefined, prompt: undefined };
 // prompt, as GET /api/drafts/{id} does.
 async function openOver(which, options) {
   const reply = await ask("open", which, options);
-  remote = { request: structuredClone(reply.draft.request), prompt: patch.apply(undefined, reply.prompt) };
-  return { draft: reply.draft, prompt: patch.absolute(remote.prompt), problem: reply.problem || "" };
+  // Both come as patches of the draft that was open before, like the one a call was sent from.
+  remote = { request: patch.apply(remote.request, reply.request), prompt: patch.apply(remote.prompt, reply.prompt) };
+  return { draft: { ...reply.draft, request: structuredClone(remote.request) }, prompt: patch.absolute(remote.prompt), problem: reply.problem || "" };
+}
+
+// fromRun takes what a run sent back: the result is in the draft now.
+function fromRun(reply) {
+  remote = { request: patch.apply(remote.request, reply.request), prompt: patch.apply(remote.prompt, reply.prompt) };
+  draft.request = structuredClone(remote.request);
+  lastSaved = savedText();
+  return patch.absolute(remote.prompt);
 }
 
 handlers({
@@ -91,9 +100,17 @@ handlers({
     if (message.estimate) showEstimate(message.estimate);
   },
   // Connected again, tack has forgotten what it had, so the draft's opened again. What wasn't
-  // saved is saved again from there (save).
+  // saved is saved again from there (save). What changed while it was gone, like a run that
+  // finished, is shown, unless there's something here that isn't saved yet.
   reconnect: async () => {
-    if (draft) await openOver(draft.id ? { draft: draft.id } : { from: draft.from }, { now: true });
+    remote = { request: undefined, prompt: undefined };
+    if (!draft) return;
+    const unsaved = savedText() !== lastSaved;
+    const opened = await openOver(draft.id ? { draft: draft.id } : { from: draft.from }, { now: true });
+    if (unsaved || patch.same(opened.draft.request, draft.request)) return;
+    draft.request = opened.draft.request;
+    lastSaved = savedText();
+    if (opened.prompt && drawn()) keepView(() => show(opened.prompt, { eager: true }));
   },
 });
 
@@ -110,7 +127,9 @@ function save() {
   const result = saving.then(async () => {
     for (;;) {
       try {
-        const reply = await ask("save", { patch: patch.diff(remote.request, request), off, off_tools: offTools });
+        // The patch is made as it goes: if the connection went, it's of what tack has once the
+        // draft's open again, which may have this already, if only the answer was lost.
+        const reply = await ask("save", () => ({ patch: patch.diff(remote.request, request), off, off_tools: offTools }));
         remote = { request, prompt: patch.apply(remote.prompt, reply.prompt) };
         draft.id = reply.id;
         lastSaved = text;
@@ -568,32 +587,41 @@ async function showFlags(call, button, box) {
   }
 }
 
+// Run runs a call, and its button stops it while it runs.
 async function runCall(button) {
-  button.disabled = true;
-  button.textContent = "Running…";
+  button.textContent = "Stop";
+  button.dataset.running = "";
   hideError();
   try {
     await save();
-    const res = await fetch(`/api/drafts/${draft.id}/calls/${encodeURIComponent(button.dataset.call)}/run`, {
-      method: "POST",
-      headers: { "X-Tack-Page-Required": PAGE_REQUIRED },
-      body: JSON.stringify({ flags: JSON.parse(button.dataset.flags || "[]") }),
-    });
-    if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
-    const out = await res.json();
-    draft.request = out.draft.request;
-    if (!out.prompt || !drawn()) return show(out.prompt, { problem: out.problem });
-    keepView(() => show(out.prompt, { eager: true }));
+    const going = ask("run", { call: button.dataset.call, flags: JSON.parse(button.dataset.flags || "[]") });
+    button.dataset.request = going.id;
+    const reply = await going;
+    const data = fromRun(reply);
+    if (!data || !drawn()) return show(data, { problem: reply.problem });
+    keepView(() => show(data, { eager: true }));
   } catch (err) {
     showError(`Running it failed: ${err.message}`);
     button.disabled = false;
     button.textContent = "Run again";
+  } finally {
+    delete button.dataset.running;
+    delete button.dataset.request;
   }
+}
+
+// stop stops the send or run that request n started.
+function stop(n, button) {
+  button.disabled = true;
+  button.textContent = "Stopping…";
+  ask("stop", { which: n }).catch((err) => showError(`Stopping it failed: ${err.message}`));
 }
 
 $("prompt").addEventListener("click", (event) => {
   const button = event.target.closest(".run-call button");
-  if (button && !button.disabled) runCall(button);
+  if (!button || button.disabled) return;
+  if (button.dataset.running === undefined) runCall(button);
+  else if (button.dataset.request) stop(Number(button.dataset.request), button);
 });
 
 // A message's text, which can be a string or a list of parts.
@@ -948,7 +976,6 @@ $("prompt").addEventListener("click", (event) => {
 
 // The call controls, under a draft: the agent, the effort and most tokens always, the rest
 // under More, with what the call could cost, and Send. What's set here goes in the draft.
-const PAGE_REQUIRED = document.querySelector('meta[name="tack-page"]')?.dataset.required || "";
 let efforts = null;
 let defaultModel = "";
 // The tools tack has, which Run can run.
@@ -1058,48 +1085,43 @@ function showEstimate(e) {
 }
 
 // Send sends the draft as a call of its own, drawing the reply as it comes in, then shows that
-// call.
+// call. While it goes, the button stops it.
+let sending = null;
 $("send").addEventListener("click", async () => {
   const button = $("send");
-  button.disabled = true;
-  button.textContent = "Sending…";
+  if (sending) {
+    if (sending.request) stop(sending.request, button);
+    return;
+  }
+  sending = {};
+  button.textContent = "Stop";
   hideError();
   let id = null;
   try {
     // Whatever was changed last is saved before it's sent.
     await saveChanges();
-    const res = await fetch(`/api/drafts/${draft.id}/send`, {
-      method: "POST",
-      headers: { "X-Tack-Page-Required": PAGE_REQUIRED },
-    });
-    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = "";
     let failed = "";
     let streaming = false;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
-      let nl;
-      while ((nl = buffered.indexOf("\n")) >= 0) {
-        const u = JSON.parse(buffered.slice(0, nl));
-        buffered = buffered.slice(nl + 1);
-        if (u.kind === "call") id = u.id;
-        if (u.kind === "error") failed = u.text;
-        if (u.kind === "content" || u.kind === "reasoning") {
+    const going = ask("send", {}, {
+      update: (message) => {
+        if (message.call) id = message.call;
+        const u = message.update;
+        if (u?.kind === "error") failed = u.text;
+        if (u?.kind === "content" || u?.kind === "reasoning") {
           if (!streaming) startStream();
           streaming = true;
-          button.textContent = "Receiving…";
           streamText(u.kind, u.text);
         }
-      }
-    }
+      },
+    });
+    sending.request = going.id;
+    id = (await going).call;
     if (failed) throw new Error(failed);
   } catch (err) {
-    showError(`Sending failed: ${err.message}`);
+    // If the connection went, the call carries on, and it's recorded: it's shown once it's back.
+    if (!(err.retry && id)) showError(`Sending failed: ${err.message}`);
   } finally {
+    sending = null;
     button.disabled = false;
     button.textContent = "Send";
   }

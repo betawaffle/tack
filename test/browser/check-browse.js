@@ -302,7 +302,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.waitForSelector(".streaming .pl.k-content");
   const resaved = socketSent.slice(sentBefore).filter((m) => m.includes('"op":"save"')).length;
   ok(resaved === 0 && sentBefore > 0, `sending a saved draft doesn't save it again (${resaved})`);
-  ok(/^Receiving/.test(await p.innerText("#send")) && (await p.locator(".streaming .pl.k-reasoning").count()) === 1, "the reply is drawn as it comes in");
+  ok(/^Stop/.test(await p.innerText("#send")) && (await p.locator(".streaming .pl.k-reasoning").count()) === 1, "the reply is drawn as it comes in, with Send to stop it");
   await p.waitForFunction(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.textContent.length > 30));
   const overflow = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].filter((t) => t.scrollWidth > t.clientWidth + 1).length);
   const wrapped = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.getBoundingClientRect().height > 30));
@@ -433,7 +433,8 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       await p.reload();
       await p.waitForFunction(() => [...document.querySelectorAll(".run-call button")].filter((b) => !b.disabled).length === 3);
       await p.click(".run-call button[data-call=c2]");
-      await p.waitForFunction(() => document.querySelector(".run-call button[data-call=c3]") && !document.querySelector(".run-call button[data-call=c3]").disabled && /Run/.test(document.querySelector(".run-call button[data-call=c3]").textContent));
+      // One run at a time for each agent: the second waits for the first.
+      await p.waitForFunction(() => !document.querySelector(".run-call button[data-running]") && document.querySelector(".run-call button[data-call=c3]") && !document.querySelector(".run-call button[data-call=c3]").disabled && /Run/.test(document.querySelector(".run-call button[data-call=c3]").textContent));
       await p.click(".run-call button[data-call=c3]");
       await p.waitForFunction(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, "").includes("keptbytheagent↵") || document.getElementById("error").hidden === false, null, { timeout: 60000 });
       const text = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
@@ -488,6 +489,25 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
         `a call can be added to a made-up turn, with a result after it (${JSON.stringify(called)})`);
       await p.waitForFunction(() => document.querySelectorAll(".run-call button").length > 0);
       ok(true, "and it has a Run button");
+
+      // A run that's going can be stopped, and what it got to is its result.
+      const sleepCall = await p.evaluate(async ({ id, made }) => {
+        const d = (await (await fetch(`/api/drafts/${id}`)).json()).draft;
+        const call = d.request.messages[made].tool_calls.at(-1);
+        call.function.arguments = JSON.stringify({ language: "python", code: "print('started', flush=True)\nimport time\ntime.sleep(60)" });
+        await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: d.request, off: d.off || [], off_tools: d.off_tools || [] }) });
+        return call.id;
+      }, { id: runDraft, made });
+      await p.reload();
+      await p.waitForFunction((c) => { const b = document.querySelector(`.run-call button[data-call="${c}"]`); return b && !b.disabled; }, sleepCall);
+      await p.click(`.run-call button[data-call="${sleepCall}"]`);
+      await p.waitForFunction((c) => document.querySelector(`.run-call button[data-call="${c}"]`)?.textContent === "Stop", sleepCall);
+      await p.waitForTimeout(1500);
+      const stoppedAt = Date.now();
+      await p.click(`.run-call button[data-call="${sleepCall}"]`);
+      await p.waitForFunction(() => document.getElementById("prompt").textContent.includes("stopped"), null, { timeout: 20000 });
+      const stoppedResult = await p.evaluate(async ({ id, c }) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.find((m) => m.tool_call_id === c)?.content, { id: runDraft, c: sleepCall });
+      ok(/you stopped it/.test(stoppedResult) && Date.now() - stoppedAt < 15000, `Stop stops a run that's going (${JSON.stringify(stoppedResult)})`);
 
       // A parameter the call leaves out can be added from its tool's schema.
       const callNo = called.roles ? (await p.evaluate(async ({ id, made }) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages[made].tool_calls.length - 1, { id: runDraft, made })) : 0;
@@ -556,6 +576,32 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
         document.getElementById("prompt").textContent.includes("written-while-reconnecting"));
       const kept = await p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.some((m) => m.content === "written-while-reconnecting"), runDraft);
       ok(kept && !(await sameAsTack()), "an edit made while the connection was gone is saved once it's back");
+      // The connection going just after a save went, so tack may have it but the answer's lost,
+      // doesn't save it twice when it's sent again.
+      const messageCount = () => p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.length, runDraft);
+      const countBefore = await messageCount();
+      await p.evaluate(() => {
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (data) {
+          send.call(this, data);
+          if (typeof data === "string" && data.includes('"op":"save"')) {
+            WebSocket.prototype.send = send;
+            this.close();
+          }
+        };
+      });
+      await p.locator(".add-after").last().click({ force: true });
+      await p.click(".add-choice[data-role=user]");
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "saved-only-once");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && !document.querySelector(".ghost") && document.getElementById("socket-status").hidden &&
+        document.getElementById("prompt").textContent.includes("saved-only-once"));
+      await p.waitForTimeout(500);
+      const copies = await p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.filter((m) => m.content === "saved-only-once").length, runDraft);
+      const afterLost = await sameAsTack();
+      const added = (await messageCount()) - countBefore;
+      ok(copies === 1 && added === 1 && !afterLost, `a save whose answer was lost is saved once (${copies} copies, ${added} messages added) ${afterLost}`);
       frames.sent.length = frames.got.length = 0;
       await p.locator(".pl.k-user", { hasText: "written-while-reconnecting" }).first().click();
       await p.waitForSelector(".edit-box");
@@ -650,6 +696,30 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.click(".agent-past button");
   await p.waitForFunction((n) => !document.querySelector(".agent-past") && document.querySelectorAll(".agent-page .context").length === n + 1, statesBefore);
   ok((await p.locator(".agent-row").count()) === 0 && (await p.locator(".agent-key").count()) === 1, "and it can be set back to how it was made, as a state of its own");
+
+  // A call that's going can be stopped, and then it's the draft after what it got to.
+  // The defaults' model was changed above to one tack can't draw.
+  const stopDraft = await p.evaluate(async () => {
+    const { id } = await (await fetch("/api/drafts", { method: "POST", body: "{}" })).json();
+    const d = (await (await fetch(`/api/drafts/${id}`)).json()).draft;
+    d.request.model = "deepseek/deepseek-v4.1-flash-1017";
+    await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: d.request }) });
+    return id;
+  });
+  await p.goto(B + "/prompt#draft/" + stopDraft);
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
+  await p.locator(".pl.k-user_turn").last().click();
+  await p.waitForSelector(".edit-box");
+  await p.fill(".edit-box", "paced, to stop");
+  await p.locator("#which").click();
+  await p.waitForFunction(() => !document.querySelector(".edit-box") && !document.querySelector(".ghost"));
+  await p.click("#send");
+  await p.waitForSelector(".streaming .pl.k-content");
+  await p.click("#send");
+  await p.waitForFunction(() => location.hash.startsWith("#manual/") && !document.querySelector(".streaming"), null, { timeout: 15000 });
+  const stoppedRecord = await p.evaluate(async () => (await (await fetch(`/api/manual-calls/${location.hash.split("/")[1]}`)).json()));
+  ok(/cancelled/.test(stoppedRecord.error) && stoppedRecord.text.length < 1000 && (await p.innerText("#send")) === "Send",
+    `Stop stops a call that's going (${stoppedRecord.error}, ${stoppedRecord.text?.length} characters of reply)`);
 
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.

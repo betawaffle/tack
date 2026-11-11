@@ -25,20 +25,25 @@ export function handlers({ push, reconnect }) {
 }
 
 // request sends {op, ...body} and gives back the answer, or throws its error. An error with
-// retry set means the connection went before it was answered.
-export function request(op, body = {}, { now = false } = {}) {
-  return new Promise((resolve, reject) => {
-    const message = { id: nextID++, op, ...body };
-    const item = { message, resolve, reject };
+// retry set means the connection went before it was answered. body can be a function, which
+// makes it as it goes, after anything opened again first. What's sent about it before the
+// answer, like a reply as it comes in, goes to update. The promise's id is the request's, to
+// stop it with.
+export function request(op, body = {}, { now = false, update = null } = {}) {
+  const id = nextID++;
+  const promise = new Promise((resolve, reject) => {
+    const item = { id, op, body, resolve, reject, update };
     if (connected || now) send(item);
     else waiting.push(item);
     connect();
   });
+  promise.id = id;
+  return promise;
 }
 
 function send(item) {
-  pending.set(item.message.id, item);
-  ws.send(JSON.stringify(item.message));
+  pending.set(item.id, item);
+  ws.send(JSON.stringify({ id: item.id, op: item.op, ...(typeof item.body === "function" ? item.body() : item.body) }));
 }
 
 function status(text) {
@@ -75,6 +80,7 @@ function connect() {
   });
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
+    if (message.for !== undefined) return pending.get(message.for)?.update?.(message);
     if (message.re === undefined) return onPush(message);
     const item = pending.get(message.re);
     if (!item) return;

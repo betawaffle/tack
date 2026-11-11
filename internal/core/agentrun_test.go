@@ -120,3 +120,48 @@ func TestADraftsCallRunsAsItsAgent(t *testing.T) {
 		t.Errorf("after a restart = %+v", got)
 	}
 }
+
+func TestADraftsRunningCallCanBeStopped(t *testing.T) {
+	f := newFake(t)
+	f.settings = store.Settings{Model: "deepseek/deepseek-v4.1-flash-1017"}
+	started := make(chan struct{})
+	f.tools = []Tool{{
+		Name:       "wait",
+		Definition: jsontext.Value(`{"type":"function","function":{"name":"wait","description":"Wait.","parameters":{"type":"object","properties":{}}}}`),
+		Run: func(ctx context.Context, _ Call) ([]byte, error) {
+			close(started)
+			<-ctx.Done()
+			return []byte("so far"), context.Cause(ctx)
+		},
+	}}
+	c := f.open()
+	d, err := c.NewBlankDraft("", []Offer{{Name: "wait"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := strings.Replace(string(d.Request), `{"role":"user","content":""}`,
+		`{"role":"user","content":"Wait."},{"role":"assistant","content":"","tool_calls":[{"id":"w","type":"function","function":{"name":"wait","arguments":"{}"}}]},{"role":"tool","tool_call_id":"w","content":""}`, 1)
+	if _, err := c.SaveDraft(d.ID, jsontext.Value(request), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := c.NewAgent("", "")
+	c.SetDraftAgent(d.ID, a.ID)
+	if err := c.StopDraftRun(d.ID, "w"); !errors.Is(err, ErrNothingRunning) {
+		t.Errorf("stopping what isn't running: %v", err)
+	}
+	done := make(chan DraftRun)
+	go func() {
+		run, err := c.RunDraftCall(d.ID, "w", nil)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- run
+	}()
+	<-started
+	if err := c.StopDraftRun(d.ID, "w"); err != nil {
+		t.Fatal(err)
+	}
+	if run := <-done; !strings.HasPrefix(run.Result, "so far") || !strings.Contains(run.Failure, "you stopped it") {
+		t.Errorf("stopped run = %+v", run)
+	}
+}

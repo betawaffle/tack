@@ -76,7 +76,7 @@ func TestWireFormsHaveEveryField(t *testing.T) {
 func TestWirePatchesStaySmall(t *testing.T) {
 	_, before := renderWire(t, wireRequest(""))
 	_, after := renderWire(t, wireRequest(`{"role":"system","content":"A note."},`))
-	p, err := diffJSON(before, after)
+	p, err := diffUnordered(before, after)
 	if err != nil {
 		t.Fatal(err)
 	}

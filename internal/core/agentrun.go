@@ -185,10 +185,18 @@ func (c *Core) RunDraftCall(draftID, callID string, flags []string) (DraftRun, e
 	}
 	a.running = true
 	state := a.state()
+	ctx, stop := context.WithCancelCause(context.Background())
+	defer stop(nil)
+	if c.draftRuns == nil {
+		c.draftRuns = map[string]func(error){}
+	}
+	runKey := draftID + "/" + callID
+	c.draftRuns[runKey] = stop
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
 		a.running = false
+		delete(c.draftRuns, runKey)
 		c.mu.Unlock()
 	}()
 
@@ -198,7 +206,7 @@ func (c *Core) RunDraftCall(draftID, callID string, flags []string) (DraftRun, e
 	}
 	call := &toolCall{ToolCall: store.ToolCall{ID: callID, Name: dc.name, Arguments: arguments, Flags: flags}}
 	scope := runScope{agent: d.Agent, draft: d.ID, definitions: offered.Tools}
-	output, failure, err := c.runAsAgent(scope, call, state, dc)
+	output, failure, err := c.runAsAgent(ctx, scope, call, state, dc)
 	if err != nil {
 		return DraftRun{}, err
 	}
@@ -225,9 +233,22 @@ func (c *Core) RunDraftCall(draftID, callID string, flags []string) (DraftRun, e
 	return run, nil
 }
 
+// StopDraftRun stops a draft's tool call that's running. It finishes as stopped, with what it
+// had written so far as its result.
+func (c *Core) StopDraftRun(draftID, callID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stop := c.draftRuns[draftID+"/"+callID]
+	if stop == nil {
+		return ErrNothingRunning
+	}
+	stop(errToolStopped)
+	return nil
+}
+
 // runAsAgent runs call with the agent's state, records the run, and sets the agent's state to
 // what it left.
-func (c *Core) runAsAgent(scope runScope, call *toolCall, state AgentState, dc *draftCall) ([]byte, error, error) {
+func (c *Core) runAsAgent(ctx context.Context, scope runScope, call *toolCall, state AgentState, dc *draftCall) ([]byte, error, error) {
 	execution := store.NewID()
 	if err := c.record(scope.stamp(&store.Event{Type: store.ToolStarted, ToolCall: call.ID, Execution: execution})); err != nil {
 		return nil, nil, err
@@ -290,7 +311,7 @@ func (c *Core) runAsAgent(scope runScope, call *toolCall, state AgentState, dc *
 	callContext := func() ([]byte, error) { return c.draftCallContext(dc) }
 
 	var artifacts []store.Artifact
-	output, failure := c.execute(context.Background(), scope, call, Call{Settings: settings, Execution: execution, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratchOp, Context: callContext},
+	output, failure := c.execute(ctx, scope, call, Call{Settings: settings, Execution: execution, Workspace: kept, Files: files, SaveWorkspace: saveWorkspace, Scratch: scratchOp, Context: callContext},
 		func(name string, data []byte) error {
 			block, err := c.cfg.Store.Put(data)
 			if err != nil {

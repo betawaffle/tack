@@ -186,17 +186,18 @@ func TestSocketOpensAndSavesADraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var draft struct {
-		Request jsontext.Value `json:"request"`
+	// The request comes as a patch, of nothing to start with.
+	opening, err := applyJSON(nil, opened["request"])
+	if err != nil || !bytes.Contains(opened["draft"], []byte(`"request":null`)) {
+		t.Fatalf("open: %s, %v", opened["draft"], err)
 	}
-	json.Unmarshal(opened["draft"], &draft)
 	c.next() // the estimate
 
 	// The model changed to one tack can draw, then a message written, each sent as a patch
 	// of the request.
 	var request map[string]any
-	json.Unmarshal(draft.Request, &request)
-	before := draft.Request
+	json.Unmarshal(opening, &request)
+	before := opening
 	save := func(n int) map[string]jsontext.Value {
 		t.Helper()
 		after, _ := json.Marshal(request)
@@ -260,6 +261,70 @@ func TestSocketOpensAndSavesADraft(t *testing.T) {
 	// A bad patch is refused, and the next good one still applies to what was there before.
 	if bad := c.call(map[string]any{"id": 4, "op": "save", "patch": map[string]any{"s": []any{99, 1, []any{}}}}); bad["error"] == nil {
 		t.Errorf("a bad patch was taken: %v", bad)
+	}
+
+	// Sent over the socket: the call's named first, then the reply comes, then the answer.
+	data, _ := json.Marshal(map[string]any{"id": 5, "op": "send"})
+	c.send(0x1, data, false)
+	var call string
+	var replied strings.Builder
+	for {
+		_, payload := c.next()
+		var m struct {
+			For    int    `json:"for"`
+			Re     int    `json:"re"`
+			Call   string `json:"call"`
+			Error  string `json:"error"`
+			Update struct {
+				Kind string `json:"kind"`
+				Text string `json:"text"`
+			} `json:"update"`
+		}
+		json.Unmarshal(payload, &m)
+		if m.Error != "" {
+			t.Fatalf("send: %s", m.Error)
+		}
+		if m.For == 5 && m.Call != "" {
+			call = m.Call
+		}
+		if m.For == 5 && m.Update.Kind == "content" {
+			replied.WriteString(m.Update.Text)
+		}
+		if m.Re == 5 {
+			if m.Call != call || call == "" {
+				t.Errorf("the answer names %q, not %q", m.Call, call)
+			}
+			break
+		}
+	}
+	if replied.String() != "Hello" {
+		t.Errorf("the reply came as %q", replied.String())
+	}
+	// The draft after it, opened, comes as a patch of the one that was open.
+	next := c.call(map[string]any{"id": 6, "op": "open", "from": "manual/" + call})
+	if next["error"] != nil {
+		t.Fatalf("open the next: %v", next)
+	}
+	nextPrompt, err := applyJSON(prompt, next["prompt"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The call before is new, so its text comes whole, but the prompt's parts come as changes.
+	var top struct {
+		O struct {
+			Prompt jsontext.Value `json:"prompt"`
+		} `json:"o"`
+	}
+	json.Unmarshal(next["prompt"], &top)
+	if len(top.O.Prompt) == 0 || len(top.O.Prompt) > len(nextPrompt)/10 {
+		t.Errorf("the next draft's prompt came nearly whole: %d bytes of %d", len(top.O.Prompt), len(nextPrompt))
+	}
+	if !bytes.Contains(nextPrompt, []byte("Hello")) {
+		t.Error("the next draft doesn't have the reply")
+	}
+	c.next() // its estimate
+	if stopped := c.call(map[string]any{"id": 7, "op": "stop", "which": 5}); stopped["error"] == nil {
+		t.Errorf("stopping what's done: %v", stopped)
 	}
 }
 
