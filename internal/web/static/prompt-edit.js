@@ -353,6 +353,8 @@ function summary(m) {
 const ROLE_LABELS = { system: "System", user: "User", assistant: "Assistant", tool: "Result" };
 
 function addMessageControls() {
+  // The markdown view has none of the raw view's rows to put them on.
+  if ($("prompt").querySelector(".md-view")) return;
   const parts = drawn()?.prompt.parts;
   if (!draft || !parts) return;
   const last = draft.request.messages.length - 1;
@@ -577,31 +579,44 @@ function callFor(i) {
 function addRunButtons() {
   const parts = drawn()?.prompt.parts;
   if (!draft || !parts) return;
+  // In the markdown view, each result's card has the Run for its call.
+  if ($("prompt").querySelector(".md-view")) {
+    for (const card of $("prompt").querySelectorAll(".md-card.k-tool_result[data-message]")) {
+      const found = callFor(Number(card.dataset.message));
+      if (found) addRun(found.call, card.querySelector(".md-head"));
+    }
+    return;
+  }
   parts.forEach((part, k) => {
     if (part.kind !== "tool_result") return;
     const id = messageOf(part)?.tool_call_id;
     const found = id && callFor(indexOf(part));
     const row = found && $("prompt").querySelector(`.pl:not(.editing) .pl-bars [data-p="${k}"]`)?.closest(".pl");
     if (!row) return;
-    // A tool tack doesn't have is the person's to answer, by writing its result.
-    if (!builtinTools.has(found.call.function?.name)) {
-      row.querySelector(".pl-text").append(el("span", "run-yours", "Yours to answer: click to write the result"));
-      return;
-    }
-    const box = el("span", "run-call");
-    const button = el("button", "mini", "Run");
-    button.type = "button";
-    button.dataset.call = id;
-    const flags = el("span", "run-flags");
-    box.append(button, flags);
-    row.querySelector(".pl-text").append(box);
-    if (!draft.agent) {
-      button.disabled = true;
-      button.title = "Pick an agent for the draft first: its tools run as that agent.";
-      return;
-    }
-    showFlags(found.call, button, flags);
+    addRun(found.call, row.querySelector(".pl-text"));
   });
+}
+
+// addRun puts call's Run in where, or says it's the person's to answer: a tool tack doesn't
+// have is answered by writing its result.
+function addRun(call, where) {
+  if (!builtinTools.has(call.function?.name)) {
+    where.append(el("span", "run-yours", "Yours to answer: click to write the result"));
+    return;
+  }
+  const box = el("span", "run-call");
+  const button = el("button", "mini", "Run");
+  button.type = "button";
+  button.dataset.call = call.id;
+  const flags = el("span", "run-flags");
+  box.append(button, flags);
+  where.append(box);
+  if (!draft.agent) {
+    button.disabled = true;
+    button.title = "Pick an agent for the draft first: its tools run as that agent.";
+    return;
+  }
+  showFlags(call, button, flags);
 }
 
 async function showFlags(call, button, box) {
@@ -665,6 +680,52 @@ $("prompt").addEventListener("click", (event) => {
   if (!button || button.disabled) return;
   if (button.dataset.running === undefined) runCall(button);
   else if (button.dataset.request) stop(Number(button.dataset.request), button);
+});
+
+// In the markdown view, clicking a message's text opens its source in a box in its place.
+// Leaving the box, or Enter, saves it; Shift+Enter is a new line, and Escape puts it back.
+$("prompt").addEventListener("click", (event) => {
+  const target = event.target.closest(".md-card [data-field]");
+  if (!target || !draft || event.target.closest("a, button, .codeblock-head, .md-edit")) return;
+  if (!getSelection().isCollapsed) return;
+  const i = Number(target.closest(".md-card").dataset.message);
+  const m = draft.request.messages[i];
+  const name = target.dataset.field;
+  if (!m) return;
+  const was = textOf(m[name]);
+  const area = el("textarea", "edit-box md-edit");
+  area.value = was;
+  area.spellcheck = false;
+  area.setAttribute("aria-label", "Text");
+  target.hidden = true;
+  target.after(area);
+  const grow = () => {
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+  };
+  area.addEventListener("input", grow);
+  grow();
+  area.focus();
+  let done = false;
+  const close = (save) => {
+    if (done) return;
+    done = true;
+    if (save && area.value !== was) {
+      m[name] = area.value;
+      preview();
+      return;
+    }
+    area.remove();
+    target.hidden = false;
+  };
+  area.addEventListener("blur", () => close(true));
+  area.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close(false);
+    else if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      area.blur();
+    }
+  });
 });
 
 // A message's text, which can be a string or a list of parts.
@@ -1214,8 +1275,7 @@ $("send").addEventListener("click", async () => {
     const answer = await going;
     id = answer.call;
     const reply = patch.putBack(answer, streamed);
-    if (!reply) remote = { request: undefined, prompt: undefined };
-    else if (reply.draft) afterSend = { from: `manual/${id}`, opened: opening(reply) };
+    if (reply.draft) afterSend = { from: `manual/${id}`, opened: opening(reply) };
     if (failed) throw new Error(failed);
   } catch (err) {
     // If the connection went, the call carries on, and it's recorded: it's shown once it's back.

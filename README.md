@@ -387,6 +387,14 @@ can't get from the host's cache (it caches a prompt in blocks of 512 tokens, nev
 model wrote); wrapping; line numbers; pretty-printed tool schemas; and a wide column. The
 legend shows tack's token counts against the host's.
 
+A draft opens in the **Markdown** view: the system prompt, the tools, and each message as a
+card, in the order the model reads them, with text rendered. Clicking a message's text, or a
+result's, edits it (Enter saves, Shift+Enter is a new line, Escape puts it back), each result's
+card has its call's **Run**, and a reply streams in as a card of the model's. A result read
+before an earlier call's, because a system message is between them, is marked **Out of Order**.
+Turning the switch off shows the raw view below, which is how the model reads it, token by
+token; switching keeps the same message at the top.
+
 A call's address shows the draft of the call after it, ready to edit: the call's request, its
 reply, and an empty result for each tool call. **As Sent** shows the call itself instead, as it
 was sent, compared with the call before it. Clicking a part's text edits that field of the

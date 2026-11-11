@@ -19,7 +19,7 @@ export const DEPTHS = 5;
 
 // The switches for how it's drawn, kept in this browser.
 const SWITCHES_KEY = "tack.prompt.switches";
-const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false, markdown: false };
+const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false, markdown: true };
 
 function loadSwitches() {
   try {
@@ -216,7 +216,14 @@ export const drawn = () => shown;
 
 // render draws data. eager draws every block at once, for when what's on the screen has to
 // stay put; done is called once it's all drawn.
+// What's done once it's drawn, like putting in the controls for editing it, which drawing it
+// again for another reason does too.
+let lastDone = null;
+
 export function render(data, { eager = false, done = null } = {}) {
+  if (data !== shown) lastDone = null;
+  if (done) lastDone = done;
+  done = lastDone;
   shown = data;
   // A draft can be shown as what it means, in the markdown view; a call is shown as it was.
   if (switches.markdown && data.before_draft) {

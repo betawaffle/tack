@@ -141,10 +141,7 @@
   // putBack puts what streamed back in a send's answer, where internal/web/streamed.go took it
   // out: each piece into the string at its JSON Pointer, at its offset, in order. known is what
   // streamed: reasoning, content, and each call's arguments as call:0 and so on.
-  // It's null if what streamed isn't just what tack sent, which the lengths it gives say.
   function putBack(reply, known) {
-    for (const [kind, n] of Object.entries(reply.lengths || {})) if ((known[kind] ?? "").length !== n) return null;
-    delete reply.lengths;
     for (const { at, offset, is } of reply.streamed || []) {
       const path = at.split("/").slice(1).map((p) => p.replaceAll("~1", "/").replaceAll("~0", "~"));
       let parent = reply;

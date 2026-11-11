@@ -17,6 +17,13 @@ const md = (text, className = "md-text prose") => {
   return box;
 };
 
+// A message's text that can be edited: clicking it opens it (prompt-edit.js), by its field.
+function field(box, name) {
+  box.dataset.field = name;
+  if (!box.textContent.trim()) box.classList.add("md-empty");
+  return box;
+}
+
 // A message's text, which can be a string or a list of parts.
 const textOf = (content) => (typeof content === "string" ? content : (content || []).map((p) => p.text || "").join("\n\n"));
 
@@ -105,19 +112,19 @@ export function drawMarkdown(data, box) {
     if (m.role === "system") {
       c = card("system", i === firstSystem ? "System" : "System Note", i);
       if (i !== firstSystem) c.classList.add("md-note");
-      c.append(md(textOf(m.content)));
+      c.append(field(md(textOf(m.content)), "content"));
     } else if (m.role === "user") {
       c = card("user", "You", i);
-      c.append(md(textOf(m.content)));
+      c.append(field(md(textOf(m.content)), "content"));
     } else if (m.role === "assistant") {
       c = card("assistant", "Model", i);
       if (m.reasoning || m.reasoning_content) {
         const thought = el("div", "md-reasoning");
-        thought.append(el("div", "md-sub", "Reasoning"), md(m.reasoning || m.reasoning_content));
+        thought.append(el("div", "md-sub", "Reasoning"), field(md(m.reasoning || m.reasoning_content), m.reasoning ? "reasoning" : "reasoning_content"));
         c.append(thought);
       }
       const reply = textOf(m.content);
-      if (reply) c.append(md(reply));
+      if (reply || !m.tool_calls?.length) c.append(field(md(reply), "content"));
       for (const call of m.tool_calls || []) c.append(callBox(call));
     } else if (m.role === "tool") {
       const of = callOf.get(i);
@@ -128,7 +135,7 @@ export function drawMarkdown(data, box) {
       }
       const out = el("pre", "md-output");
       appendExact(out, textOf(m.content));
-      c.append(out);
+      c.append(field(out, "content"));
     } else {
       c = card("other", m.role, i);
       c.append(md(textOf(m.content)));

@@ -84,9 +84,7 @@ func stripStreamed(data []byte, known map[string]string) ([]byte, []streamedAt, 
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), at, nil
 }
 
-// withStreamed is a reply with what streamed taken out of it, and where it goes back. It also
-// says how long each text that streamed was, in UTF-16 code units, so that a page that didn't
-// get just that can tell, and open the draft whole instead.
+// withStreamed is a reply with what streamed taken out of it, and where it goes back.
 func withStreamed(reply []byte, known map[string]string) ([]byte, error) {
 	stripped, at, err := stripStreamed(reply, known)
 	if err != nil || len(at) == 0 {
@@ -103,17 +101,7 @@ func withStreamed(reply []byte, known map[string]string) ([]byte, error) {
 		list = append(list, '}')
 	}
 	list = append(list, ']')
-	lengths := []byte("{")
-	for kind, text := range known {
-		if len(lengths) > 1 {
-			lengths = append(lengths, ',')
-		}
-		lengths, _ = jsontext.AppendQuote(lengths, kind)
-		lengths = fmt.Appendf(lengths, ":%d", utf16Len(text))
-	}
-	lengths = append(lengths, '}')
-	// The reply is an object; these go last in it.
+	// The reply is an object; the list goes last in it.
 	stripped = bytes.TrimSuffix(stripped, []byte("}"))
-	stripped = append(append(stripped, `,"streamed":`...), list...)
-	return append(append(append(stripped, `,"lengths":`...), lengths...), '}'), nil
+	return append(append(append(stripped, `,"streamed":`...), list...), '}'), nil
 }

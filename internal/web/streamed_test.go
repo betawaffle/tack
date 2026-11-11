@@ -20,14 +20,6 @@ func putBack(t *testing.T, data []byte, known map[string]string) []byte {
 	root := v.(map[string]any)
 	list, _ := root["streamed"].([]any)
 	delete(root, "streamed")
-	// Each text's length is there, for the page to check it has just that.
-	lengths, _ := root["lengths"].(map[string]any)
-	for kind, n := range lengths {
-		if int(n.(float64)) != len(utf16.Encode([]rune(known[kind]))) {
-			t.Errorf("%s's length is %v", kind, n)
-		}
-	}
-	delete(root, "lengths")
 	for _, item := range list {
 		a := item.(map[string]any)
 		parts := strings.Split(a["at"].(string), "/")[1:]

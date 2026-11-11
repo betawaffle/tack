@@ -327,3 +327,10 @@ body:not(.drafting) .md-switch, body.markdown.drafting .raw-only { display: none
 .md-params .md-text p { margin: 0; }
 .md-streamed .md-output { font: inherit; }
 .md-card.streaming { content-visibility: visible; }
+.md-card [data-field] { cursor: text; border-radius: 4px; }
+.md-card [data-field]:hover { background: var(--hover); }
+.md-empty { min-height: 1.6em; }
+.md-empty::before { content: "Write here…"; color: var(--muted); }
+.md-edit { display: block; width: 100%; box-sizing: border-box; min-height: 3em; margin: 2px 0; font: 13px/1.55 var(--mono); }
+.md-head .run-call, .md-head .run-yours { margin-left: auto; }
+body.running #prompt .md-card { pointer-events: none; }

@@ -17,6 +17,11 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
 (async () => {
   const browser = await chromium.launch();
   const p = await browser.newPage();
+  // Most of what's checked here is the raw view; the markdown view, the default, is checked on
+  // its own, starting with nothing kept.
+  await p.addInitScript(() => {
+    if (!localStorage.getItem("tack.prompt.switches") && !sessionStorage.getItem("fresh")) localStorage.setItem("tack.prompt.switches", JSON.stringify({ markdown: false }));
+  });
   // What the page sends over its socket, for checking what goes.
   const socketSent = [], socketGot = [];
   p.on("websocket", (ws) => {
@@ -842,15 +847,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       { role: "system", content: "A note in the middle." },
       { role: "tool", tool_call_id: "a", content: "a.txt\nb.txt" },
       { role: "assistant", content: 'Here: <img src=x onerror="window.__pwned=1"> [x](javascript:window.__pwned=1) ![pic](http://evil.example/x.png)' },
-      { role: "user", content: "paced, in markdown" },
+      { role: "user", content: "" },
     ];
     await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: d.request }) });
     return id;
   });
+  // It's what a draft is shown as, unless the raw view was picked.
   await p.goto(B + "/prompt#draft/" + mdDraft);
-  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
-  await p.click("[data-switch=markdown]");
+  await p.evaluate(() => {
+    localStorage.removeItem("tack.prompt.switches");
+    sessionStorage.setItem("fresh", "1");
+  });
+  await p.reload();
   await p.waitForSelector(".md-card");
+  ok((await p.getAttribute("[data-switch=markdown]", "aria-pressed")) === "true", "a draft is shown in the markdown view unless the raw view was picked");
   const mdCards = await p.evaluate(() => [...document.querySelectorAll(".md-card")].map((c) => c.querySelector(".md-label").textContent).join(","));
   ok(mdCards === "System,Tools,You,Model,Result,System Note,Result,Model,You", `the markdown view draws each message as a card, in the order the model reads them (${mdCards})`);
   const mdTags = await p.evaluate(() => [...document.querySelectorAll(".md-warn")].map((t) => t.closest(".md-card").dataset.message));
@@ -880,6 +890,16 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(/Anoteinthemiddle|<｜System｜>/.test(rawTop || ""), `switching to the raw view keeps the message at the top (${(rawTop || "").slice(0, 60)})`);
   await p.click("[data-switch=markdown]");
   await p.waitForSelector(".md-card");
+  // A message is written by clicking it, and each result has its call's Run.
+  const mdRuns = await p.evaluate(() => [...document.querySelectorAll(".md-card.k-tool_result")].map((c) => (c.querySelector(".run-call button") ? "Run" : c.querySelector(".run-yours") ? "Yours" : "none")).join());
+  ok(!mdRuns.includes("none") && mdRuns.includes("Run"), `each result's card has its call's Run, or says it's yours to answer (${mdRuns})`);
+  await p.locator(".md-card.k-user .md-empty").last().click();
+  await p.waitForSelector(".md-edit");
+  await p.fill(".md-edit", "paced, in **markdown**");
+  await p.keyboard.press("Enter");
+  await p.waitForFunction(() => !document.querySelector(".md-edit") && !document.querySelector(".ghost") && [...document.querySelectorAll(".md-card.k-user strong")].some((s) => s.textContent === "markdown"));
+  const written = await p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.at(-1).content, mdDraft);
+  ok(written === "paced, in **markdown**", `a message is written in the markdown view by clicking it (${JSON.stringify(written)})`);
   // A reply comes in as a card of the model's, and is rendered once it's done.
   await p.click("#send");
   await p.waitForSelector(".md-card.streaming .md-streamed");
@@ -889,6 +909,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(mdAfter === "Model,You", `and then it's the draft after it, still as cards (${mdAfter})`);
   await p.click("[data-switch=markdown]");
   await p.waitForSelector(".pl");
+  await p.evaluate(() => sessionStorage.removeItem("fresh"));
 
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.
