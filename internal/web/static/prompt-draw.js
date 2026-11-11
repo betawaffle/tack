@@ -187,7 +187,9 @@ function rowHTML(r, parts) {
   let number = r.number === null ? "" : String(r.number);
   if (r.collapsed !== undefined && r.lastNumber !== r.number) number += `–${r.lastNumber}`;
   // The name, bars and number stay put when the text scrolls sideways.
-  return `<div class="pl k-${part.kind}${r.collapsed !== undefined ? " is-collapsed" : ""}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
+  // A row of nothing but deleted text is only drawn while changes are shown.
+  const delOnly = r.items.length && r.collapsed === undefined && r.items.every((item) => item.deleted !== undefined);
+  return `<div class="pl k-${part.kind}${delOnly ? " del-only" : ""}${r.collapsed !== undefined ? " is-collapsed" : ""}${part.generated ? " gen" : ""}${r.starts ? " starts" : ""}">` +
     `<div class="pl-gutter"><div class="pl-part" title="${escapeHTML(title)}"${named === undefined ? "" : ` data-p="${named}"`}>${escapeHTML(label)}</div>` +
     `<div class="pl-bars">${bars}</div><div class="pl-num${block ? " blk" : ""}"${block ? ` title="Cache block ${block} starts in this row"` : ""}>${number}</div></div>` +
     `<div class="pl-text"${style}>${items}</div></div>`;

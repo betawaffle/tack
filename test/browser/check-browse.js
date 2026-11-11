@@ -625,6 +625,20 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   await p.reload();
   await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".msg-on"));
   ok((await p.locator(".off-row").count()) === offBefore - 1, "and what's turned off is kept with the draft");
+  // With changes hidden, a row with nothing in it but what was left out isn't drawn at all.
+  const changesOn = (await p.getAttribute("[data-switch=changes]", "aria-pressed")) === "true";
+  if (changesOn) await p.click("[data-switch=changes]");
+  const emptyRows = () => p.evaluate(() => [...document.querySelectorAll(".pl:not(.off-row):not(.is-collapsed)")]
+    .filter((r) => r.offsetHeight > 0 && ![...r.querySelectorAll(".pl-text .tok")].some((t) => t.offsetWidth > 0)).length);
+  // Leaving out the first message, as well as the end.
+  await p.locator(".pl.k-user .msg-on:checked").first().uncheck();
+  await p.waitForFunction((n) => document.querySelectorAll(".off-row").length > n && !document.querySelector(".ghost"), offBefore - 1);
+  const goneRows = await p.locator(".pl.del-only").count();
+  const empty = await emptyRows();
+  ok(goneRows > 0 && empty === 0, `with changes hidden, no row is left empty (${goneRows} rows of left-out text, ${empty} empty)`);
+  await p.click("[data-switch=changes]");
+  ok((await p.locator(".pl.del-only").first().isVisible()), "and with changes shown, what was left out shows");
+  if (!changesOn) await p.click("[data-switch=changes]");
   await p.locator(".off-row").first().scrollIntoViewIfNeeded();
   await p.screenshot({ path: "shots/msg-on.png" });
   // Leaving out a tool shows its schema as deleted on a row of its own, not in the next tool's.
