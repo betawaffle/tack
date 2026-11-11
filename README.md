@@ -412,7 +412,10 @@ message, which is how to start again from an earlier one. Each tool's schema has
 too, to leave the tool out the same way. Clicking a tool's schema opens a form of it, so nothing's written as
 JSON: its name and description, and each parameter's name, type, whether it's required,
 description and allowed values (one to a line), however deeply nested, with parameters to add
-and remove. **Add a Tool**, on the last tool's row, adds a tool of your own; a call to a tool
+and remove. It's saved whenever you leave it, like a message's text box, and stays open until
+**Done**; **Undo Changes** puts the tool back as it was when the form opened. A change that
+can't be saved, like a tool with no name, stays in the form, which says why, and stops Send and
+Run until it's fixed. **Add a Tool**, on the last tool's row, adds a tool of your own; a call to a tool
 tack doesn't have is yours to answer, by writing its result, and has no Run. **Add After**, on a
 message (or the last result of a batch), adds a system message, a message from you, or a turn
 of the model's that you write yourself; a made-up turn at the end gets an empty message from

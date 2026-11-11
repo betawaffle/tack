@@ -662,14 +662,36 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     await p.waitForSelector(".schema-form");
     const name = await p.innerText(".schema-name");
     await p.locator(".schema-field").first().fill("Changed by hand.");
+    // Changing something else in the draft while it's open keeps it open, with what's in it.
+    const offBeforeForm = await p.locator(".off-row").count();
+    await p.locator(".pl.k-user .msg-on").first().uncheck();
+    await p.waitForFunction((n) => document.querySelectorAll(".off-row").length > n && !document.querySelector(".ghost"), offBeforeForm);
+    const toolDescriptions = () => p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.tools.map((t) => t.function.description), runDraft);
+    ok((await p.locator(".schema-form").count()) === 1 && (await p.locator(".schema-field").first().inputValue()) === "Changed by hand." &&
+      (await toolDescriptions()).includes("Changed by hand."),
+      "a tool's form is saved when it's left, and stays open, with what's in it, when something else in the draft changes");
+    await p.locator(".off-row .msg-on[data-message]").first().check();
+    await p.waitForFunction((n) => document.querySelectorAll(".off-row").length === n && !document.querySelector(".ghost"), offBeforeForm);
     const values = p.locator(".schema-row", { hasText: "allowed values" }).locator("textarea");
     const hasValues = (await values.count()) > 0;
     if (hasValues) await values.first().fill((await values.first().inputValue()) + "\nrust");
     await p.locator(".schema-editing").screenshot({ path: "shots/schema-form.png" });
-    await p.click(".schema-buttons button:has-text('Save')");
+    await p.click(".schema-buttons button:has-text('Done')");
     await p.waitForFunction(() => !document.querySelector(".schema-form") && document.querySelector("#prompt").textContent.includes("Changedbyhand."));
     const toolText = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
     ok(!hasValues || toolText.includes('"rust"'), `a tool's description and allowed values can be changed without JSON (${name})`);
+    // Undo Changes puts it back as it was when the form opened, even after it's been saved.
+    await p.locator(".pl.k-tool .pl-text").first().click();
+    await p.waitForSelector(".schema-form");
+    await p.locator(".schema-field").first().fill("Only for a moment.");
+    await p.locator("#which").click();
+    await p.waitForFunction(async () => !document.querySelector(".ghost"));
+    const momentary = await toolDescriptions();
+    await p.click(".schema-buttons button:has-text('Undo Changes')");
+    await p.waitForFunction(() => !document.querySelector(".schema-form") && !document.querySelector(".ghost"));
+    const undone = await toolDescriptions();
+    ok(momentary.includes("Only for a moment.") && undone.includes("Changed by hand.") && !undone.includes("Only for a moment."),
+      `Undo Changes puts a tool back as it was when its form opened (${JSON.stringify(undone)})`);
 
     // A tool of your own: added, named, given a parameter, and saved.
     await p.locator(".add-tool").first().click({ force: true });
@@ -682,7 +704,7 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
     await p.locator(".schema-param-name").first().dispatchEvent("change");
     await p.locator(".schema-required input").first().check();
     await p.locator(".schema-editing").screenshot({ path: "shots/custom-tool.png" });
-    await p.click(".schema-buttons button:has-text('Save')");
+    await p.click(".schema-buttons button:has-text('Done')");
     await p.waitForFunction(() => !document.querySelector(".schema-form") && document.querySelector("#prompt").textContent.includes("Looksomethingup."));
     const custom = await p.evaluate(() => document.querySelector("#prompt").textContent.replace(/[·\s]/g, ""));
     ok(custom.includes('"name":"lookup"') && custom.includes('"query":{"type":"string"}') && custom.includes('"required":["query"]'), "a tool of your own can be added and given parameters");

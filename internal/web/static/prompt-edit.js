@@ -21,6 +21,8 @@ export const drafting = () => draft !== null;
 
 // open makes d the draft that's open.
 async function open(d) {
+  // A form that was open was another draft's, and saved when it was left.
+  openForm = null;
   draft = {
     id: d.id || "", from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], offTools: d.off_tools || [],
     shown: [], shownTools: [], call: "", calls: [],
@@ -190,20 +192,18 @@ async function preview(anchor) {
   return true;
 }
 
-// openForm is a tool's schema form that's open, whose changes go in the draft only once it's
-// saved. Sending or running saves it first (formSaved).
+// openForm is a tool's schema form that's open. Its changes go in the draft when it's left, so
+// sending or running only has to be sure that's happened, and that it could be (formSaved).
 let openForm = null;
 
 // formSaved saves the form that's open, if there is one, and says whether everything in it is
 // in the draft. If it can't be saved, it's shown, with why.
 async function formSaved() {
-  return openForm ? openForm() : true;
+  return openForm ? openForm.save() : true;
 }
 
 // show draws the draft's prompt, or, when there's none to draw, says why.
 function show(data, { eager = false, problem = "" } = {}) {
-  // Drawing again takes away a form that was open.
-  openForm = null;
   // A draft after a call is among the calls it follows, which the arrows move along.
   if (data?.calls?.length) [draft.call, draft.calls] = [data.call, data.calls];
   const n = draft.calls.indexOf(draft.call);
@@ -229,6 +229,8 @@ function show(data, { eager = false, problem = "" } = {}) {
       addRunButtons();
     },
   });
+  // A tool's form that's open goes back where it was; if its tool's gone, so is it.
+  if (openForm && !openForm.attach()) openForm = null;
 }
 
 // A part's message, in the draft's request. The prompt leaves out the messages that are turned
@@ -924,15 +926,18 @@ function openToolEditor(k) {
   const i = draft.shownTools[parts[k].call || 0] ?? (parts[k].call || 0);
   const tool = draft.request.tools?.[i]?.function;
   if (!tool || $("prompt").querySelector(".pl.editing")) return;
-  const rows = [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`.pl-bars [data-p="${k}"]`));
+  const rowsOf = (k) => [...$("prompt").querySelectorAll(".pl")].filter((row) => row.querySelector(`.pl-bars [data-p="${k}"]`));
+  let rows = rowsOf(k);
   if (!rows.length) return;
   const editing = el("div", "pl editing schema-editing");
   const gutter = rows[0].querySelector(".pl-gutter").cloneNode(true);
   for (const node of gutter.querySelectorAll("[data-p]")) delete node.dataset.p;
   for (const box of gutter.querySelectorAll(".msg-on")) box.remove();
   const form = el("div", "pl-text schema-form");
-  // Each field writes into a copy of the tool, which replaces it on Save.
-  const edited = structuredClone(tool);
+  // The fields write into a copy of the tool, which goes in the draft whenever the form's left,
+  // as a text box's text does. What it was when it was opened is kept, to undo to.
+  const opened = structuredClone(tool);
+  let edited = structuredClone(tool);
   edited.parameters ??= { type: "object", properties: {} };
   const draw = () => {
     form.replaceChildren(el("div", "schema-name", edited.name || "Tool"));
@@ -945,22 +950,30 @@ function openToolEditor(k) {
     form.append(formRow("Description", description));
     form.append(el("div", "schema-label", "Parameters"), paramsEditor(edited.parameters, "", draw));
     const buttons = el("div", "schema-buttons");
-    const saveButton = el("button", "mini", "Save");
-    const cancel = el("button", "mini", "Cancel");
-    saveButton.type = cancel.type = "button";
-    cancel.addEventListener("click", close);
-    saveButton.addEventListener("click", () => saveForm());
-    buttons.append(saveButton, cancel);
+    const done = el("button", "mini", "Done");
+    const undo = el("button", "mini", "Undo Changes");
+    done.type = undo.type = "button";
+    done.addEventListener("click", async () => {
+      if (await saveForm()) close();
+    });
+    undo.addEventListener("click", async () => {
+      edited = structuredClone(opened);
+      edited.parameters ??= { type: "object", properties: {} };
+      draw();
+      if (await saveForm()) close();
+    });
+    buttons.append(done, undo);
     form.append(buttons);
   };
   const close = () => {
-    if (openForm === saveForm) openForm = null;
+    if (openForm?.save === saveForm) openForm = null;
     keepPlace(k, () => {
       editing.remove();
       for (const row of rows) row.hidden = false;
     });
   };
-  // Saving puts the copy in the draft. If it can't be, the form stays, in sight, saying why.
+  // Saving puts the copy in the draft, and the form stays open. A change that can't be saved
+  // stays in the form, which says why, in sight, and nothing's sent or run until it's fixed.
   const saveForm = async () => {
     const fail = (text, field) => {
       showError(text);
@@ -969,23 +982,35 @@ function openToolEditor(k) {
       return false;
     };
     if (!edited.name) return fail("A tool needs a name.", form.querySelector("input"));
-    if (JSON.stringify(edited) === JSON.stringify(tool)) {
-      close();
-      return true;
-    }
-    draft.request.tools[i].function = edited;
+    const now = draft.request.tools?.[i];
+    if (!now || JSON.stringify(edited) === JSON.stringify(now.function)) return true;
+    now.function = structuredClone(edited);
     if (!(await preview(k))) return fail(document.getElementById("error").textContent);
-    if (openForm === saveForm) openForm = null;
     return true;
   };
-  openForm = saveForm;
+  // Drawing again puts the form back over its tool, unless the tool's gone.
+  const attach = () => {
+    const parts = drawn()?.prompt.parts || [];
+    const at = parts.findIndex((p) => p.kind === "tool" && (draft.shownTools[p.call || 0] ?? (p.call || 0)) === i);
+    const found = at < 0 ? [] : rowsOf(at);
+    if (!found.length) return false;
+    [k, rows] = [at, found];
+    rows[0].before(editing);
+    for (const row of rows) row.hidden = true;
+    return true;
+  };
+  openForm = { save: saveForm, attach };
   draw();
   editing.append(gutter, form);
   rows[0].before(editing);
   for (const row of rows) row.hidden = true;
   form.querySelector("textarea").focus();
-  form.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
+  // Leaving the form saves it, as leaving a text box does; moving between its fields doesn't.
+  form.addEventListener("focusout", (event) => {
+    if (!form.contains(event.relatedTarget)) saveForm();
+  });
+  form.addEventListener("keydown", async (event) => {
+    if (event.key === "Escape" && (await saveForm())) close();
   });
 }
 
