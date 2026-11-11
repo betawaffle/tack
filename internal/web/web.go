@@ -26,7 +26,7 @@ import (
 	"github.com/betawaffle/tack/internal/store"
 )
 
-//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt-patch.js static/prompt-socket.js static/prompt-dom.js static/prompt-room.js static/prompt-draw.js static/prompt-hold.js static/prompt-nav.js static/prompt-stream.js static/prompt-agents.js static/prompt-list.js static/prompt-agent.js static/prompt-edit.js static/prompt.js static/prompt.css
+//go:embed static/index.html static/requests.html static/requests.js static/requests.css static/style.css static/app.js static/start.js static/markdown.js static/json.js static/money.js static/highlight.js static/markdown-dom.js static/code.html static/docs.html static/browse.js static/browse.css static/prompt.html static/prompt-layout.js static/prompt-patch.js static/prompt-socket.js static/prompt-md.js static/prompt-dom.js static/prompt-room.js static/prompt-draw.js static/prompt-hold.js static/prompt-nav.js static/prompt-stream.js static/prompt-agents.js static/prompt-list.js static/prompt-agent.js static/prompt-edit.js static/prompt.js static/prompt.css
 var static embed.FS
 
 const maxMessageBytes = 8 << 20

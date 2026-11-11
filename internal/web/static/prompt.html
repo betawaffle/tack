@@ -10,6 +10,9 @@
 <script src="/static/money.js" defer></script>
 <script src="/static/prompt-layout.js" defer></script>
 <script src="/static/prompt-patch.js" defer></script>
+<script src="/static/markdown.js" defer></script>
+<script src="/static/highlight.js" defer></script>
+<script src="/static/markdown-dom.js" defer></script>
 <script type="module" src="/static/prompt.js"></script>
 </head>
 <body class="prompt-page">
@@ -30,13 +33,14 @@
   </div>
   <span class="spacer"></span>
   <div class="head-group" role="group" aria-label="What to show">
-    <button id="collapse-all" class="mini" type="button">Collapse All</button>
-    <button id="expand-all" class="mini" type="button">Expand All</button>
-    <button class="mini toggle" type="button" data-switch="changes">Changes</button>
-    <button class="mini toggle" type="button" data-switch="cache">Cache</button>
-    <button class="mini toggle" type="button" data-switch="wrap">Wrap</button>
-    <button class="mini toggle" type="button" data-switch="numbers">Line Numbers</button>
-    <button class="mini toggle" type="button" data-switch="pretty">Pretty JSON</button>
+    <button id="collapse-all" class="mini raw-only" type="button">Collapse All</button>
+    <button id="expand-all" class="mini raw-only" type="button">Expand All</button>
+    <button class="mini toggle md-switch" type="button" data-switch="markdown" title="Show the draft as what it means, with its text rendered, rather than as the model reads it">Markdown</button>
+    <button class="mini toggle raw-only" type="button" data-switch="changes">Changes</button>
+    <button class="mini toggle raw-only" type="button" data-switch="cache">Cache</button>
+    <button class="mini toggle raw-only" type="button" data-switch="wrap">Wrap</button>
+    <button class="mini toggle raw-only" type="button" data-switch="numbers">Line Numbers</button>
+    <button class="mini toggle raw-only" type="button" data-switch="pretty">Pretty JSON</button>
     <button class="mini toggle" type="button" data-switch="wide">Wide</button>
   </div>
 </header>
@@ -76,15 +80,15 @@
     <span class="legend-item k-user"><i></i>User</span>
     <span class="legend-item k-assistant"><i></i>Model</span>
   </div>
-  <div class="legend-group">
+  <div class="legend-group raw-only">
     <span class="legend-item"><span class="sample t">&lt;｜User｜&gt;</span>Format</span>
     <span class="legend-item"><span class="sample f">text</span>Request</span>
   </div>
-  <div id="legend-changes" class="legend-group">
+  <div id="legend-changes" class="legend-group raw-only">
     <span class="legend-item"><span class="sample tok ins">text</span>Inserted</span>
     <span class="legend-item"><span class="sample tok del">text</span>Deleted</span>
   </div>
-  <div id="legend-cache" class="legend-group">
+  <div id="legend-cache" class="legend-group raw-only">
     <span class="legend-item"><span class="sample tok nc">text</span>Not Cached Next Call</span>
   </div>
   <div id="counts" class="legend-group counts"></div>

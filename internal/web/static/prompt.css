@@ -285,3 +285,45 @@ body.running #prompt { cursor: progress; }
 body.running #prompt .pl, body.running #send-bar > * { pointer-events: none; }
 body.running #send-bar > * { opacity: 0.6; }
 body.running #prompt .run-call button[data-running] { pointer-events: auto; cursor: pointer; }
+
+/* The markdown view: a draft as cards, one for each message, in the order the model reads them,
+   with their text rendered. The raw view's switches don't apply to it. */
+body:not(.drafting) .md-switch, body.markdown.drafting .raw-only { display: none !important; }
+.md-view { display: flex; flex-direction: column; gap: 10px; max-width: 90ch; margin: 0 auto; padding: 4px 0 8px; font: 14px/1.6 var(--ui); }
+.md-card {
+  content-visibility: auto; contain-intrinsic-size: auto 160px;
+  padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid var(--k); border-radius: 8px;
+  background: color-mix(in srgb, var(--k) 3%, var(--surface));
+}
+.md-card.md-note { border-style: dashed; border-left-style: solid; }
+.md-card.md-off { opacity: .55; }
+.md-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 4px; color: var(--muted); font: 12px/1.5 var(--ui); }
+.md-label { color: var(--text); font-weight: 600; }
+.md-name { font: 12px/1.5 var(--mono); }
+.md-sub { color: var(--muted); font: 600 11.5px/1.5 var(--ui); }
+.md-tag { padding: 0 7px; border-radius: 4px; background: var(--hover); font: 11.5px/1.6 var(--ui); }
+.md-tag.md-warn { background: var(--warn-soft); color: var(--warn); }
+.md-text.prose { font: inherit; }
+.md-text > :first-child { margin-top: 0; }
+.md-text > :last-child { margin-bottom: 0; }
+.md-text p { margin: 6px 0; }
+.md-reasoning { margin: 2px 0 8px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); font-size: 13.5px; }
+.md-call { margin: 8px 0 2px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.md-call-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.md-args { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin-top: 4px; font-size: 13px; }
+.md-arg-name { color: var(--muted); font: 12px/1.7 var(--mono); }
+.md-arg-value { font: 12.5px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-arg-block { min-width: 0; }
+.md-arg-block .codeblock { margin: 2px 0; }
+.md-output { margin: 4px 0 0; font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-tools > summary { cursor: pointer; list-style: none; margin: 0; }
+.md-tools > summary::-webkit-details-marker { display: none; }
+.md-tools > summary::before { content: "▸"; color: var(--muted); }
+.md-tools[open] > summary::before { content: "▾"; }
+.md-tool { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.md-params { width: 100%; margin-top: 4px; border-collapse: collapse; font-size: 13px; }
+.md-params td { padding: 3px 8px 3px 0; border-top: 1px solid var(--line); vertical-align: top; }
+.md-type { color: var(--muted); font: 12px/1.6 var(--mono); white-space: nowrap; }
+.md-params .md-text p { margin: 0; }
+.md-streamed .md-output { font: inherit; }
+.md-card.streaming { content-visibility: visible; }

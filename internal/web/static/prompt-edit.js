@@ -10,11 +10,15 @@ import { go } from "./prompt-nav.js";
 import { showAgents } from "./prompt-agents.js";
 import { startStream, streamText, streamCall, endStream } from "./prompt-stream.js";
 import { request as ask, handlers } from "./prompt-socket.js";
+import { setDraftSource } from "./prompt-md.js";
 
 // prompt-patch.js is a plain script, so the tests can load it in Node; it comes first.
 const patch = tackPatch;
 
 let draft = null;
+
+// The markdown view draws the draft that's open.
+setDraftSource(() => draft);
 
 // drafting says whether a draft is open.
 export const drafting = () => draft !== null;

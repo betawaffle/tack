@@ -828,6 +828,68 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   ok(callPieces > 5 && toolAnswer.includes('"call:0"') && !toolAnswer.includes('{\\"language\\":\\"python\\"') && toolSame,
     `a call streams as it's written, and the answer leaves out its arguments (${callPieces} pieces, ${toolAnswer.length} bytes, same: ${toolSame})`);
 
+  // The markdown view: a draft as cards, in the order the model reads them.
+  const mdDraft = await p.evaluate(async () => {
+    const { id } = await (await fetch("/api/drafts", { method: "POST", body: "{}" })).json();
+    const d = (await (await fetch(`/api/drafts/${id}`)).json()).draft;
+    const call = (cid, name, args) => ({ id: cid, type: "function", function: { name, arguments: JSON.stringify(args) } });
+    d.request.model = "deepseek/deepseek-v4.1-flash-1017";
+    d.request.messages = [
+      d.request.messages[0],
+      { role: "user", content: "List the files, **please**." },
+      { role: "assistant", reasoning: "I'll look with *code*.", content: "", tool_calls: [call("a", "run_code", { language: "python", code: "import os\nfor f in os.listdir('.'):\n    print(f)" }), call("b", "scratch", { op: "list" })] },
+      { role: "tool", tool_call_id: "b", content: "readme: 12 bytes" },
+      { role: "system", content: "A note in the middle." },
+      { role: "tool", tool_call_id: "a", content: "a.txt\nb.txt" },
+      { role: "assistant", content: 'Here: <img src=x onerror="window.__pwned=1"> [x](javascript:window.__pwned=1) ![pic](http://evil.example/x.png)' },
+      { role: "user", content: "paced, in markdown" },
+    ];
+    await fetch(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ request: d.request }) });
+    return id;
+  });
+  await p.goto(B + "/prompt#draft/" + mdDraft);
+  await p.waitForFunction(() => document.body.classList.contains("drafting") && document.querySelector(".pl"));
+  await p.click("[data-switch=markdown]");
+  await p.waitForSelector(".md-card");
+  const mdCards = await p.evaluate(() => [...document.querySelectorAll(".md-card")].map((c) => c.querySelector(".md-label").textContent).join(","));
+  ok(mdCards === "System,Tools,You,Model,Result,System Note,Result,Model,You", `the markdown view draws each message as a card, in the order the model reads them (${mdCards})`);
+  const mdTags = await p.evaluate(() => [...document.querySelectorAll(".md-warn")].map((t) => t.closest(".md-card").dataset.message));
+  ok(mdTags.join() === "3", `and a result read before an earlier call's is marked Out of Order (${mdTags})`);
+  ok((await p.locator("[data-switch=changes]").isHidden()) && (await p.locator(".md-card .codeblock .p-keyword").count()) > 0, "the raw view's switches are hidden, and code in a call is highlighted");
+  const inert = await p.evaluate(() => ({ pwned: window.__pwned, images: document.querySelectorAll(".md-view img").length, js: [...document.querySelectorAll(".md-view a")].some((a) => a.href.startsWith("javascript")) }));
+  ok(inert.pwned === undefined && inert.images === 0, `and text that looks like HTML stays text (${JSON.stringify(inert)})`);
+  // A setting changed draws it again, still as cards.
+  await p.click("#send-more");
+  await p.selectOption("#send-effort", { index: 1 });
+  await p.keyboard.press("Escape");
+  await p.waitForFunction(() => !document.querySelector(".ghost") && document.querySelectorAll(".md-card").length === 9);
+  ok(true, "a setting changed in the markdown view draws it again");
+  // Switching views keeps the same message at the top.
+  await p.evaluate(async () => {
+    const s = document.getElementById("prompt");
+    const note = document.querySelector('.md-card[data-message="4"]');
+    (await import("/static/prompt-room.js")).scrollPageTo(s.scrollTop + note.getBoundingClientRect().top - s.getBoundingClientRect().top);
+  });
+  await p.click("[data-switch=markdown]");
+  await p.waitForSelector(".pl");
+  const rawTop = await p.evaluate(() => {
+    const s = document.getElementById("prompt").getBoundingClientRect().top;
+    const row = [...document.querySelectorAll(".pl")].find((r) => r.getBoundingClientRect().bottom > s + 1);
+    return row?.textContent.replace(/[·\s]/g, "");
+  });
+  ok(/Anoteinthemiddle|<｜System｜>/.test(rawTop || ""), `switching to the raw view keeps the message at the top (${(rawTop || "").slice(0, 60)})`);
+  await p.click("[data-switch=markdown]");
+  await p.waitForSelector(".md-card");
+  // A reply comes in as a card of the model's, and is rendered once it's done.
+  await p.click("#send");
+  await p.waitForSelector(".md-card.streaming .md-streamed");
+  ok(true, "a reply comes in, in the markdown view, as a card of the model's");
+  await p.waitForFunction(() => location.hash.startsWith("#manual/") && !document.querySelector(".streaming") && !document.querySelector(".ghost"), null, { timeout: 15000 });
+  const mdAfter = await p.evaluate(() => [...document.querySelectorAll(".md-card")].map((c) => c.querySelector(".md-label").textContent).slice(-2).join(","));
+  ok(mdAfter === "Model,You", `and then it's the draft after it, still as cards (${mdAfter})`);
+  await p.click("[data-switch=markdown]");
+  await p.waitForSelector(".pl");
+
   // Starting again from a call's first message: Only Up To Here leaves out everything after it,
   // which stays as rows to turn back on until the draft is sent.
   await p.goto(B + "/prompt#" + promptAt);

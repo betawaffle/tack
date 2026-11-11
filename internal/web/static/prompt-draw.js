@@ -4,7 +4,8 @@
 // for, what changed since the call before. This module draws it, and owns what's drawn, the
 // switches for how, and which parts are collapsed.
 import { $, el, escapeHTML, visible } from "./prompt-dom.js";
-import { fitRoom } from "./prompt-room.js";
+import { fitRoom, scroller, scrollPageTo } from "./prompt-room.js";
+import { drawMarkdown } from "./prompt-md.js";
 
 // prompt-layout.js is a plain script, so the tests can load it in Node; it comes first.
 const layout = tackPromptLayout;
@@ -18,7 +19,7 @@ export const DEPTHS = 5;
 
 // The switches for how it's drawn, kept in this browser.
 const SWITCHES_KEY = "tack.prompt.switches";
-const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false };
+const DEFAULTS = { changes: true, cache: true, wrap: true, numbers: true, wide: false, pretty: false, markdown: false };
 
 function loadSwitches() {
   try {
@@ -42,9 +43,11 @@ export function applySwitches() {
   const body = $("prompt");
   body.classList.toggle("show-changes", switches.changes);
   body.classList.toggle("show-cache", switches.cache);
-  body.classList.toggle("wrap", switches.wrap);
+  // The markdown view's text always wraps.
+  body.classList.toggle("wrap", switches.wrap || (switches.markdown && document.body.classList.contains("drafting")));
   body.classList.toggle("numbers", switches.numbers);
   document.body.classList.toggle("wide", switches.wide);
+  document.body.classList.toggle("markdown", switches.markdown);
   for (const button of document.querySelectorAll("[data-switch]")) {
     button.setAttribute("aria-pressed", String(Boolean(switches[button.dataset.switch])));
   }
@@ -60,6 +63,12 @@ for (const button of document.querySelectorAll("[data-switch]")) {
     applySwitches();
     // Pretty-printing changes the rows, so it draws again.
     if (name === "pretty") redraw();
+    // So does switching between the views, keeping the message at the top where it was.
+    if (name === "markdown") {
+      const at = topMessage();
+      redraw({ eager: true });
+      if (at !== undefined) toMessage(at);
+    }
   });
 }
 
@@ -209,6 +218,22 @@ export const drawn = () => shown;
 // stay put; done is called once it's all drawn.
 export function render(data, { eager = false, done = null } = {}) {
   shown = data;
+  // A draft can be shown as what it means, in the markdown view; a call is shown as it was.
+  if (switches.markdown && data.before_draft) {
+    const body = $("prompt");
+    const inner = el("div", "prompt-inner md-inner");
+    const box = el("div", "md-view");
+    inner.append(box, el("div", "prompt-end"));
+    body.replaceChildren(inner);
+    applySwitches();
+    showCounts(data);
+    ++drawing;
+    if (drawMarkdown(data, box)) {
+      fitRoom();
+      if (done) done();
+      return;
+    }
+  }
   const parts = data.prompt.parts;
   const collapsed = new Set(parts.map((_, k) => k).filter((k) => isCollapsed(parts, k)));
   cache = cacheOf(data);
@@ -261,6 +286,38 @@ export function render(data, { eager = false, done = null } = {}) {
   };
   if (at < rows.length) setTimeout(more, 0);
   else finish();
+}
+
+// The request message at the top of the screen, in either view, and scrolling one to the top:
+// switching views keeps the same one there.
+function topMessage() {
+  const s = scroller();
+  const top = s.getBoundingClientRect().top;
+  for (const node of $("prompt").querySelectorAll(".md-card[data-message], .pl")) {
+    if (node.getBoundingClientRect().bottom <= top) continue;
+    if (node.dataset.message !== undefined) return Number(node.dataset.message);
+    const parts = shown?.prompt.parts || [];
+    const bars = [...node.querySelectorAll(".pl-bars [data-p]")];
+    for (let k = Number(bars.at(-1)?.dataset.p); k >= 0 && parts[k]; k = parts[k].parent) {
+      if (parts[k].message >= 0) return shown.shown?.[parts[k].message] ?? parts[k].message;
+    }
+  }
+  return undefined;
+}
+
+function toMessage(i) {
+  const s = scroller();
+  let node = $("prompt").querySelector(`.md-card[data-message="${i}"]`);
+  if (!node) {
+    const parts = shown?.prompt.parts || [];
+    node = [...$("prompt").querySelectorAll(".pl")].find((row) => {
+      for (let k = Number([...row.querySelectorAll(".pl-bars [data-p]")].at(-1)?.dataset.p); k >= 0 && parts[k]; k = parts[k].parent) {
+        if (parts[k].message >= 0) return (shown.shown?.[parts[k].message] ?? parts[k].message) === i;
+      }
+      return false;
+    });
+  }
+  if (node) scrollPageTo(s.scrollTop + node.getBoundingClientRect().top - s.getBoundingClientRect().top);
 }
 
 // redraw draws what's drawn again, after something about how it's drawn changed.
