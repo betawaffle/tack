@@ -776,6 +776,8 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   const stoppedRecord = await p.evaluate(async () => (await (await fetch(`/api/manual-calls/${location.hash.split("/")[1]}`)).json()));
   ok(/cancelled/.test(stoppedRecord.error) && stoppedRecord.text.length < 1000 && (await p.innerText("#send")) === "Send",
     `Stop stops a call that's going (${stoppedRecord.error}, ${stoppedRecord.text?.length} characters of reply)`);
+  const keptPartial = await p.evaluate(async () => (await (await fetch(`/api/draft-for?from=${encodeURIComponent(location.hash.slice(1))}`)).json()).draft.request.messages.some((m) => m.role === "assistant" && m.content && m.content.length > 0));
+  ok(stoppedRecord.text.length > 0 && keptPartial, "and the draft after it has what it got before it was stopped");
 
   // A reply that calls tools draws each call as it streams, and the answer leaves out the
   // arguments, as it does the reply.

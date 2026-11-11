@@ -204,7 +204,9 @@ func (c *Core) manualSource(m *manualCall) callSource {
 	if len(ev.Usage) > 0 {
 		src.stats = statsFrom(ev)
 	}
-	if ev.Error == "" && usable(ev) {
+	// What it wrote goes on, whatever it was: reasoning alone, or what it got before it was
+	// stopped, is still what the model wrote, for the next draft to have.
+	if (ev.Error == "" || ev.Cancelled) && (ev.Text != "" || ev.Reasoning != "" || len(ev.ToolCalls) > 0) {
 		out := &tokens.Output{}
 		if ev.Text != "" {
 			out.Content = c.text([]store.Part{{Block: ev.Text}})

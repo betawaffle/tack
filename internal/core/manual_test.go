@@ -163,3 +163,23 @@ func TestRecordedCallsIncludeConversations(t *testing.T) {
 		t.Errorf("unknown: %v", err)
 	}
 }
+
+// A reply that's only reasoning is still the model's turn, and the draft after it has it.
+func TestReasoningAloneGoesInTheNextDraft(t *testing.T) {
+	f := newFake(t)
+	f.handler = func(w http.ResponseWriter) {
+		io.WriteString(w, `data: {"id":"g","provider":"Morph","choices":[{"delta":{"reasoning":"Only thinking."}}]}`+"\n\n"+
+			`data: {"id":"g","provider":"Morph","choices":[{"delta":{"content":""},"finish_reason":"stop"}]}`+"\n\n"+"data: [DONE]\n\n")
+	}
+	c := f.open()
+	id, updates, err := c.SendManual([]byte(`{"model":"deepseek/deepseek-v4.1-flash-1017","messages":[{"role":"user","content":"Hi"}],"stream":true}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range updates {
+	}
+	d, _, _ := c.DraftFor("manual/" + id)
+	if d == nil || !strings.Contains(string(d.Request), `"reasoning":"Only thinking."`) {
+		t.Errorf("the draft after it: %s", d.Request)
+	}
+}
