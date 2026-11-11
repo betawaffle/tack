@@ -205,9 +205,13 @@ body:not(.wide) .prompt-inner { margin-left: max(16px, calc((100% - 116ch) / 2 -
 .send-panel input, .send-panel select { width: 100%; box-sizing: border-box; }
 .send-bar .mini.spends { flex: none; height: 28px; padding: 0 16px; }
 .drafting .legend { bottom: 64px; }
-/* Room past the last row for it to be at the top of the screen. The script sets it to fit the
-   scrolling area (fitRoom), and makes it more for a while when something's held in place. */
+/* Room past the last row. The script sets it to none (fitRoom), except for a moment when
+   something's held in place while the page draws again, and then eases it away (easeRoom). This
+   is only until the script first sets it. */
 .prompt-end { height: calc(100vh - 21px); }
+/* The page keeps its own place when it draws again (prompt-hold.js), so the browser's doesn't
+   move it as well. */
+#prompt, .prompt-inner { overflow-anchor: none; }
 /* A row that's gone, fading out (fadeOut). */
 .pl.ghost { overflow: hidden; pointer-events: none; }
 

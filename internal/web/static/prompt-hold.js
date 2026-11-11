@@ -3,7 +3,7 @@
 // before and after are what the drawing module has drawn then.
 import { $ } from "./prompt-dom.js";
 import { drawn } from "./prompt-draw.js";
-import { scroller, scrollPageTo, scrollBack } from "./prompt-room.js";
+import { scroller, scrollPageTo, scrollBack, easeRoom } from "./prompt-room.js";
 
 const firstRowOf = (k) => $("prompt").querySelector(`.pl:not([hidden]) [data-f="${k}"], .pl:not([hidden]) .pl-bars [data-p="${k}"], .pl.editing`)?.closest(".pl");
 
@@ -21,7 +21,9 @@ export function keepPlace(k, draw) {
   // Blocks off screen have only an estimated height, so the ones down to the part are laid
   // out for real; otherwise the page can be too short to scroll to where it was.
   for (let block = after.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
-  scrollPageTo(scrolled + after.getBoundingClientRect().top - top);
+  // Drawing can have moved the page already, so it's moved on from where it is now.
+  scrollPageTo(scroller().scrollTop + after.getBoundingClientRect().top - top);
+  easeRoom();
 }
 
 // How a drawing's tokens line up with those of the call a draft came from: a draft's through
@@ -171,14 +173,14 @@ function holdView(draw) {
     for (let block = anchor.closest(".pblock"); block; block = block.previousElementSibling) block.classList.add("laid");
     const pin = () => scrollPageTo(scroller().scrollTop + anchor.getBoundingClientRect().top - top);
     pin();
-    if (motion) fadeOut(rows, now, tokenAt, anchor, pin);
+    if (!motion || !fadeOut(rows, now, tokenAt, anchor, pin)) easeRoom();
   };
   return Promise.resolve(result).then(settle);
 }
 
 // fadeOut puts back the rows that were on the screen and aren't in the new drawing, where they
 // were, fades them out, and then closes up the room they took, calling pin as it goes so that
-// what's held in place stays there.
+// what's held in place stays there. It says whether there were any.
 function fadeOut(rows, now, tokenAt, anchor, pin) {
   // A row with no tokens (one that's collapsed, or only deleted text) is left out.
   const gone = (r) => r.any && r.tokens.every((b) => now.fromBase(b) === null);
@@ -205,7 +207,7 @@ function fadeOut(rows, now, tokenAt, anchor, pin) {
     }
     i = j;
   }
-  if (!ghosts.length) return;
+  if (!ghosts.length) return false;
   pin();
   let running = true;
   // Scrolling by hand puts an end to holding it, so the page doesn't pull against it.
@@ -229,7 +231,11 @@ function fadeOut(rows, now, tokenAt, anchor, pin) {
   });
   Promise.all(fades).finally(() => {
     for (const type of hands) removeEventListener(type, stop);
-    if (running && anchor.isConnected) pin();
+    if (running && anchor.isConnected) {
+      pin();
+      easeRoom();
+    }
     running = false;
   });
+  return true;
 }

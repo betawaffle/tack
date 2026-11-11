@@ -507,6 +507,15 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       const caret = await p.evaluate(() => document.querySelector(".edit-box").getBoundingClientRect().bottom / innerHeight);
       ok(caret > 0.6, `a long message being written stays at the bottom of the screen (${caret.toFixed(2)})`);
       await p.keyboard.press("Escape");
+      // And once it's closed, there's no empty room left under the page's end to be stuck in.
+      await p.waitForTimeout(700);
+      const room = await p.evaluate(() => {
+        const end = document.querySelector(".prompt-end");
+        const s = document.getElementById("prompt");
+        const scroller = s.classList.contains("wrap") ? s : s.querySelector(".prompt-inner");
+        return { room: parseFloat(end.style.height) || 0, max: scroller.scrollHeight - scroller.clientHeight, top: scroller.scrollTop };
+      });
+      ok(room.room < 2, `no empty room is left under the end after editing near it (${JSON.stringify(room)})`);
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 
