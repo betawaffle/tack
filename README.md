@@ -418,7 +418,8 @@ message (or the last result of a batch), adds a system message, a message from y
 of the model's that you write yourself; a made-up turn at the end gets an empty message from
 you after it, so the model has a turn to take. **Add a Call**, on a turn of the model's, adds a call to
 one of the tools offered, with its required parameters empty to fill in, and an empty result
-after it to write or run. Changes are compared token by token, but
+after it to write or run; **Add a Parameter**, on a call, adds one its tool's schema names that
+the call leaves out. Changes are compared token by token, but
 only within the same kind of part (and the same tool, by name), so leaving out a tool or
 rewriting a prompt shows as deleted there, on a row of its own if the part is gone, rather than
 running into what comes after it. **Send** sends it as a

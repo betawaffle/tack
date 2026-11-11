@@ -482,6 +482,19 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
       await p.waitForFunction(() => document.querySelectorAll(".run-call button").length > 0);
       ok(true, "and it has a Run button");
 
+      // A parameter the call leaves out can be added from its tool's schema.
+      const callNo = called.roles ? (await p.evaluate(async ({ id, made }) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages[made].tool_calls.length - 1, { id: runDraft, made })) : 0;
+      await p.locator(`.add-param[data-message="${made}"][data-call="${callNo}"]`).click({ force: true });
+      const offered = await p.locator(".add-choice[data-param]").allInnerTexts();
+      await p.locator(".add-choice[data-param]", { hasText: "version" }).click();
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", "3.13");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box"));
+      const withParam = await p.evaluate(async ({ id, made }) => JSON.parse((await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages[made].tool_calls.at(-1).function.arguments), { id: runDraft, made });
+      ok(offered.join(",") === "version,packages" && withParam.version !== undefined && String(withParam.version) === "3.13" && withParam.language === "python",
+        `a parameter the call leaves out can be added (${offered} → ${JSON.stringify(withParam)})`);
+
       // Writing a long message near the end keeps what's being written at the bottom of the
       // screen, rather than pulling it up to the top with nothing under it.
       await p.locator(".add-after").last().click({ force: true });

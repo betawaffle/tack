@@ -301,6 +301,51 @@ function addMessageControls() {
     else end?.append(row);
   }
   addToolControls(parts, firstRow);
+  addCallControls(parts, firstRow);
+}
+
+// Each call's first row has Add a Parameter, for the parameters of its tool's schema that the
+// call leaves out.
+function addCallControls(parts, firstRow) {
+  parts.forEach((part, k) => {
+    if (part.kind !== "tool_call" || part.message < 0) return;
+    const row = firstRow(k);
+    if (!row || row.querySelector(".add-param")) return;
+    const add = el("button", "mini up-to-here add-param", "Add a Parameter");
+    add.type = "button";
+    add.dataset.message = indexOf(part);
+    add.dataset.call = part.call || 0;
+    add.title = "Add one of the parameters the call leaves out";
+    row.querySelector(".pl-text").append(add);
+  });
+}
+
+// The parameters call c of message i leaves out, from its tool's schema, and its arguments.
+function missingParams(i, c) {
+  const call = draft.request.messages[i]?.tool_calls?.[c];
+  if (!call) return { args: null, missing: [] };
+  let args;
+  try {
+    args = JSON.parse(call.function.arguments || "{}");
+  } catch {
+    return { args: null, missing: [] };
+  }
+  const tool = (draft.request.tools || []).find((t) => t.function?.name === call.function.name);
+  const properties = tool?.function?.parameters?.properties || {};
+  return { call, args, properties, missing: Object.keys(properties).filter((name) => !(name in args)) };
+}
+
+// addParam puts parameter name in call c of message i, empty, and opens it to write in.
+async function addParam(i, c, name) {
+  const { call, args, properties } = missingParams(i, c);
+  if (!call) return;
+  const type = properties[name]?.type;
+  args[name] = structuredClone(EMPTY[Array.isArray(type) ? type[0] : type] ?? "");
+  call.function.arguments = JSON.stringify(args);
+  await preview();
+  const parts = drawn()?.prompt.parts || [];
+  const k = parts.findIndex((p) => p.kind === "value" && indexOf(p) === i && (p.call || 0) === c && p.name === name);
+  if (k >= 0) openEditor(k);
 }
 
 $("prompt").addEventListener("change", (event) => {
@@ -313,6 +358,7 @@ $("prompt").addEventListener("click", (event) => {
   const choice = event.target.closest(".add-choice");
   if (choice && draft) {
     const i = Number(choice.dataset.message);
+    if (choice.dataset.param !== undefined) return addParam(i, Number(choice.dataset.call), choice.dataset.param);
     return choice.dataset.tool !== undefined ? addCall(i, Number(choice.dataset.tool)) : addAfter(i, choice.dataset.role);
   }
   const up = event.target.closest(".up-to-here");
@@ -320,6 +366,11 @@ $("prompt").addEventListener("click", (event) => {
   if (up.classList.contains("add-tool")) addTool();
   else if (up.classList.contains("add-after")) showChoices(up, ADDABLE.map(([role, label]) => ({ label, data: { role } })));
   else if (up.classList.contains("add-call")) showChoices(up, toolChoices());
+  else if (up.classList.contains("add-param")) {
+    const c = Number(up.dataset.call);
+    const items = missingParams(Number(up.dataset.message), c).missing.map((name) => ({ label: name, data: { param: name, call: c } }));
+    showChoices(up, items, "The call has every parameter its tool's schema names.");
+  }
   else onlyUpTo(Number(up.dataset.message));
 });
 
@@ -331,9 +382,9 @@ function toolChoices() {
   return (draft.request.tools || []).flatMap((tool, i) => (off.has(i) || !tool.function?.name ? [] : [{ label: tool.function.name, data: { tool: i } }]));
 }
 
-function showChoices(button, items) {
+function showChoices(button, items, none = "No tools are offered.") {
   const choices = el("span", "add-choices");
-  if (!items.length) choices.append(el("span", "add-none", "No tools are offered."));
+  if (!items.length) choices.append(el("span", "add-none", none));
   for (const { label, data } of items) {
     const choice = el("button", "mini add-choice", label);
     choice.type = "button";
