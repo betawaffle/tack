@@ -137,8 +137,13 @@ func (c *Core) chainOf(ref string) (string, []string) {
 	return ref, chain
 }
 
-// nextRequest is the request after before: it with the reply and what answers it added.
+// nextRequest is the request after before: it with the reply and what answers it added. A
+// call that got nothing back, because it failed or was stopped before anything came, has no
+// reply to add, so what comes after it is the same request again, to send again.
 func nextRequest(before CallRequest) (jsontext.Value, error) {
+	if out := before.Output; out == nil || (out.Content == "" && out.Reasoning == "" && len(out.Calls) == 0) {
+		return before.Request, nil
+	}
 	var request map[string]jsontext.Value
 	if err := json.Unmarshal(before.Request, &request); err != nil {
 		return nil, fmt.Errorf("reading the request: %w", err)
