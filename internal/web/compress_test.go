@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -88,5 +89,54 @@ func TestStaticFilesHaveETags(t *testing.T) {
 	}
 	if other := get(`"something else"`); other.Code != 200 {
 		t.Errorf("with another tag: %d", other.Code)
+	}
+}
+
+func TestCompressTakesGzippedBodies(t *testing.T) {
+	body := strings.Repeat(`{"text":"a long draft"}`, 1000)
+	var got string
+	h := compress(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		got = string(data)
+	}))
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	io.WriteString(zw, body)
+	zw.Close()
+	r := httptest.NewRequest("PUT", "/api/drafts/x", &packed)
+	r.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != 200 || got != body {
+		t.Errorf("gzipped body: %d, %d bytes of %d", rec.Code, len(got), len(body))
+	}
+
+	// Something that isn't gzip, saying it is, is refused.
+	r = httptest.NewRequest("PUT", "/api/drafts/x", strings.NewReader(body))
+	r.Header.Set("Content-Encoding", "gzip")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("not gzip: %d", rec.Code)
+	}
+
+	// Unpacking stops at the most a request can be.
+	packed.Reset()
+	zw = gzip.NewWriter(&packed)
+	zeros := make([]byte, 1<<20)
+	for range maxPreviewBytes>>20 + 1 {
+		zw.Write(zeros)
+	}
+	zw.Close()
+	r = httptest.NewRequest("PUT", "/api/drafts/x", &packed)
+	r.Header.Set("Content-Encoding", "gzip")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest || len(got) > len(body) {
+		t.Errorf("too big unpacked: %d", rec.Code)
 	}
 }

@@ -19,8 +19,24 @@ import (
 // goes when it's written.
 //
 // Nothing tack sends back holds a secret, so compressing it can't leak one through its size.
+//
+// It also takes request bodies gzipped, which the page does with a big one, like a long draft
+// saved after every edit, since sending is often the slow way over a remote link. What's
+// unpacked is held to the most any request can be, and each handler's own limit still holds.
 func compress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Encoding") == "gzip" {
+			zr, err := gzip.NewReader(r.Body)
+			if err != nil {
+				http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer zr.Close()
+			r.Body = http.MaxBytesReader(w, zr, maxPreviewBytes)
+			r.Header.Del("Content-Encoding")
+			r.Header.Del("Content-Length")
+			r.ContentLength = -1
+		}
 		if !acceptsGzip(r.Header.Get("Accept-Encoding")) || r.Header.Get("Range") != "" {
 			next.ServeHTTP(w, r)
 			return

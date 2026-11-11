@@ -3,7 +3,7 @@
 // call's address shows. One that doesn't follow a call is at #draft/<id>. Clicking a part's text opens it in a text box over it; when the box loses focus,
 // the draft is saved and drawn again, compared with the call it came from. This module owns the
 // draft that's open.
-import { $, el, showError, hideError } from "./prompt-dom.js";
+import { $, el, showError, hideError, jsonBody } from "./prompt-dom.js";
 import { render, drawn, clear, DEPTHS } from "./prompt-draw.js";
 import { keepView, keepPlace } from "./prompt-hold.js";
 import { go } from "./prompt-nav.js";
@@ -21,6 +21,7 @@ async function open(d) {
     id: d.id || "", from: d.from || "", request: d.request, agent: d.agent || "", off: d.off || [], offTools: d.off_tools || [],
     shown: [], shownTools: [], call: "", calls: [],
   };
+  lastSaved = d.id ? savedText() : "";
   $("back").href = draft.from && !draft.from.startsWith("manual/") ? `/#${draft.from.split("/")[0]}` : "/prompt";
   await showSendBar();
 }
@@ -67,17 +68,29 @@ export function closeDraft() {
 // Saves the draft, one save at a time so they land in order, and gives back its prompt. A
 // draft that isn't saved yet is made first.
 let saving = Promise.resolve();
+// What was saved last, so sending doesn't save again what's saved already.
+let lastSaved = "";
+const savedText = () => JSON.stringify({ request: draft.request, off: draft.off, off_tools: draft.offTools });
 function save() {
   const request = structuredClone(draft.request);
   const { off, offTools } = draft;
+  const text = savedText();
   const result = saving.then(async () => {
     await saved();
-    const res = await fetch(`/api/drafts/${draft.id}`, { method: "PUT", body: JSON.stringify({ request, off, off_tools: offTools }) });
+    const res = await fetch(`/api/drafts/${draft.id}`, await jsonBody({ request, off, off_tools: offTools }, { method: "PUT" }));
     if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    lastSaved = text;
     return res.json();
   });
   saving = result.catch(() => {});
   return result;
+}
+
+// saveChanges saves the draft only if it's changed since it was last saved, once any save
+// that's going has landed.
+async function saveChanges() {
+  await saving;
+  if (!draft.id || savedText() !== lastSaved) await save();
 }
 
 // saved makes sure the draft is saved, so it has an ID.
@@ -1004,7 +1017,7 @@ async function estimate() {
   const mine = ++estimating;
   const box = $("send-estimate");
   try {
-    const res = await fetch("/api/estimate", { method: "POST", body: JSON.stringify(draft.request) });
+    const res = await fetch("/api/estimate", await jsonBody(draft.request, { method: "POST" }));
     const e = await res.json();
     if (mine !== estimating) return;
     const parts = [];
@@ -1029,7 +1042,7 @@ $("send").addEventListener("click", async () => {
   let id = null;
   try {
     // Whatever was changed last is saved before it's sent.
-    await save();
+    await saveChanges();
     const res = await fetch(`/api/drafts/${draft.id}/send`, {
       method: "POST",
       headers: { "X-Tack-Page-Required": PAGE_REQUIRED },

@@ -34,3 +34,14 @@ export function showError(text) {
 export function hideError() {
   $("error").hidden = true;
 }
+
+// A fetch's options for sending JSON: gzipped when it's big, like a long draft, since sending
+// is often the slow way over a remote link and JSON shrinks to about a quarter. The server
+// takes either.
+export async function jsonBody(value, options = {}) {
+  const text = JSON.stringify(value);
+  const headers = { "Content-Type": "text/plain;charset=UTF-8", ...options.headers };
+  if (text.length < 16384 || typeof CompressionStream === "undefined") return { ...options, headers, body: text };
+  const body = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+  return { ...options, headers: { ...headers, "Content-Encoding": "gzip" }, body };
+}

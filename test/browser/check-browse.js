@@ -293,8 +293,14 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
   // Narrow, so the reply's lines have to wrap as they come in.
   const wide = p.viewportSize();
   await p.setViewportSize({ width: 430, height: wide.height });
+  // Sending what's saved already doesn't save it again.
+  const resaved = [];
+  const onSave = (r) => r.method() === "PUT" && r.url().includes("/api/drafts/") && resaved.push(r.url());
+  p.on("request", onSave);
   await p.click("#send");
   await p.waitForSelector(".streaming .pl.k-content");
+  p.off("request", onSave);
+  ok(resaved.length === 0, `sending a saved draft doesn't save it again (${resaved.length})`);
   ok(/^Receiving/.test(await p.innerText("#send")) && (await p.locator(".streaming .pl.k-reasoning").count()) === 1, "the reply is drawn as it comes in");
   await p.waitForFunction(() => [...document.querySelectorAll(".streaming .pl-text")].some((t) => t.textContent.length > 30));
   const overflow = await p.evaluate(() => [...document.querySelectorAll(".streaming .pl-text")].filter((t) => t.scrollWidth > t.clientWidth + 1).length);
@@ -516,6 +522,21 @@ const feedback = async () => (await (await fetch(B + "/api/feedback")).json()).f
         return { room: parseFloat(end.style.height) || 0, max: scroller.scrollHeight - scroller.clientHeight, top: scroller.scrollTop };
       });
       ok(room.room < 2, `no empty room is left under the end after editing near it (${JSON.stringify(room)})`);
+
+      // A big draft is saved gzipped, and comes back the same.
+      const long = Array.from({ length: 2000 }, (_, i) => `word ${i}`).join(" ");
+      const puts = [];
+      const onRequest = (r) => r.method() === "PUT" && r.url().includes("/api/drafts/") && puts.push(r.headers()["content-encoding"] || "");
+      p.on("request", onRequest);
+      await p.locator(".add-after").last().click({ force: true });
+      await p.click(".add-choice[data-role=user]");
+      await p.waitForSelector(".edit-box");
+      await p.fill(".edit-box", long);
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => !document.querySelector(".edit-box") && !document.querySelector(".ghost"));
+      p.off("request", onRequest);
+      const kept = await p.evaluate(async (id) => (await (await fetch(`/api/drafts/${id}`)).json()).draft.request.messages.some((m) => typeof m.content === "string" && m.content.startsWith("word 0 word 1") && m.content.endsWith("word 1999")), runDraft);
+      ok(puts.includes("gzip") && kept, `a big draft is saved gzipped (${puts.join(",")}), and kept whole`);
     }
   } else ok(true, "the defaults offer no scratch tool to run");
 
